@@ -614,12 +614,6 @@ func (p *Provider) buildMiddlewareChain(mc *model, loc *location, routerKey stri
 		rt.Middlewares = append(rt.Middlewares, name)
 	}
 
-	if loc.UpstreamVhost != nil {
-		name := routerKey + "-vhost"
-		conf.HTTP.Middlewares[name] = &dynamic.Middleware{UpstreamVHost: loc.UpstreamVhost}
-		rt.Middlewares = append(rt.Middlewares, name)
-	}
-
 	if withLimits {
 		if loc.RateLimitRPM != nil {
 			name := routerKey + "-limit-rpm"
@@ -658,6 +652,13 @@ func (p *Provider) buildMiddlewareChain(mc *model, loc *location, routerKey stri
 	if loc.SnippetAuth != nil {
 		name := routerKey + "-snippet"
 		conf.HTTP.Middlewares[name] = &dynamic.Middleware{Snippet: loc.SnippetAuth}
+		rt.Middlewares = append(rt.Middlewares, name)
+	}
+
+	// Apply upstream-vhost after auth so auth-signin uses the original request host.
+	if loc.UpstreamVhost != nil {
+		name := routerKey + "-vhost"
+		conf.HTTP.Middlewares[name] = &dynamic.Middleware{UpstreamVHost: loc.UpstreamVhost}
 		rt.Middlewares = append(rt.Middlewares, name)
 	}
 
