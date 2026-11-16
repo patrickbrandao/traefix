@@ -25,9 +25,23 @@ No Claude Code: _"use o agente upstream-tracker para verificar o upstream"_.
 `docker.io/tmsoftbrasil/traefix` (pública), `linux/amd64` + `linux/arm64`.
 
 - CI: `.github/workflows/traefix-docker.yaml` (push em `master`, tags `v*`, ou manual).
+  **GitHub Actions está desativado no repositório** durante o desenvolvimento inicial
+  (reativar: `gh api -X PUT repos/patrickbrandao/traefix/actions/permissions -F enabled=true`).
   Requer os secrets `DOCKERHUB_USERNAME` e `DOCKERHUB_TOKEN` no repositório.
 - Local: `scripts/traefix/docker-build.sh` (requer `docker login`).
 - Build auto-contido em `Dockerfile.traefix` (compila WebUI + Go).
+
+## Deploy rápido no servidor de testes
+
+```bash
+scripts/traefix/deploy-dev.sh            # build linux/amd64 + rsync + restart (~30s)
+scripts/traefix/deploy-dev.sh rollback   # volta o binário anterior
+scripts/traefix/deploy-dev.sh logs       # segue os logs
+WEBUI=1 scripts/traefix/deploy-dev.sh    # recompila a WebUI também
+```
+
+O container do servidor monta o binário enviado em `/traefik` (bind mount); detalhes do
+servidor em `.private/` (fora do git).
 
 ## Convenções
 
