@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1
+#
+# Traefix - imagem multi-arch (linux/amd64, linux/arm64) auto-contida.
+# Compila WebUI + binário Go dentro do build, sem depender de ./dist.
+#
+#   docker buildx build -f Dockerfile.traefix --platform linux/amd64,linux/arm64 \
+#     -t tmsoftbrasil/traefix:dev --push .
+#
+# Arquivo exclusivo do Traefix (não existe no upstream) para evitar conflitos de merge.
+
+ARG GO_VERSION=1.27
+ARG NODE_VERSION=26
+
+# ---------- WebUI (roda na arquitetura do builder, resultado é estático) ----------
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS webui
+WORKDIR /src/webui
+ENV VITE_APP_BASE_URL="" \
+    VITE_APP_BASE_API_URL="/api"
+RUN npm i -g corepack@0.36.0 --ignore-scripts
+COPY webui/package.json webui/yarn.lock webui/.yarnrc.yml ./
+RUN yarn install
+COPY webui/ ./
+RUN yarn build
+
+# ---------- Binário Go (cross-compile a partir do builder) ----------
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS builder
+RUN apk add --no-cache git
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY pkg/config/dynamic/ext/go.mod pkg/config/dynamic/ext/go.su[m] ./pkg/config/dynamic/ext/
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+COPY --from=webui /src/webui/static ./webui/static
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
+ARG CODENAME=traefix
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w \
+      -X github.com/traefik/traefik/v3/pkg/version.Version=${VERSION} \
+      -X github.com/traefik/traefik/v3/pkg/version.Codename=${CODENAME} \
+      -X github.com/traefik/traefik/v3/pkg/version.BuildDate=$(date -u '+%Y-%m-%d_%H:%M:%S')" \
+      -o /out/traefik ./cmd/traefik
+
+# ---------- Runtime ----------
+FROM alpine:3.24
+RUN apk add --no-cache --no-progress ca-certificates tzdata
+COPY --from=builder /out/traefik /traefik
+LABEL org.opencontainers.image.title="traefix" \
+      org.opencontainers.image.source="https://github.com/patrickbrandao/traefix" \
+      org.opencontainers.image.description="Traefix - fork do Traefik"
+EXPOSE 80
+VOLUME ["/tmp"]
+ENTRYPOINT ["/traefik"]

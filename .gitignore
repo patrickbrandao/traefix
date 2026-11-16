@@ -21,3 +21,6 @@ traefik_changelog.md
 integration/tailscale.secret
 integration/gateway-api-conformance-reports/**/experimental-dev-default-report.yaml
 .claude/settings.local.json
+
+# Traefix: dados privados (servidor de testes, credenciais) — nunca versionar
+.private/
