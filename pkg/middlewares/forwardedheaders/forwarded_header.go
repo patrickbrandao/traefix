@@ -27,16 +27,20 @@ const (
 	xForwardedTLSClientCertInfo = "X-Forwarded-Tls-Client-Cert-Info"
 	xScheme                     = "X-Scheme"
 	xRealIP                     = "X-Real-Ip"
+	forwarded                   = "Forwarded"
 	connection                  = "Connection"
 	upgrade                     = "Upgrade"
 )
 
-// XHeadersSet contains the canonical X-headers managed by Traefik. Used by
+// XHeadersSet contains the canonical forwarding headers managed by Traefik. Used by
 // isManagedXHeader to detect both the canonical form and underscore variants
 // that Go's HTTP server preserves (e.g. X_Forwarded_Proto).
+// The RFC 7239 Forwarded header is included because Traefik does not sanitize its content,
+// yet backends trust it as much as the X-Forwarded headers, so it must not reach them from an untrusted source.
 // Note: the other aliasing forms (e.g. X.Forwarded.Proto) are not handled here,
 // as the aliasHeadersStrategy entry point option is expected to be enabled to prevent header spoofing.
 var XHeadersSet = map[string]struct{}{
+	forwarded:                   {},
 	XForwardedProto:             {},
 	xForwardedScheme:            {},
 	XForwardedFor:               {},
@@ -53,10 +57,13 @@ var XHeadersSet = map[string]struct{}{
 }
 
 // isManagedXHeader reports whether key matches one of Traefik's X-headers,
-// treating '_' as '-'. Every managed header starts with 'X', so a byte check
+// treating '_' as '-'. Every managed header but Forwarded starts with 'X', so a byte check
 // skips most headers without any map work; the underscore branch is only
 // reached for the rare attacker-injected variants.
 func isManagedXHeader(key string) bool {
+	if key == forwarded {
+		return true
+	}
 	if len(key) == 0 || key[0] != 'X' {
 		return false
 	}
@@ -240,7 +247,7 @@ func (x *XForwarded) removeConnectionHeaders(req *http.Request) {
 	unsafeHeader(req.Header).Del(connection)
 }
 
-// DeleteXForwardedHeaders Strip X-Forwarded headers and their underscore variants
+// DeleteXForwardedHeaders Strip the Forwarded and X-Forwarded headers and their underscore variants
 // (e.g. X_Forwarded_Proto), which Go's HTTP server preserves
 // alongside the canonical dash form.
 func DeleteXForwardedHeaders(headers http.Header) {

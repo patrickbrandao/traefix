@@ -657,6 +657,40 @@ func TestServeHTTP(t *testing.T) {
 			},
 		},
 		{
+			desc:       "insecure false removes Forwarded from untrusted IP",
+			insecure:   false,
+			trustedIps: []string{"10.0.1.100"},
+			remoteAddr: "10.0.1.101:80",
+			incomingHeaders: map[string][]string{
+				forwarded: {"for=1.2.3.4;proto=https;host=evil.com", "for=5.6.7.8"},
+			},
+			absentHeaders: []string{forwarded},
+		},
+		{
+			desc:       "insecure false keeps Forwarded from trusted IP",
+			insecure:   false,
+			trustedIps: []string{"10.0.1.100"},
+			remoteAddr: "10.0.1.100:80",
+			incomingHeaders: map[string][]string{
+				forwarded: {"for=1.2.3.4;proto=https"},
+			},
+			expectedHeaders: map[string]string{
+				forwarded: "for=1.2.3.4;proto=https",
+			},
+		},
+		{
+			desc:     "Trusted (insecure): Connection header has no effect on Forwarded",
+			insecure: true,
+			incomingHeaders: map[string][]string{
+				connection: {forwarded},
+				forwarded:  {"for=1.2.3.4"},
+			},
+			expectedHeaders: map[string]string{
+				forwarded:  "for=1.2.3.4",
+				connection: "",
+			},
+		},
+		{
 			desc:       "insecure false preserves non-matching underscore headers",
 			insecure:   false,
 			remoteAddr: "10.0.1.101:80",

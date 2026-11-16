@@ -946,6 +946,43 @@ func TestForwardAuth_writeHeader(t *testing.T) {
 			},
 		},
 		{
+			desc: "Forwarded header is removed when not trusted",
+			headers: map[string]string{
+				"Forwarded": "for=1.2.3.4;proto=https;host=evil.com",
+			},
+			trustForwardHeader: false,
+			expectedHeaders: map[string]string{
+				"X-Forwarded-Proto":  "http",
+				"X-Forwarded-Host":   "foo.bar",
+				"X-Forwarded-Uri":    "/path?q=1",
+				"X-Forwarded-Method": "GET",
+				"X-Forwarded-Port":   "80",
+				"User-Agent":         "",
+			},
+			checkForUnexpectedHeaders: true,
+		},
+		{
+			desc: "Forwarded header is kept when trusted with authRequestHeaders",
+			headers: map[string]string{
+				"X-CustomHeader": "CustomHeader",
+				"Forwarded":      "for=1.2.3.4",
+			},
+			authRequestHeaders: []string{
+				"X-CustomHeader",
+			},
+			trustForwardHeader: true,
+			expectedHeaders: map[string]string{
+				"X-CustomHeader":     "CustomHeader",
+				"Forwarded":          "for=1.2.3.4",
+				"X-Forwarded-Proto":  "http",
+				"X-Forwarded-Host":   "foo.bar",
+				"X-Forwarded-Uri":    "/path?q=1",
+				"X-Forwarded-Method": "GET",
+				"X-Forwarded-Port":   "80",
+			},
+			checkForUnexpectedHeaders: true,
+		},
+		{
 			desc: "X-Forwarded-Proto is not used to calculate X-Forwarded-Port if trustForwardHeader=false",
 			headers: map[string]string{
 				"X-CustomHeader":    "CustomHeader",
