@@ -150,10 +150,28 @@ By default, the following headers are automatically added when proxying requests
 | Property                  | HTTP Header                    |
 |---------------------------|--------------------------------|
 | Client's IP               | `X-Forwarded-For`, `X-Real-Ip` |
+| Client's source port      | `X-Real-Port`                  |
 | Host                      | `X-Forwarded-Host`             |
 | Port                      | `X-Forwarded-Port`             |
 | Protocol                  | `X-Forwarded-Proto`            |
 | Proxy Server's Hostname   | `X-Forwarded-Server`           |
+| All of the above for each hop ([RFC 7239](https://www.rfc-editor.org/rfc/rfc7239)) | `Forwarded` |
+
+`X-Forwarded-Port` is the port the client connected to, while `X-Real-Port` is the port the client connected from.
+
+Traefik appends an element describing its own hop to the `Forwarded` header, for instance:
+
+```http
+Forwarded: by="10.0.0.2:443";for="192.0.2.43:47011";host=example.com;proto=https
+```
+
+- `by`: the address and port of the entry point that received the connection.
+- `for`: the address and source port of the client. An IPv6 address is enclosed in brackets.
+- `host`: the `Host` header received by Traefik.
+- `proto`: `http` or `https`, the protocol of the connection received by Traefik.
+
+The `Forwarded` and `X-Real-*` headers sent by a client are only kept when the client is trusted, see [`forwardedHeaders.trustedIPs`](../reference/install-configuration/entrypoints.md#opt-forwardedHeaders-trustedIPs).
+When a trusted client sends `X-Real-Ip`, Traefik keeps it along with the `X-Real-Port` value the client sent, if any, and does not add its own.
 
 For more details,
 please check out the [forwarded header](../reference/install-configuration/entrypoints.md#opt-forwardedHeaders-connection) documentation.

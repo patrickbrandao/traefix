@@ -3,6 +3,7 @@ package forwardedheaders
 import (
 	"net"
 	"net/http"
+	"net/netip"
 	"net/textproto"
 	"os"
 	"slices"
@@ -27,6 +28,7 @@ const (
 	xForwardedTLSClientCertInfo = "X-Forwarded-Tls-Client-Cert-Info"
 	xScheme                     = "X-Scheme"
 	xRealIP                     = "X-Real-Ip"
+	xRealPort                   = "X-Real-Port"
 	forwarded                   = "Forwarded"
 	connection                  = "Connection"
 	upgrade                     = "Upgrade"
@@ -54,6 +56,7 @@ var XHeadersSet = map[string]struct{}{
 	xForwardedTLSClientCertInfo: {},
 	xScheme:                     {},
 	xRealIP:                     {},
+	xRealPort:                   {},
 }
 
 // isManagedXHeader reports whether key matches one of Traefik's X-headers,
@@ -151,11 +154,19 @@ func (x *XForwarded) isTrustedIP(ip string) bool {
 }
 
 func (x *XForwarded) rewrite(outreq *http.Request) {
-	if clientIP, _, err := net.SplitHostPort(outreq.RemoteAddr); err == nil {
+	if clientIP, clientPort, err := net.SplitHostPort(outreq.RemoteAddr); err == nil {
 		clientIP = removeIPv6Zone(clientIP)
 
+		// X-Real-Port is only set along with X-Real-Ip, so that an address set by a trusted hop
+		// is never paired with the port of the connection between that hop and Traefik.
 		if unsafeHeader(outreq.Header).Get(xRealIP) == "" {
 			unsafeHeader(outreq.Header).Set(xRealIP, clientIP)
+
+			if clientPort != "" {
+				unsafeHeader(outreq.Header).Set(xRealPort, clientPort)
+			} else {
+				unsafeHeader(outreq.Header).Del(xRealPort)
+			}
 		}
 	}
 
@@ -202,6 +213,87 @@ func (x *XForwarded) rewrite(outreq *http.Request) {
 	if x.hostname != "" {
 		unsafeHeader(outreq.Header).Set(xForwardedServer, x.hostname)
 	}
+
+	appendForwarded(outreq)
+}
+
+// appendForwarded adds the element describing the hop to Traefik at the end of the Forwarded header,
+// as required by https://www.rfc-editor.org/rfc/rfc7239#section-4.
+// Its parameters describe the connection received by Traefik, not the X-Forwarded headers,
+// which may carry the values of a previous hop.
+func appendForwarded(req *http.Request) {
+	params := make([]string, 0, 4)
+
+	if localAddr, ok := req.Context().Value(http.LocalAddrContextKey).(net.Addr); ok && localAddr != nil {
+		params = append(params, "by="+forwardedNode(localAddr.String()))
+	}
+
+	params = append(params, "for="+forwardedNode(req.RemoteAddr))
+
+	if req.Host != "" {
+		params = append(params, "host="+forwardedValue(req.Host))
+	}
+
+	if req.TLS != nil {
+		params = append(params, "proto=https")
+	} else {
+		params = append(params, "proto=http")
+	}
+
+	element := strings.Join(params, ";")
+
+	// Multiple Forwarded fields form a single list, https://www.rfc-editor.org/rfc/rfc7239#section-4.
+	if prior := unsafeHeader(req.Header).Values(forwarded); len(prior) > 0 {
+		element = strings.Join(prior, ", ") + ", " + element
+	}
+
+	unsafeHeader(req.Header).Set(forwarded, element)
+}
+
+// forwardedNode formats an address as a node identifier, see https://www.rfc-editor.org/rfc/rfc7239#section-6.
+// An address that is not an IP (e.g. a Unix socket) is reported as unknown, as allowed by section 6.2.
+func forwardedNode(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "unknown"
+	}
+
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return "unknown"
+	}
+
+	node := ip.WithZone("").String()
+	if ip.Is6() {
+		node = "[" + node + "]"
+	}
+	if port != "" {
+		node += ":" + port
+	}
+
+	return forwardedValue(node)
+}
+
+// forwardedValue returns the value as a token, or as a quoted-string when it contains other characters,
+// such as the colon of a port or the brackets of an IPv6 address.
+func forwardedValue(value string) string {
+	isToken := value != "" && strings.IndexFunc(value, func(r rune) bool { return !httpguts.IsTokenRune(r) }) < 0
+	if isToken {
+		return value
+	}
+
+	var b strings.Builder
+	b.Grow(len(value) + 2)
+	b.WriteByte('"')
+	for i := range len(value) {
+		if value[i] == '"' || value[i] == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(value[i])
+	}
+	b.WriteByte('"')
+
+	return b.String()
 }
 
 func (x *XForwarded) removeConnectionHeaders(req *http.Request) {

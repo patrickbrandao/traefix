@@ -1,7 +1,9 @@
 package forwardedheaders
 
 import (
+	"context"
 	"crypto/tls"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -661,33 +663,105 @@ func TestServeHTTP(t *testing.T) {
 			insecure:   false,
 			trustedIps: []string{"10.0.1.100"},
 			remoteAddr: "10.0.1.101:80",
+			host:       "foo.bar",
 			incomingHeaders: map[string][]string{
 				forwarded: {"for=1.2.3.4;proto=https;host=evil.com", "for=5.6.7.8"},
 			},
-			absentHeaders: []string{forwarded},
+			expectedHeaders: map[string]string{
+				forwarded: `for="10.0.1.101:80";host=foo.bar;proto=http`,
+			},
 		},
 		{
-			desc:       "insecure false keeps Forwarded from trusted IP",
+			desc:       "insecure false appends to Forwarded from trusted IP",
 			insecure:   false,
 			trustedIps: []string{"10.0.1.100"},
 			remoteAddr: "10.0.1.100:80",
+			host:       "foo.bar",
 			incomingHeaders: map[string][]string{
-				forwarded: {"for=1.2.3.4;proto=https"},
+				forwarded: {"for=1.2.3.4;proto=https", "for=5.6.7.8"},
 			},
 			expectedHeaders: map[string]string{
-				forwarded: "for=1.2.3.4;proto=https",
+				forwarded: `for=1.2.3.4;proto=https, for=5.6.7.8, for="10.0.1.100:80";host=foo.bar;proto=http`,
 			},
 		},
 		{
-			desc:     "Trusted (insecure): Connection header has no effect on Forwarded",
-			insecure: true,
+			desc:       "Trusted (insecure): Connection header has no effect on Forwarded",
+			insecure:   true,
+			remoteAddr: "10.0.1.100:80",
+			host:       "foo.bar",
 			incomingHeaders: map[string][]string{
 				connection: {forwarded},
 				forwarded:  {"for=1.2.3.4"},
 			},
 			expectedHeaders: map[string]string{
-				forwarded:  "for=1.2.3.4",
+				forwarded:  `for=1.2.3.4, for="10.0.1.100:80";host=foo.bar;proto=http`,
 				connection: "",
+			},
+		},
+		{
+			desc:       "xRealPort populated from remote address",
+			remoteAddr: "10.0.1.101:53950",
+			expectedHeaders: map[string]string{
+				xRealIP:   "10.0.1.101",
+				xRealPort: "53950",
+			},
+		},
+		{
+			desc:       "xRealPort populated from IPv6 remote address",
+			remoteAddr: "[2001:db8::1]:53950",
+			expectedHeaders: map[string]string{
+				xRealIP:   "2001:db8::1",
+				xRealPort: "53950",
+			},
+		},
+		{
+			desc:       "xRealPort removed from untrusted IP",
+			insecure:   false,
+			remoteAddr: "10.0.1.101:53950",
+			incomingHeaders: map[string][]string{
+				xRealIP:   {"1.2.3.4"},
+				xRealPort: {"1234"},
+			},
+			expectedHeaders: map[string]string{
+				xRealIP:   "10.0.1.101",
+				xRealPort: "53950",
+			},
+		},
+		{
+			desc:       "xRealPort kept with xRealIP from trusted IP",
+			insecure:   true,
+			remoteAddr: "10.0.1.101:53950",
+			incomingHeaders: map[string][]string{
+				xRealIP:   {"1.2.3.4"},
+				xRealPort: {"1234"},
+			},
+			expectedHeaders: map[string]string{
+				xRealIP:   "1.2.3.4",
+				xRealPort: "1234",
+			},
+		},
+		{
+			desc:       "xRealPort not paired with xRealIP from trusted IP",
+			insecure:   true,
+			remoteAddr: "10.0.1.101:53950",
+			incomingHeaders: map[string][]string{
+				xRealIP: {"1.2.3.4"},
+			},
+			expectedHeaders: map[string]string{
+				xRealIP: "1.2.3.4",
+			},
+			absentHeaders: []string{xRealPort},
+		},
+		{
+			desc:       "xRealPort overwritten when trusted IP does not send xRealIP",
+			insecure:   true,
+			remoteAddr: "10.0.1.101:53950",
+			incomingHeaders: map[string][]string{
+				xRealPort: {"1234"},
+			},
+			expectedHeaders: map[string]string{
+				xRealIP:   "10.0.1.101",
+				xRealPort: "53950",
 			},
 		},
 		{
@@ -750,6 +824,120 @@ func TestServeHTTP(t *testing.T) {
 			for _, header := range test.absentHeaders {
 				assert.NotContains(t, req.Header, http.CanonicalHeaderKey(header))
 			}
+		})
+	}
+}
+
+func TestAppendForwarded(t *testing.T) {
+	testCases := []struct {
+		desc       string
+		remoteAddr string
+		localAddr  net.Addr
+		host       string
+		tls        bool
+		prior      []string
+		expected   string
+	}{
+		{
+			desc:       "IPv4 client with port",
+			remoteAddr: "192.0.2.43:47011",
+			host:       "example.com",
+			expected:   `for="192.0.2.43:47011";host=example.com;proto=http`,
+		},
+		{
+			desc:       "IPv6 client is bracketed and quoted",
+			remoteAddr: "[2001:db8:cafe::17]:4711",
+			host:       "example.com",
+			expected:   `for="[2001:db8:cafe::17]:4711";host=example.com;proto=http`,
+		},
+		{
+			desc:       "IPv6 zone is removed",
+			remoteAddr: "[fe80::1%eth0]:4711",
+			host:       "example.com",
+			expected:   `for="[fe80::1]:4711";host=example.com;proto=http`,
+		},
+		{
+			desc:       "IPv4-mapped IPv6 client stays IPv6",
+			remoteAddr: "[::ffff:192.0.2.43]:4711",
+			host:       "example.com",
+			expected:   `for="[::ffff:192.0.2.43]:4711";host=example.com;proto=http`,
+		},
+		{
+			desc:       "non IP client is unknown",
+			remoteAddr: "@",
+			host:       "example.com",
+			expected:   `for=unknown;host=example.com;proto=http`,
+		},
+		{
+			desc:       "host with port is quoted",
+			remoteAddr: "192.0.2.43:47011",
+			host:       "example.com:8443",
+			tls:        true,
+			expected:   `for="192.0.2.43:47011";host="example.com:8443";proto=https`,
+		},
+		{
+			desc:       "empty host is omitted",
+			remoteAddr: "192.0.2.43:47011",
+			expected:   `for="192.0.2.43:47011";proto=http`,
+		},
+		{
+			desc:       "local address is set as by",
+			remoteAddr: "192.0.2.43:47011",
+			localAddr:  &net.TCPAddr{IP: net.ParseIP("198.51.100.17"), Port: 443},
+			host:       "example.com",
+			tls:        true,
+			expected:   `by="198.51.100.17:443";for="192.0.2.43:47011";host=example.com;proto=https`,
+		},
+		{
+			desc:       "prior fields are joined in order",
+			remoteAddr: "192.0.2.43:47011",
+			host:       "example.com",
+			prior:      []string{"for=192.0.2.60;proto=https", `for="[2001:db8::1]", for=unknown`},
+			expected:   `for=192.0.2.60;proto=https, for="[2001:db8::1]", for=unknown, for="192.0.2.43:47011";host=example.com;proto=http`,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodGet, "http://example.com", nil)
+			req.RemoteAddr = test.remoteAddr
+			req.Host = test.host
+			req.TLS = nil
+			if test.tls {
+				req.TLS = &tls.ConnectionState{}
+			}
+			if test.localAddr != nil {
+				req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, test.localAddr))
+			}
+			for _, value := range test.prior {
+				req.Header.Add(forwarded, value)
+			}
+
+			appendForwarded(req)
+
+			assert.Equal(t, []string{test.expected}, req.Header.Values(forwarded))
+		})
+	}
+}
+
+func Test_forwardedValue(t *testing.T) {
+	testCases := []struct {
+		value    string
+		expected string
+	}{
+		{value: "example.com", expected: "example.com"},
+		{value: "example.com:80", expected: `"example.com:80"`},
+		{value: `a"b\c`, expected: `"a\"b\\c"`},
+		{value: "", expected: `""`},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.value, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, test.expected, forwardedValue(test.value))
 		})
 	}
 }
