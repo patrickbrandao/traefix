@@ -40,12 +40,15 @@ func (s SNICheck) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		// The TLS options name of the connection is resolved once, at handshake time:
 		// after a configuration change it can stay stale, and every request on the connection would get a 421.
 		// Closing the connection makes the client handshake again against the current configuration.
-		// "Connection: close" closes HTTP/1.1 connections and sends a GOAWAY on HTTP/2,
-		// but has no meaning on HTTP/3, where the QUIC connection is closed once the response is flushed.
-		rw.Header().Set("Connection", "close")
+		// "Connection: close" closes HTTP/1.1 connections and sends a GOAWAY on HTTP/2.
+		// It has no meaning on HTTP/3, whose connection is not closed: closing it right after the response
+		// races with the client reading the 421 and kills the other streams, and RFC 9110 lets the client
+		// retry a 421 over a new connection anyway.
+		if req.ProtoMajor < 3 {
+			// Connection is a forbidden header field on HTTP/3, the client would reject the response.
+			rw.Header().Set("Connection", "close")
+		}
 		http.Error(rw, http.StatusText(http.StatusMisdirectedRequest), http.StatusMisdirectedRequest)
-		_ = http.NewResponseController(rw).Flush()
-		tcp.CloseConn(req.Context())
 		return
 	}
 

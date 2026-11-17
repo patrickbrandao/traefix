@@ -20,7 +20,6 @@ func TestSNICheck(t *testing.T) {
 		nonTLSRequest      bool
 		expectedStatusCode int
 		expectedConnHeader string
-		expectedConnClosed bool
 	}{
 		{
 			desc:               "matching options",
@@ -49,7 +48,6 @@ func TestSNICheck(t *testing.T) {
 			setConnContext:     true,
 			expectedStatusCode: http.StatusMisdirectedRequest,
 			expectedConnHeader: "close",
-			expectedConnClosed: true,
 		},
 		{
 			desc:               "missing connection context",
@@ -57,7 +55,6 @@ func TestSNICheck(t *testing.T) {
 			setConnContext:     false,
 			expectedStatusCode: http.StatusMisdirectedRequest,
 			expectedConnHeader: "close",
-			expectedConnClosed: true,
 		},
 	}
 
@@ -70,8 +67,6 @@ func TestSNICheck(t *testing.T) {
 			})
 
 			handler := New("router-name", test.routerTLSOptions, next)
-
-			var connClosed bool
 
 			var req *http.Request
 			if test.nonTLSRequest {
@@ -86,10 +81,6 @@ func TestSNICheck(t *testing.T) {
 				} else {
 					ctx = context.Background()
 				}
-				// Simulates the HTTP/3 entry point, where closing a stale connection can't
-				// be done through a "Connection: close" response header (see snicheck.go)
-				// and instead goes through a closer stashed in the connection's context.
-				ctx = tcp.AddConnCloserInContext(ctx, func() { connClosed = true })
 				req = req.WithContext(ctx)
 			}
 
@@ -98,7 +89,25 @@ func TestSNICheck(t *testing.T) {
 
 			assert.Equal(t, test.expectedStatusCode, rw.Code)
 			assert.Equal(t, test.expectedConnHeader, rw.Header().Get("Connection"))
-			assert.Equal(t, test.expectedConnClosed, connClosed)
 		})
 	}
+}
+
+func TestSNICheck_HTTP3MisdirectedRequestHasNoConnectionHeader(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := New("router-name", "tls-strict@file", next)
+
+	req := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
+	req.Proto, req.ProtoMajor, req.ProtoMinor = "HTTP/3.0", 3, 0
+	req.TLS = &tls.ConnectionState{ServerName: "example.com"}
+	req = req.WithContext(tcp.AddTLSOptionsNameInContext(req.Context(), "default"))
+
+	rw := httptest.NewRecorder()
+	handler.ServeHTTP(rw, req)
+
+	assert.Equal(t, http.StatusMisdirectedRequest, rw.Code)
+	assert.Empty(t, rw.Header().Values("Connection"))
 }

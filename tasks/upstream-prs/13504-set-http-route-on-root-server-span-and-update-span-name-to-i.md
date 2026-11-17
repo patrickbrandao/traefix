@@ -69,3 +69,7 @@ O #14073 põe `http.route` nas métricas `http.server.request.duration` usando a
 - `go vet ./pkg/...`: ok.
 - `go test ./pkg/middlewares/observability/`: ok.
 - `golangci-lint run ./pkg/middlewares/observability/...`: 0 issues.
+
+## Testes de integração (2026-11-17)
+
+Com a renomeação do span raiz para `GET <rota>`, as expectativas de `integration/tracing_test.go` ficaram desatualizadas: o PR upstream não atualizou o teste de integração. Elas foram atualizadas e `TestTracingSuite` passa.

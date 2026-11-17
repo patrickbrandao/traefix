@@ -59,3 +59,12 @@ Ajustes:
 Risco residual: no HTTP/3 o fechamento continua abrupto para os outros streams da conexão; quic-go não tem shutdown gracioso por conexão.
 
 Testes: `go build ./...` ok; `go test ./pkg/middlewares/snicheck/ ./pkg/tcp/ ./pkg/server/` ok; `golangci-lint` nos pacotes tocados: só 1 aviso `errcheck` pré-existente em `pkg/tcp/proxy.go` (arquivo não tocado).
+
+## Testes de integração (2026-11-17)
+
+Testes de integração (`TestHTTPSSuite/TestWithDomainFronting`) mostraram dois problemas no HTTP/3.
+
+- O fechamento forçado da conexão QUIC logo depois do 421 concorria com a leitura da resposta pelo cliente: ele recebia `H3_NO_ERROR: stale TLS options` em vez do 421, e os outros streams da conexão também morriam.
+- O header `Connection: close` é proibido no HTTP/3 e fazia o cliente rejeitar a resposta.
+
+O fechamento forçado foi removido e o header agora só é enviado no HTTP/1.1 e no HTTP/2. No HTTP/3 a conexão continua aberta: pela RFC 9110, o cliente pode repetir a requisição que recebeu 421 numa nova conexão. Foi adicionado um teste unitário para o HTTP/3.
