@@ -3609,6 +3609,81 @@ func TestIngressEndpointPublishedService(t *testing.T) {
 	}
 }
 
+func TestIngressEndpointPublishedServiceSelector(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		selector string
+		expected []netv1.IngressLoadBalancerIngress
+	}{
+		{
+			desc:     "Published Service Selector",
+			selector: "default/app=traefik",
+			expected: []netv1.IngressLoadBalancerIngress{
+				{
+					IP: "1.2.3.4",
+					Ports: []netv1.IngressPortStatus{
+						{Port: 9090, Protocol: "TCP"},
+						{Port: 9091, Protocol: "TCP"},
+					},
+				},
+				{
+					IP: "5.6.7.8",
+					Ports: []netv1.IngressPortStatus{
+						{Port: 9090, Protocol: "TCP"},
+						{Port: 9091, Protocol: "TCP"},
+					},
+				},
+				{
+					IP: "9.10.11.12",
+					Ports: []netv1.IngressPortStatus{
+						{Port: 9090, Protocol: "TCP"},
+						{Port: 9091, Protocol: "TCP"},
+					},
+				},
+				{
+					Hostname: "example.com",
+				},
+			},
+		},
+		{
+			desc:     "Published Service Selector",
+			selector: "default/app=unknown",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.selector, func(t *testing.T) {
+			t.Parallel()
+
+			k8sObjects := readResources(t, []string{generateTestFilename(test.desc)})
+			kubeClient := kubefake.NewClientset(k8sObjects...)
+
+			client := newClientImpl(kubeClient)
+
+			stopCh := make(chan struct{})
+			eventCh, err := client.WatchAll(nil, stopCh)
+			require.NoError(t, err)
+
+			if k8sObjects != nil {
+				// just wait for the first event
+				<-eventCh
+			}
+
+			p := Provider{
+				IngressEndpoint: &EndpointIngress{
+					PublishedServiceSelector: test.selector,
+				},
+			}
+			p.loadConfigurationFromIngresses(t.Context(), client)
+
+			ingress, err := kubeClient.NetworkingV1().Ingresses(metav1.NamespaceDefault).Get(t.Context(), "foo", metav1.GetOptions{})
+			require.NoError(t, err)
+
+			assert.ElementsMatch(t, test.expected, ingress.Status.LoadBalancer.Ingress)
+		})
+	}
+}
+
 func readResources(t *testing.T, paths []string) []runtime.Object {
 	t.Helper()
 
@@ -3638,6 +3713,16 @@ func TestProviderInit(t *testing.T) {
 		DisableClusterScopeResources: true,
 	}
 	assert.EqualError(t, p2.Init(), "reportNodeInternalIPs and disableClusterScopeResources are mutually exclusive")
+
+	p5 := Provider{
+		IngressEndpoint: &EndpointIngress{PublishedService: "default/traefik", PublishedServiceSelector: "default/app=traefik"},
+	}
+	assert.EqualError(t, p5.Init(), "ingressEndpoint.publishedService and ingressEndpoint.publishedServiceSelector are mutually exclusive")
+
+	p6 := Provider{
+		IngressEndpoint: &EndpointIngress{PublishedServiceSelector: "default/app in (traefik"},
+	}
+	assert.Error(t, p6.Init())
 
 	p3 := Provider{ReportNodeInternalIPs: true}
 	assert.NoError(t, p3.Init())
