@@ -11,6 +11,7 @@ import (
 
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/middlewares"
+	"github.com/traefik/traefik/v3/pkg/middlewares/ingressnginx"
 	"github.com/traefik/traefik/v3/pkg/middlewares/observability"
 )
 
@@ -56,17 +57,6 @@ func New(ctx context.Context, next http.Handler, config dynamic.RewriteTarget, n
 		if err != nil {
 			return nil, fmt.Errorf("compiling regular expression %s: %w", config.Regex, err)
 		}
-
-		// When rewrite-target is a full URL, append .* to consume the entire path
-		// and avoid leaking an unmatched suffix into the redirect URL.
-		// Capture groups are greedy, so they still capture their content before the trailing .*.
-		// See https://github.com/traefik/traefik/issues/12931
-		if absoluteURLRedirect {
-			re, err = regexp.Compile("(?i)" + strings.TrimSpace(config.Regex) + ".*")
-			if err != nil {
-				return nil, fmt.Errorf("compiling regular expression for absolute URL %s: %w", config.Regex, err)
-			}
-		}
 	}
 
 	return &rewriteTarget{
@@ -91,15 +81,21 @@ func (rt *rewriteTarget) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		currentPath = req.URL.EscapedPath()
 	}
 
-	// regexp doex not match, nothing to rewrite.
-	if rt.regexp != nil && !rt.regexp.MatchString(currentPath) {
-		rt.next.ServeHTTP(rw, req)
-		return
+	var match []int
+	if rt.regexp != nil {
+		match = rt.regexp.FindStringSubmatchIndex(currentPath)
+
+		// regexp doex not match, nothing to rewrite.
+		if match == nil {
+			rt.next.ServeHTTP(rw, req)
+			return
+		}
 	}
 
+	// Same as ingress-nginx, the whole path is replaced, not only the matched part.
 	var newTarget string
 	if rt.regexp != nil {
-		newTarget = rt.regexp.ReplaceAllString(currentPath, rt.replacement)
+		newTarget = string(rt.regexp.ExpandString(nil, rt.replacement, currentPath, match))
 	} else {
 		newTarget = replacementRegex.ReplaceAllString(rt.replacement, "")
 	}
@@ -134,10 +130,20 @@ func (rt *rewriteTarget) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	if rt.xForwardedPrefix != "" {
 		prefix := rt.xForwardedPrefix
 		if rt.regexp != nil {
-			prefix = rt.regexp.ReplaceAllString(currentPath, rt.xForwardedPrefix)
+			prefix = string(rt.regexp.ExpandString(nil, rt.xForwardedPrefix, currentPath, match))
 		}
 		req.Header.Set(xForwardedPrefix, prefix)
 	}
+
+	// Keep the client URI available to downstream middleware, such as the
+	// ingress-nginx forward-auth adapter, before rewriting the request path.
+	if ingressnginx.OriginalURI(req) == "" {
+		req = ingressnginx.WithOriginalURI(req, req.URL.RequestURI())
+	}
+
+	// Location matching in ingress-nginx happens before rewrite-target changes the request path,
+	// so the snippet location blocks must keep matching the client path.
+	req = ingressnginx.WithOriginalPath(req, req.URL.Path)
 
 	// As replacement can introduce escaped characters
 	// Path must remain an unescaped version of RawPath

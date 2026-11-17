@@ -138,6 +138,12 @@ func Test_ReplaceVariables(t *testing.T) {
 			expected: "val=/foo/bar?key=value&other=test",
 		},
 		{
+			desc:     "$request_uri after a rewrite",
+			src:      "val=$request_uri",
+			req:      WithOriginalURI(httptest.NewRequest(http.MethodGet, "http://baz.com/rewritten", http.NoBody), "/foo/bar?key=value"),
+			expected: "val=/foo/bar?key=value",
+		},
+		{
 			desc:     "$remote_addr",
 			src:      "val=$remote_addr",
 			req:      mustNewRequestWithRemoteAddr(t, http.MethodGet, "http://baz.com/foo/bar", "192.168.1.1:12345"),

@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +198/-1 em 4 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, area/provider/k8s/ingress, size/M |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,22 @@ Otimização de performance com estado no provider; o deep copy evita aliasing. 
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- O cache por `namespace/name/resourceVersion`, podado a cada rebuild, é correto: o tamanho fica limitado ao número de Ingresses vivos. Só a goroutine de `Provide` acessa o cache, então não há corrida. As annotations só mudam junto com o `resourceVersion`.
+- **Bug:** o `RouterIng.DeepCopy` escrito à mão não copiava o campo `RespondingTimeouts`, que existe no código atual mas não existia na base do PR. Os ponteiros `ReadTimeout`/`WriteTimeout` ficariam compartilhados entre o cache e a configuração emitida, e uma mutação posterior (por exemplo, no `routerTransform`) corromperia o cache entre rebuilds.
+- Risco de manutenção: o `DeepCopy` é manual, então todo campo novo com ponteiro ou slice em `RouterIng` precisa ser incluído nele.
+
+**Ajustes**
+
+- `DeepCopy` passa a copiar `RespondingTimeouts`; o teste cobre isso.
+- Conflitos resolvidos com a assinatura atual de `updateIngressStatus`; testes adaptados (`new(...)` e literais sem `ObjectMeta`, por causa do lint `embedlit`).
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress/` ok.
+- `golangci-lint run ./pkg/provider/kubernetes/ingress/...`: 0 issues.

@@ -160,6 +160,11 @@ func (s *Snippet) GetTracingInformation() (string, string) {
 }
 
 func (s *Snippet) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	// A rewrite directive changes the request in place, while NGINX keeps sending the client URI to the auth service.
+	if ingressnginx.OriginalURI(req) == "" {
+		req = ingressnginx.WithOriginalURI(req, req.URL.RequestURI())
+	}
+
 	ctx := &actionContext{
 		vars: make(map[string]string),
 		req:  req,
@@ -288,7 +293,7 @@ func (s *Snippet) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// PHASE: HEADER_FILTER (response headers)
 	// Wrap response writer to apply header modifications when response is written.
 	// add_header: Override behavior - location replaces server
-	// more_*, proxy_hide_header, expires: Additive - both apply
+	// proxy_hide_header, more_*, expires: Additive - both apply
 	// ========================================================================
 	wrappedRW := s.wrapResponseWriterWithCollectors(rw, ctx, serverCollector, locationCollector)
 
@@ -317,16 +322,35 @@ func (s *Snippet) wrapResponseWriterWithCollectors(rw http.ResponseWriter, ctx *
 			overrideEntries = serverCollector.HeaderFilterOverride
 		}
 
+		// $upstream_http_* variables refer to the headers sent by the upstream,
+		// including the ones hidden by proxy_hide_header.
+		var upstreamHeaders http.Header
+		if len(overrideEntries) > 0 {
+			upstreamHeaders = h.Clone()
+		}
+
+		// proxy_hide_header: Additive behavior - both apply, before add_header.
+		for _, act := range serverCollector.HeaderFilterHide {
+			_, _ = act(headerRW, ctx.req, ctx)
+		}
+		for _, act := range locationCollector.HeaderFilterHide {
+			_, _ = act(headerRW, ctx.req, ctx)
+		}
+
 		for _, entry := range overrideEntries {
 			// Status code filtering: without "always", only add for specific status codes
 			if !entry.always && !isAddHeaderStatusCode(code) {
 				continue
 			}
-			resolvedVal := ingressnginx.ReplaceVariables(entry.value, ctx.req, nil, ctx.vars)
+			resolvedVal := ingressnginx.ReplaceVariables(entry.value, ctx.req, upstreamHeaders, ctx.vars)
+			// Like NGINX, add_header does not add a header with an empty value.
+			if resolvedVal == "" {
+				continue
+			}
 			h.Add(entry.key, resolvedVal)
 		}
 
-		// more_*, proxy_hide_header, expires: Additive behavior - both apply
+		// more_*, expires: Additive behavior - both apply
 		for _, act := range serverCollector.HeaderFilterAdditive {
 			_, _ = act(headerRW, ctx.req, ctx)
 		}
@@ -489,12 +513,18 @@ func (s *Snippet) executeForwardAuth(rw http.ResponseWriter, req *http.Request, 
 	// upstream auth-url example. By design this provider asserts no identity the
 	// operator did not opt into: trusting unlisted client headers downstream is a
 	// backend misconfiguration, not a spoofing flaw here.
-	for _, headerName := range s.authResponseHeaders {
+	for i, headerName := range s.authResponseHeaders {
 		headerKey := http.CanonicalHeaderKey(headerName)
 		req.Header.Del(headerKey)
 		if len(forwardResponse.Header[headerKey]) > 0 {
 			req.Header[headerKey] = append([]string(nil), forwardResponse.Header[headerKey]...)
 		}
+
+		// ingress-nginx sets one variable per auth-response-headers entry, in order:
+		// $authHeader0, $authHeader1, and so on.
+		// Snippets use them to read the values from the auth response.
+		// Custom variables are stored with the leading $.
+		ctx.vars[fmt.Sprintf("$authHeader%d", i)] = strings.Join(forwardResponse.Header.Values(headerKey), ",")
 	}
 
 	tracer.CaptureResponse(forwardSpan, forwardResponse.Header, forwardResponse.StatusCode, trace.SpanKindClient)
@@ -611,7 +641,7 @@ func writeHeader(req, forwardReq *http.Request) {
 	}
 
 	forwardReq.Header.Del(xForwardedURI)
-	if req.URL.RequestURI() != "" {
-		forwardReq.Header.Set(xForwardedURI, req.URL.RequestURI())
+	if uri := ingressnginx.OriginalRequestURI(req); uri != "" {
+		forwardReq.Header.Set(xForwardedURI, uri)
 	}
 }

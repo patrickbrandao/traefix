@@ -31,6 +31,91 @@ import (
 
 var _ provider.Provider = (*Provider)(nil)
 
+func TestGetRouterConfigUsesResourceVersionCache(t *testing.T) {
+	p := &Provider{}
+	ing := &netv1.Ingress{
+		Namespace:       "testing",
+		Name:            "ingress",
+		ResourceVersion: "1",
+		Annotations: map[string]string{
+			"traefik.ingress.kubernetes.io/router.entrypoints": "web",
+			"traefik.ingress.kubernetes.io/router.tls.options": "default",
+		},
+	}
+
+	seen := map[string]struct{}{}
+	cfg, err := p.getRouterConfig(ing, seen)
+	require.NoError(t, err)
+
+	cfg.Router.EntryPoints[0] = "websecure"
+	cfg.Router.TLS.Options = "custom"
+
+	cfg, err = p.getRouterConfig(ing, seen)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"web"}, cfg.Router.EntryPoints)
+	assert.Equal(t, "default", cfg.Router.TLS.Options)
+	assert.Len(t, p.routerConfigCache, 1)
+
+	p.pruneRouterConfigCache(map[string]struct{}{})
+
+	assert.Empty(t, p.routerConfigCache)
+}
+
+func TestGetRouterConfigInvalidatesOnResourceVersionChange(t *testing.T) {
+	p := &Provider{}
+	ing := &netv1.Ingress{
+		Namespace:       "testing",
+		Name:            "ingress",
+		ResourceVersion: "1",
+		Annotations: map[string]string{
+			"traefik.ingress.kubernetes.io/router.entrypoints": "web",
+		},
+	}
+
+	// First rebuild caches the parsed annotations under the resourceVersion key.
+	seen := map[string]struct{}{}
+	cfg, err := p.getRouterConfig(ing, seen)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"web"}, cfg.Router.EntryPoints)
+	p.pruneRouterConfigCache(seen)
+
+	// A spec change bumps the resourceVersion, which must yield a cache miss and re-parse.
+	ing.ResourceVersion = "2"
+	ing.Annotations["traefik.ingress.kubernetes.io/router.entrypoints"] = "websecure"
+
+	seen = map[string]struct{}{}
+	cfg, err = p.getRouterConfig(ing, seen)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"websecure"}, cfg.Router.EntryPoints)
+
+	// The stale entry for resourceVersion "1" is pruned, leaving only the current one.
+	p.pruneRouterConfigCache(seen)
+	assert.Len(t, p.routerConfigCache, 1)
+	_, ok := p.routerConfigCache["testing/ingress/2"]
+	assert.True(t, ok)
+}
+
+func TestGetRouterConfigCachesNilConfig(t *testing.T) {
+	p := &Provider{}
+	ing := &netv1.Ingress{
+		Namespace:       "testing",
+		Name:            "ingress",
+		ResourceVersion: "1",
+	}
+
+	seen := map[string]struct{}{}
+	cfg, err := p.getRouterConfig(ing, seen)
+	require.NoError(t, err)
+	assert.Nil(t, cfg)
+
+	// The nil result (no router annotations) is cached and the DeepCopy on read stays nil-safe.
+	cfg, err = p.getRouterConfig(ing, seen)
+	require.NoError(t, err)
+	assert.Nil(t, cfg)
+	assert.Len(t, p.routerConfigCache, 1)
+}
+
 func TestLoadConfigurationFromIngresses(t *testing.T) {
 	testCases := []struct {
 		desc                         string
@@ -178,6 +263,56 @@ func TestLoadConfigurationFromIngresses(t *testing.T) {
 									},
 								},
 								ServersTransport: "foobar@file",
+							},
+							Observability: &dynamic.ServiceObservabilityConfig{
+								Metadata: &dynamic.ServiceObservabilityMetadata{
+									Kubernetes: &dynamic.KubernetesServiceMetadata{
+										Namespace: "testing",
+										Name:      "service1",
+										Port:      "80",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			desc: "Ingress with strategy annotation",
+			expected: &dynamic.Configuration{
+				HTTP: &dynamic.HTTPConfiguration{
+					Middlewares: map[string]*dynamic.Middleware{},
+					Routers: map[string]*dynamic.Router{
+						"testing-bar": {
+							Rule:    `PathPrefix("/bar")`,
+							Service: "testing-service1-80",
+							Observability: &dynamic.RouterObservabilityConfig{
+								Metadata: &dynamic.ObservabilityMetadata{
+									Ingress: &dynamic.KubernetesMetadata{
+										Kind:      "Ingress",
+										Namespace: "testing",
+									},
+								},
+							},
+						},
+					},
+					Services: map[string]*dynamic.Service{
+						"testing-service1-80": {
+							LoadBalancer: &dynamic.ServersLoadBalancer{
+								Strategy:       dynamic.BalancerStrategyP2C,
+								PassHostHeader: new(true),
+								ResponseForwarding: &dynamic.ResponseForwarding{
+									FlushInterval: ptypes.Duration(100 * time.Millisecond),
+								},
+								Servers: []dynamic.Server{
+									{
+										URL: "http://10.10.0.1:8080",
+									},
+									{
+										URL: "http://10.21.0.1:8080",
+									},
+								},
 							},
 							Observability: &dynamic.ServiceObservabilityConfig{
 								Metadata: &dynamic.ServiceObservabilityMetadata{
@@ -3314,6 +3449,41 @@ func TestGetCertificates(t *testing.T) {
 			client:  clientMock{},
 			result:  map[string]*tls.CertAndStores{},
 		},
+		{
+			desc: "keep processing TLS entries after a missing secret",
+			ingress: buildIngress(
+				iNamespace("testing"),
+				iRules(
+					iRule(iHost("ep1.example.com")),
+					iRule(iHost("ep2.example.com")),
+				),
+				iTLSes(
+					iTLS("missing-secret"),
+					iTLS("test-secret"),
+				),
+			),
+			client: clientMock{
+				secrets: []*corev1.Secret{
+					{
+						Name:      "test-secret",
+						Namespace: "testing",
+						Data: map[string][]byte{
+							"tls.crt": []byte("tls-crt"),
+							"tls.key": []byte("tls-key"),
+						},
+					},
+				},
+			},
+			result: map[string]*tls.CertAndStores{
+				"testing-test-secret": {
+					Certificate: tls.Certificate{
+						CertFile: types.FileOrContent("tls-crt"),
+						KeyFile:  types.FileOrContent("tls-key"),
+					},
+				},
+			},
+			errResult: "secret testing/missing-secret does not exist",
+		},
 	}
 
 	for _, test := range testCases {
@@ -3327,6 +3497,9 @@ func TestGetCertificates(t *testing.T) {
 				assert.EqualError(t, err, test.errResult)
 			} else {
 				assert.NoError(t, err)
+			}
+
+			if test.result != nil {
 				assert.Equal(t, test.result, tlsConfigs)
 			}
 		})
@@ -3573,6 +3746,55 @@ func TestIngressEndpointPublishedService(t *testing.T) {
 				},
 			},
 		},
+		{
+			desc: "Published Service ClusterIP No ExternalIPs",
+			expected: []netv1.IngressLoadBalancerIngress{
+				{
+					IP: "10.0.0.99",
+					Ports: []netv1.IngressPortStatus{
+						{Port: 9090, Protocol: "TCP"},
+						{Port: 9091, Protocol: "TCP"},
+					},
+				},
+			},
+		},
+		{
+			desc: "Published Service ClusterIP IPv6",
+			expected: []netv1.IngressLoadBalancerIngress{
+				{
+					IP: "2001:db8::99",
+					Ports: []netv1.IngressPortStatus{
+						{Port: 9090, Protocol: "TCP"},
+						{Port: 9091, Protocol: "TCP"},
+					},
+				},
+			},
+		},
+		{
+			desc: "Published Service ClusterIP Dual Stack",
+			expected: []netv1.IngressLoadBalancerIngress{
+				{
+					IP: "10.0.0.99",
+					Ports: []netv1.IngressPortStatus{
+						{Port: 9090, Protocol: "TCP"},
+						{Port: 9091, Protocol: "TCP"},
+					},
+				},
+				{
+					IP: "2001:db8::99",
+					Ports: []netv1.IngressPortStatus{
+						{Port: 9090, Protocol: "TCP"},
+						{Port: 9091, Protocol: "TCP"},
+					},
+				},
+			},
+		},
+		{
+			desc: "Published Service ClusterIP Headless",
+		},
+		{
+			desc: "Published Service ClusterIP Empty",
+		},
 	}
 
 	for _, test := range testCases {
@@ -3597,6 +3819,81 @@ func TestIngressEndpointPublishedService(t *testing.T) {
 				DisableClusterScopeResources: test.disableClusterScopeResources,
 				IngressEndpoint: &EndpointIngress{
 					PublishedService: "default/published-service",
+				},
+			}
+			p.loadConfigurationFromIngresses(t.Context(), client)
+
+			ingress, err := kubeClient.NetworkingV1().Ingresses(metav1.NamespaceDefault).Get(t.Context(), "foo", metav1.GetOptions{})
+			require.NoError(t, err)
+
+			assert.ElementsMatch(t, test.expected, ingress.Status.LoadBalancer.Ingress)
+		})
+	}
+}
+
+func TestIngressEndpointPublishedServiceSelector(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		selector string
+		expected []netv1.IngressLoadBalancerIngress
+	}{
+		{
+			desc:     "Published Service Selector",
+			selector: "default/app=traefik",
+			expected: []netv1.IngressLoadBalancerIngress{
+				{
+					IP: "1.2.3.4",
+					Ports: []netv1.IngressPortStatus{
+						{Port: 9090, Protocol: "TCP"},
+						{Port: 9091, Protocol: "TCP"},
+					},
+				},
+				{
+					IP: "5.6.7.8",
+					Ports: []netv1.IngressPortStatus{
+						{Port: 9090, Protocol: "TCP"},
+						{Port: 9091, Protocol: "TCP"},
+					},
+				},
+				{
+					IP: "9.10.11.12",
+					Ports: []netv1.IngressPortStatus{
+						{Port: 9090, Protocol: "TCP"},
+						{Port: 9091, Protocol: "TCP"},
+					},
+				},
+				{
+					Hostname: "example.com",
+				},
+			},
+		},
+		{
+			desc:     "Published Service Selector",
+			selector: "default/app=unknown",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.selector, func(t *testing.T) {
+			t.Parallel()
+
+			k8sObjects := readResources(t, []string{generateTestFilename(test.desc)})
+			kubeClient := kubefake.NewClientset(k8sObjects...)
+
+			client := newClientImpl(kubeClient)
+
+			stopCh := make(chan struct{})
+			eventCh, err := client.WatchAll(nil, stopCh)
+			require.NoError(t, err)
+
+			if k8sObjects != nil {
+				// just wait for the first event
+				<-eventCh
+			}
+
+			p := Provider{
+				IngressEndpoint: &EndpointIngress{
+					PublishedServiceSelector: test.selector,
 				},
 			}
 			p.loadConfigurationFromIngresses(t.Context(), client)
@@ -3638,6 +3935,16 @@ func TestProviderInit(t *testing.T) {
 		DisableClusterScopeResources: true,
 	}
 	assert.EqualError(t, p2.Init(), "reportNodeInternalIPs and disableClusterScopeResources are mutually exclusive")
+
+	p5 := Provider{
+		IngressEndpoint: &EndpointIngress{PublishedService: "default/traefik", PublishedServiceSelector: "default/app=traefik"},
+	}
+	assert.EqualError(t, p5.Init(), "ingressEndpoint.publishedService and ingressEndpoint.publishedServiceSelector are mutually exclusive")
+
+	p6 := Provider{
+		IngressEndpoint: &EndpointIngress{PublishedServiceSelector: "default/app in (traefik"},
+	}
+	assert.Error(t, p6.Init())
 
 	p3 := Provider{ReportNodeInternalIPs: true}
 	assert.NoError(t, p3.Init())
@@ -3798,6 +4105,87 @@ func TestStrictPrefixMatchingRule(t *testing.T) {
 			} else {
 				assert.Equal(t, http.StatusNotFound, w.Code)
 			}
+		})
+	}
+}
+
+func TestLoadServiceUnsupportedStrategy(t *testing.T) {
+	client := clientMock{
+		services: []*corev1.Service{{
+			Name:        "service1",
+			Namespace:   "testing",
+			Annotations: map[string]string{"traefik.ingress.kubernetes.io/service.strategy": "random"},
+			Spec:        corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+		}},
+	}
+
+	p := Provider{}
+	_, err := p.loadService(client, "testing", netv1.IngressBackend{
+		Service: &netv1.IngressServiceBackend{Name: "service1", Port: netv1.ServiceBackendPort{Number: 80}},
+	})
+	assert.EqualError(t, err, "load-balancer strategy random is not supported")
+}
+
+func TestIngressEndpointStatus(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		desc     string
+		endpoint *EndpointIngress
+		expected []netv1.IngressLoadBalancerIngress
+	}{
+		{
+			desc:     "empty",
+			endpoint: &EndpointIngress{},
+			expected: []netv1.IngressLoadBalancerIngress{},
+		},
+		{
+			desc:     "single IPv4",
+			endpoint: &EndpointIngress{IP: "192.0.2.1"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}},
+		},
+		{
+			desc:     "multiple IPv4",
+			endpoint: &EndpointIngress{IP: "192.0.2.1, 192.0.2.2"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}, {IP: "192.0.2.2"}},
+		},
+		{
+			desc:     "mixed IPv4 and IPv6",
+			endpoint: &EndpointIngress{IP: "192.0.2.1,2001:db8::1"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}, {IP: "2001:db8::1"}},
+		},
+		{
+			desc:     "duplicate addresses are removed preserving order",
+			endpoint: &EndpointIngress{IP: "192.0.2.1,192.0.2.1,2001:db8::1"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}, {IP: "2001:db8::1"}},
+		},
+		{
+			desc:     "invalid addresses are ignored",
+			endpoint: &EndpointIngress{IP: "192.0.2.1,example.com,2001:db8::1"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}, {IP: "2001:db8::1"}},
+		},
+		{
+			desc:     "hostname only",
+			endpoint: &EndpointIngress{Hostname: "example.com"},
+			expected: []netv1.IngressLoadBalancerIngress{{Hostname: "example.com"}},
+		},
+		{
+			desc:     "single IP and hostname preserve legacy status entry",
+			endpoint: &EndpointIngress{IP: "192.0.2.1", Hostname: "example.com"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1", Hostname: "example.com"}},
+		},
+		{
+			desc:     "multiple IPs and hostname",
+			endpoint: &EndpointIngress{IP: "192.0.2.1,2001:db8::1", Hostname: "example.com"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}, {IP: "2001:db8::1"}, {Hostname: "example.com"}},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, test.expected, ingressEndpointStatus(test.endpoint))
 		})
 	}
 }

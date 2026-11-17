@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +36/-18 em 5 arquivos |
 | Labels | status/2-needs-review, area/provider/k8s/ingress, kind/bug/fix, size/S |
-| Status | pendente |
+| Status | rejeitado |
 
 ## O que faz
 
@@ -39,3 +39,20 @@ Muda comportamento para quem usa ingressClass vazio com spec.ingressClassName di
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados**
+
+- O PR muda o comportamento padrão do provider **Kubernetes Ingress** (e não do ingress-nginx): com `providers.kubernetesIngress.ingressClass` vazio, hoje são processados os Ingresses de qualquer IngressClass cujo controller é `traefik.io/ingress-controller`. Com o PR, só a IngressClass com o nome literal `traefik` seria processada.
+- É uma **mudança incompatível** numa versão de correção: instalações com IngressClass de outro nome (por exemplo, `traefik-lb`, `traefik-internal`, ou o nome gerado pelo Helm chart) e `ingressClass` vazio deixariam de rotear tudo de uma vez, sem nenhum erro. O próprio PR precisa de uma seção de migração e altera fixtures e testes existentes que hoje passam.
+- O problema que o PR quer resolver (duas instâncias do Traefik reivindicando as mesmas IngressClasses) já tem solução configurável: definir `ingressClass` em cada instância. As IngressClasses envolvidas pertencem ao mesmo controller por definição, então não há cruzamento de fronteira de segurança.
+- No upstream só passou por revisão automática, sem decisão de maintainer.
+
+**Decisão**
+
+Rejeitado: quebra compatibilidade sem ganho de segurança. O problema parecido no provider ingress-nginx (um Ingress de **outro** controller sendo reivindicado) foi corrigido com #13453.
+
+**Testes**
+
+Nenhum (nada importado).

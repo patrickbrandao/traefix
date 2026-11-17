@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +92/-3 em 2 arquivos |
 | Labels | status/1-needs-design-review, kind/bug/fix, size/S, area/provider/k8s/ingress-nginx |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -37,3 +37,22 @@ Status 1-needs-design-review, reviews só COMMENTED. Altera a lógica de seleç�
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- O bug é real e afeta isolamento entre controllers: `shouldProcess` só respeitava `spec.ingressClassName` quando a lista filtrada de IngressClasses **não estava vazia**. Se nenhuma IngressClass do cluster casasse com o provider (por exemplo, o cluster só tem a classe `traefik` do provider Kubernetes Ingress), um Ingress com `ingressClassName: traefik` caía na lógica de annotation e `watchIngressWithoutClass`. Com `watchIngressWithoutClass: true`, o provider ingress-nginx passava a publicar rotas de Ingresses que pertencem a outro controller.
+- A correção usa `ignoreIngressClasses` (só fica verdadeiro quando o RBAC proíbe listar IngressClasses) em vez de "lista vazia". Com isso, o comportamento sem permissão de cluster continua como antes.
+- O maintainer aprovou ("Overall, LGTM").
+
+**Ajustes**
+
+- Nenhum ajuste funcional. Os literais do teste foram adaptados ao lint `embedlit`.
+- Relacionado: #14148 trata uma assimetria parecida no provider Kubernetes Ingress (rejeitado; veja a task dele).
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress-nginx/` ok (novo `TestProvider_shouldProcess`).
+- `golangci-lint run ./pkg/provider/kubernetes/ingress-nginx/...`: 0 issues.

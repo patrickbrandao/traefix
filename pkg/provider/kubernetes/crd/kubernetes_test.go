@@ -10156,11 +10156,11 @@ func TestLoadIngressRoutes(t *testing.T) {
 							Weighted: &dynamic.WeightedRoundRobin{
 								Services: []dynamic.WRRService{
 									{
-										Name:   "default-whoami-80-806d6f729f1fb52e",
+										Name:   "default-whoami-80-7122ba6b63cac426",
 										Weight: new(1),
 									},
 									{
-										Name:   "default-whoami-80-2b163e2e6c5e02ca",
+										Name:   "default-whoami-80-2e2d91e1e1ae5b98",
 										Weight: new(1),
 									},
 								},
@@ -10220,7 +10220,7 @@ func TestLoadIngressRoutes(t *testing.T) {
 								},
 							},
 						},
-						"default-whoami-80-2b163e2e6c5e02ca": {
+						"default-whoami-80-2e2d91e1e1ae5b98": {
 							LoadBalancer: &dynamic.ServersLoadBalancer{
 								Strategy: dynamic.BalancerStrategyWRR,
 								Sticky: &dynamic.Sticky{
@@ -10256,7 +10256,7 @@ func TestLoadIngressRoutes(t *testing.T) {
 								},
 							},
 						},
-						"default-whoami-80-806d6f729f1fb52e": {
+						"default-whoami-80-7122ba6b63cac426": {
 							LoadBalancer: &dynamic.ServersLoadBalancer{
 								Strategy: dynamic.BalancerStrategyWRR,
 								Sticky: &dynamic.Sticky{

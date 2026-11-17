@@ -2,6 +2,7 @@ package ingress
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
@@ -32,6 +33,34 @@ type RouterIng struct {
 	RespondingTimeouts *dynamic.RouterRespondingTimeouts  `json:"respondingTimeouts,omitempty"`
 }
 
+func (r *RouterConfig) DeepCopy() *RouterConfig {
+	if r == nil {
+		return nil
+	}
+
+	out := new(RouterConfig)
+	if r.Router != nil {
+		out.Router = r.Router.DeepCopy()
+	}
+
+	return out
+}
+
+func (r *RouterIng) DeepCopy() *RouterIng {
+	if r == nil {
+		return nil
+	}
+
+	out := *r
+	out.EntryPoints = slices.Clone(r.EntryPoints)
+	out.Middlewares = slices.Clone(r.Middlewares)
+	out.TLS = r.TLS.DeepCopy()
+	out.Observability = r.Observability.DeepCopy()
+	out.RespondingTimeouts = r.RespondingTimeouts.DeepCopy()
+
+	return &out
+}
+
 // SetDefaults sets the default values.
 func (r *RouterIng) SetDefaults() {
 	r.PathMatcher = defaultPathMatcher
@@ -44,13 +73,14 @@ type ServiceConfig struct {
 
 // ServiceIng is the service's configuration from annotations.
 type ServiceIng struct {
-	ServersScheme    string          `json:"serversScheme,omitempty"`
-	ServersTransport string          `json:"serversTransport,omitempty"`
-	PassHostHeader   *bool           `json:"passHostHeader"`
-	Middlewares      []string        `json:"middlewares,omitempty"`
-	Sticky           *dynamic.Sticky `json:"sticky,omitempty" label:"allowEmpty"`
-	NativeLB         *bool           `json:"nativeLB,omitempty"`
-	NodePortLB       bool            `json:"nodePortLB,omitempty"`
+	ServersScheme    string                   `json:"serversScheme,omitempty"`
+	ServersTransport string                   `json:"serversTransport,omitempty"`
+	PassHostHeader   *bool                    `json:"passHostHeader"`
+	Middlewares      []string                 `json:"middlewares,omitempty"`
+	Sticky           *dynamic.Sticky          `json:"sticky,omitempty" label:"allowEmpty"`
+	NativeLB         *bool                    `json:"nativeLB,omitempty"`
+	NodePortLB       bool                     `json:"nodePortLB,omitempty"`
+	Strategy         dynamic.BalancerStrategy `json:"strategy,omitempty"`
 }
 
 // SetDefaults sets the default values.

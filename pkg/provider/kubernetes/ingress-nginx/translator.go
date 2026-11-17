@@ -247,12 +247,21 @@ func (p *Provider) translate(ctx context.Context, mc *model) *dynamic.Configurat
 				}
 			}
 
+			// Canary rules extend the location rule, and the default priority is the rule length:
+			// left implicit, canary routers outrank the routers of longer paths of the same host and steal their traffic.
+			canaryPriority := rt.Priority
+			if canaryPriority == 0 {
+				canaryPriority = httpmuxer.GetRulePriority(rule)
+			}
+			canaryPriority++
+
 			if loc.Canary != nil && loc.Canary.RequiresCanaryRouter() {
 				canaryKey := routerKey + "-canary"
 				canaryRouter := &dynamic.Router{
 					EntryPoints:   rt.EntryPoints,
 					Rule:          appendCanaryRule(rule, loc.Canary),
 					RuleSyntax:    rt.RuleSyntax,
+					Priority:      canaryPriority,
 					Service:       canarySvcName,
 					Observability: obs,
 				}
@@ -266,6 +275,7 @@ func (p *Provider) translate(ctx context.Context, mc *model) *dynamic.Configurat
 						EntryPoints:   rtTLS.EntryPoints,
 						Rule:          appendCanaryRule(rule, loc.Canary),
 						RuleSyntax:    rtTLS.RuleSyntax,
+						Priority:      canaryPriority,
 						Service:       canarySvcName,
 						TLS:           rtTLS.TLS,
 						Observability: obs,
@@ -281,6 +291,7 @@ func (p *Provider) translate(ctx context.Context, mc *model) *dynamic.Configurat
 					EntryPoints:   rt.EntryPoints,
 					Rule:          appendNonCanaryRule(rule, loc.Canary),
 					RuleSyntax:    rt.RuleSyntax,
+					Priority:      canaryPriority,
 					Service:       primarySvcName,
 					Observability: obs,
 				}
@@ -294,6 +305,7 @@ func (p *Provider) translate(ctx context.Context, mc *model) *dynamic.Configurat
 						EntryPoints:   rtTLS.EntryPoints,
 						Rule:          appendNonCanaryRule(rule, loc.Canary),
 						RuleSyntax:    rtTLS.RuleSyntax,
+						Priority:      canaryPriority,
 						Service:       primarySvcName,
 						TLS:           rtTLS.TLS,
 						Observability: obs,
@@ -439,15 +451,16 @@ func buildSticky(cfg IngressConfig, nameSuffix string) *dynamic.Sticky {
 
 	return &dynamic.Sticky{
 		Cookie: &dynamic.Cookie{
-			Name:               name,
-			Secure:             ptr.Deref(cfg.SessionCookieSecure, false),
-			HTTPOnly:           true,
-			SameSite:           strings.ToLower(ptr.Deref(cfg.SessionCookieSameSite, "")),
-			MaxAge:             ptr.Deref(cfg.SessionCookieMaxAge, 0),
-			Expires:            ptr.Deref(cfg.SessionCookieExpires, 0),
-			Path:               new(ptr.Deref(cfg.SessionCookiePath, "/")),
-			Domain:             ptr.Deref(cfg.SessionCookieDomain, ""),
-			PreserveLeadingDot: true,
+			Name:                    name,
+			Secure:                  ptr.Deref(cfg.SessionCookieSecure, false),
+			HTTPOnly:                true,
+			SameSite:                strings.ToLower(ptr.Deref(cfg.SessionCookieSameSite, "")),
+			ConditionalSameSiteNone: ptr.Deref(cfg.SessionCookieConditionalSameSiteNone, false),
+			MaxAge:                  ptr.Deref(cfg.SessionCookieMaxAge, 0),
+			Expires:                 ptr.Deref(cfg.SessionCookieExpires, 0),
+			Path:                    new(ptr.Deref(cfg.SessionCookiePath, "/")),
+			Domain:                  ptr.Deref(cfg.SessionCookieDomain, ""),
+			PreserveLeadingDot:      true,
 		},
 	}
 }

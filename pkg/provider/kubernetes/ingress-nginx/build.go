@@ -52,6 +52,11 @@ type certBlocks struct {
 	key  []byte
 }
 
+type backendEndpointsCacheEntry struct {
+	endpoints []endpoint
+	err       error
+}
+
 // build reads all Ingress resources visible to the client and produces a model.
 //
 //nolint:funlen // multi-phase ingress processing kept inline for readability
@@ -76,11 +81,14 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 	// that needs an option carries a pointer to the cached entry; the translator
 	// registers each unique option once in conf.TLS.Options.
 	tlsOptionCache := make(map[string]*tls.Options)
+	backendEndpointsCache := make(map[string]backendEndpointsCacheEntry)
 
 	allHosts := make(map[string]bool)
 	hostsWithUseRegex := make(map[string]bool)
 	hostsWithRootPath := make(map[string]bool)
 	claimedAliases := make(map[string]string)
+	// ingress-nginx attaches server-alias to the whole server, using the first ingress declaring one for the host.
+	serverAliasOwners := make(map[string]ingressEntry)
 
 	// Provider-level default backend.
 	if p.defaultBackendServiceNamespace != "" && p.defaultBackendServiceName != "" {
@@ -88,6 +96,7 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 			p.defaultBackendServiceNamespace,
 			netv1.IngressBackend{Service: &netv1.IngressServiceBackend{Name: p.defaultBackendServiceName}},
 			IngressConfig{},
+			backendEndpointsCache,
 		)
 		if err != nil {
 			log.Ctx(ctx).Error().Err(err).Msg("Cannot resolve default backend service")
@@ -127,7 +136,7 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 	})
 
 	for _, ingress := range ingresses {
-		if !p.shouldProcess(ingress, ingressClasses) {
+		if !p.shouldProcess(ingress, ingressClasses, p.k8sClient.ignoreIngressClasses) {
 			continue
 		}
 
@@ -164,6 +173,16 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 
 		for _, rule := range ingress.Spec.Rules {
 			allHosts[rule.Host] = true
+
+			if len(ptr.Deref(cfg.ServerAlias, nil)) > 0 {
+				if owner, ok := serverAliasOwners[rule.Host]; ok && (owner.Namespace != entry.Namespace || owner.Name != entry.Name) {
+					logger.Warn().
+						Str("host", rule.Host).
+						Msgf("Skipping server-alias because it is already configured for this host by %s/%s", owner.Namespace, owner.Name)
+				} else {
+					serverAliasOwners[rule.Host] = entry
+				}
+			}
 
 			// The ingress default backend becomes a host-only catch-all location, which matches "/" as well.
 			if ingress.Spec.DefaultBackend != nil && ingress.Spec.DefaultBackend.Service != nil {
@@ -202,6 +221,11 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 		}
 
 		orderedIngresses = append(orderedIngresses, entry)
+	}
+
+	serverAliases := make(map[string][]string)
+	for host, owner := range serverAliasOwners {
+		serverAliases[host] = resolveAliases(ctx, owner, allHosts, claimedAliases)
 	}
 
 	// Second pass: resolve canary backends.
@@ -246,7 +270,7 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 				}
 
 				// The canary backend's addresses are checked using the original ingress config.
-				endpoints, err := p.getBackendEndpoints(canaryIngress.Namespace, pa.Backend, prodIngressPath.config)
+				endpoints, err := p.getBackendEndpointsCached(canaryIngress.Namespace, pa.Backend, prodIngressPath.config, backendEndpointsCache)
 				if err != nil || len(endpoints) == 0 {
 					continue
 				}
@@ -334,7 +358,7 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 					continue
 				}
 
-				endpoints, err := p.getBackendEndpoints(ing.Namespace, *ingBackend, ing.config)
+				endpoints, err := p.getBackendEndpointsCached(ing.Namespace, *ingBackend, ing.config, backendEndpointsCache)
 				if err != nil {
 					logger.Error().Err(err).Msgf("Cannot resolve passthrough backend for host %q", rule.Host)
 					continue
@@ -397,7 +421,7 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 				// the location is still emitted with an empty backend so the router
 				// (and its middlewares) exist, mirroring ingress-nginx's 503-on-no-servers
 				// behavior.
-				endpoints, err := p.getBackendEndpoints(ing.Namespace, pa.Backend, ing.config)
+				endpoints, err := p.getBackendEndpointsCached(ing.Namespace, pa.Backend, ing.config, backendEndpointsCache)
 				if err != nil {
 					logger.Warn().
 						Str("service", pa.Backend.Service.Name).
@@ -478,9 +502,10 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 							// Build the error backend using defaultBackend annotation or provider default.
 							defaultSvcName := ptr.Deref(ing.config.DefaultBackend, "")
 							if defaultSvcName != "" {
-								endpoints, err := p.getBackendEndpoints(ing.Namespace,
+								endpoints, err := p.getBackendEndpointsCached(ing.Namespace,
 									netv1.IngressBackend{Service: &netv1.IngressServiceBackend{Name: defaultSvcName}},
-									ing.config)
+									ing.config,
+									backendEndpointsCache)
 								if err == nil {
 									mc.Backends[errBackendName] = &backend{
 										Name:        errBackendName,
@@ -495,7 +520,7 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 					}
 				}
 
-				loc.Aliases = resolveAliases(ctx, loc, allHosts, claimedAliases)
+				loc.Aliases = hostAliases(serverAliasOwners, serverAliases, rule.Host, ing.Namespace)
 				loc.UseRegex = hostsWithUseRegex[rule.Host]
 
 				// Build all middleware configurations so the translator only registers them.
@@ -528,7 +553,7 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 		// (default-backend / default-backend-tls routers) so it still serves traffic.
 		if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil {
 			db := ing.Spec.DefaultBackend
-			endpoints, err := p.getBackendEndpoints(ing.Namespace, *db, ing.config)
+			endpoints, err := p.getBackendEndpointsCached(ing.Namespace, *db, ing.config, backendEndpointsCache)
 			if err != nil {
 				logger.Warn().
 					Str("service", db.Service.Name).
@@ -589,6 +614,11 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 
 			seenHosts := map[string]struct{}{}
 			for ri, rule := range ing.Spec.Rules {
+				// Like ingress-nginx, hostless rules keep the global default backend as their fallback.
+				if rule.Host == "" {
+					continue
+				}
+
 				if _, ok := seenHosts[rule.Host]; ok {
 					continue
 				}
@@ -613,7 +643,7 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 					SSLPassthrough:          sslPassthrough,
 				}
 
-				loc.Aliases = resolveAliases(ctx, loc, allHosts, claimedAliases)
+				loc.Aliases = hostAliases(serverAliasOwners, serverAliases, rule.Host, ing.Namespace)
 				loc.UseRegex = hostsWithUseRegex[rule.Host]
 
 				// Inherit basic/digest auth and custom headers like the rule paths
@@ -660,9 +690,16 @@ func inheritServerAppRoot(loc *location, appRoot string) {
 }
 
 func (p *Provider) buildServersTransport(ctx context.Context, namespace, name string, cfg IngressConfig) (namedServersTransport, error) {
+	maxIdleConnsPerHost := p.UpstreamKeepaliveConnections
+	if maxIdleConnsPerHost <= 0 {
+		// NGINX disables keep-alive with 0, whereas the ServersTransport uses the Go default (2) for 0 and disables reuse only when negative.
+		maxIdleConnsPerHost = -1
+	}
+
 	nst := namedServersTransport{
 		name: makeKey(namespace, name),
 		ServersTransport: &dynamic.ServersTransport{
+			MaxIdleConnsPerHost: maxIdleConnsPerHost,
 			ForwardingTimeouts: &dynamic.ForwardingTimeouts{
 				DialTimeout:     ptypes.Duration(time.Duration(ptr.Deref(cfg.ProxyConnectTimeout, p.ProxyConnectTimeout)) * time.Second),
 				ReadTimeout:     ptypes.Duration(time.Duration(ptr.Deref(cfg.ProxyReadTimeout, p.ProxyReadTimeout)) * time.Second),
@@ -813,8 +850,38 @@ func (p *Provider) getEndpointsFromEndpointSlices(namespace, name, portName stri
 	return endpoints, nil
 }
 
-func (p *Provider) resolveBackend(namespace string, ingBackend netv1.IngressBackend, cfg IngressConfig) (*backend, error) {
-	endpoints, err := p.getBackendEndpoints(namespace, ingBackend, cfg)
+func (p *Provider) getBackendEndpointsCached(namespace string, backend netv1.IngressBackend, cfg IngressConfig, cache map[string]backendEndpointsCacheEntry) ([]endpoint, error) {
+	key := backendEndpointsCacheKey(namespace, backend, cfg)
+	if key == "" {
+		return p.getBackendEndpoints(namespace, backend, cfg)
+	}
+
+	if entry, ok := cache[key]; ok {
+		return slices.Clone(entry.endpoints), entry.err
+	}
+
+	endpoints, err := p.getBackendEndpoints(namespace, backend, cfg)
+	cache[key] = backendEndpointsCacheEntry{endpoints: slices.Clone(endpoints), err: err}
+
+	return endpoints, err
+}
+
+func backendEndpointsCacheKey(namespace string, backend netv1.IngressBackend, cfg IngressConfig) string {
+	if backend.Service == nil {
+		return ""
+	}
+
+	return strings.Join([]string{
+		namespace,
+		backend.Service.Name,
+		portString(backend.Service.Port),
+		strconv.FormatBool(ptr.Deref(cfg.ServiceUpstream, false)),
+		ptr.Deref(cfg.DefaultBackend, ""),
+	}, "/")
+}
+
+func (p *Provider) resolveBackend(namespace string, ingBackend netv1.IngressBackend, cfg IngressConfig, cache map[string]backendEndpointsCacheEntry) (*backend, error) {
+	endpoints, err := p.getBackendEndpointsCached(namespace, ingBackend, cfg, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -871,6 +938,8 @@ func (p *Provider) certificateBlocks(namespace, name string) (*certBlocks, error
 // content, matching ingress-nginx behavior. The loaded set is shared across
 // ingresses to avoid re-reading the same secret multiple times.
 func (p *Provider) loadCertificates(ctx context.Context, ing *netv1.Ingress, mcCerts map[string]certPair, loaded map[string]bool) error {
+	var errs []error
+
 	for _, t := range ing.Spec.TLS {
 		if t.SecretName == "" {
 			log.Ctx(ctx).Debug().Msg("Skipping TLS section: no secret name")
@@ -881,21 +950,23 @@ func (p *Provider) loadCertificates(ctx context.Context, ing *netv1.Ingress, mcC
 		if loaded[secretKey] {
 			continue
 		}
-		loaded[secretKey] = true
 
 		blocks, err := p.certificateBlocks(ing.Namespace, t.SecretName)
 		if err != nil {
-			return fmt.Errorf("getting certificate blocks: %w", err)
+			errs = append(errs, fmt.Errorf("getting certificate blocks: %w", err))
+			continue
 		}
 
 		if blocks.cert == nil || blocks.key == nil {
-			return fmt.Errorf("no keypair found in secret %s/%s", ing.Namespace, t.SecretName)
+			errs = append(errs, fmt.Errorf("no keypair found in secret %s/%s", ing.Namespace, t.SecretName))
+			continue
 		}
 
 		mcCerts[secretKey] = certPair{Cert: string(blocks.cert), Key: string(blocks.key)}
+		loaded[secretKey] = true
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // buildServersClientAuth configures the client certificate authentication of the servers of an Ingress from its auth-tls annotations.
@@ -1172,8 +1243,8 @@ func (p *Provider) resolveHTTPErrorBackend(namespace string, cfg IngressConfig) 
 	return ""
 }
 
-func (p *Provider) shouldProcess(ing *netv1.Ingress, ingressClasses []*netv1.IngressClass) bool {
-	if len(ingressClasses) > 0 && ing.Spec.IngressClassName != nil {
+func (p *Provider) shouldProcess(ing *netv1.Ingress, ingressClasses []*netv1.IngressClass, ignoreIngressClasses bool) bool {
+	if !ignoreIngressClasses && ing.Spec.IngressClassName != nil {
 		return slices.ContainsFunc(ingressClasses, func(ic *netv1.IngressClass) bool {
 			return *ing.Spec.IngressClassName == ic.ObjectMeta.Name
 		})
@@ -1335,17 +1406,25 @@ func basicAuthUsers(secret *corev1.Secret, authSecretType string) ([]secretUser,
 	return users, nil
 }
 
-// resolveAliases returns the server-alias hostnames that are valid additions
-// to the location's host rule. Aliases that collide with another host or were
-// claimed by a different ingress are dropped (with a debug log).
-func resolveAliases(ctx context.Context, loc *location, allHosts map[string]bool, claimedAliases map[string]string) []string {
-	if loc.Config.ServerAlias == nil {
+// hostAliases returns the server-alias hostnames to apply to a location of the given host and namespace.
+// Unlike ingress-nginx, the aliases of an Ingress never extend the Ingresses of another namespace sharing the host:
+// otherwise an Ingress author could expose the routes of another namespace under a hostname they control.
+func hostAliases(owners map[string]ingressEntry, aliases map[string][]string, host, namespace string) []string {
+	owner, ok := owners[host]
+	if !ok || owner.Namespace != namespace {
 		return nil
 	}
 
-	ingressKey := loc.Namespace + "/" + loc.IngressName
+	return aliases[host]
+}
+
+// resolveAliases returns the server-alias hostnames of the given ingress that are
+// valid additions to its hosts' rules. Aliases that collide with another host or
+// were claimed by a different ingress are dropped (with a debug log).
+func resolveAliases(ctx context.Context, ing ingressEntry, allHosts map[string]bool, claimedAliases map[string]string) []string {
+	ingressKey := ing.Namespace + "/" + ing.Name
 	var aliases []string
-	for _, alias := range *loc.Config.ServerAlias {
+	for _, alias := range ptr.Deref(ing.config.ServerAlias, nil) {
 		a := strings.ToLower(alias)
 		if _, ok := allHosts[a]; ok {
 			log.Ctx(ctx).Debug().Str("alias", alias).Msg("Skipping server-alias already defined as a host")

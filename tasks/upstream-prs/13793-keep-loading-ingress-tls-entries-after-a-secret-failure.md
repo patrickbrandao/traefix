@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +48/-4 em 2 arquivos |
 | Labels | status/1-needs-design-review, area/provider/k8s/ingress, kind/bug/fix, size/S |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,22 @@ Pequeno (48 linhas). Base v3.7, precisa de adaptação. Status status/1-needs-de
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- Bug real de disponibilidade no provider Kubernetes Ingress: em `getCertificates`, o primeiro `spec.tls[]` com Secret ausente ou inválida fazia a função retornar e **descartava os certificados válidos** das entradas seguintes do mesmo Ingress. Os hosts afetados caíam no certificado padrão.
+- A correção junta os erros (`errors.Join`) e continua o loop. O chamador continua registrando o erro, e o comportamento das rotas não muda.
+- Sem impacto de segurança: só são lidas Secrets do namespace do próprio Ingress, como antes.
+- Escopo diferente de #13948, que faz a mesma correção no provider ingress-nginx; os dois não se sobrepõem.
+
+**Ajustes**
+
+- Teste adaptado ao lint `embedlit` (literais sem `ObjectMeta`).
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress/` ok.
+- `golangci-lint run ./pkg/provider/kubernetes/ingress/...`: 0 issues.

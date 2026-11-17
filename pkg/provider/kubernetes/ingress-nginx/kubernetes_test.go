@@ -4,8 +4,10 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
+	"github.com/traefik/traefik/v3/pkg/middlewares/requestdecorator"
+	httpmuxer "github.com/traefik/traefik/v3/pkg/muxer/http"
 	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/k8s"
 	"github.com/traefik/traefik/v3/pkg/tls"
 	"github.com/traefik/traefik/v3/pkg/types"
@@ -4366,15 +4370,16 @@ func TestLoadIngresses(t *testing.T) {
 								},
 								Sticky: &dynamic.Sticky{
 									Cookie: &dynamic.Cookie{
-										Name:               "foobar",
-										Domain:             "foo.localhost",
-										HTTPOnly:           true,
-										MaxAge:             42,
-										Expires:            42,
-										Path:               new("/foobar"),
-										SameSite:           "none",
-										Secure:             true,
-										PreserveLeadingDot: true,
+										Name:                    "foobar",
+										Domain:                  "foo.localhost",
+										HTTPOnly:                true,
+										MaxAge:                  42,
+										Expires:                 42,
+										Path:                    new("/foobar"),
+										SameSite:                "none",
+										ConditionalSameSiteNone: true,
+										Secure:                  true,
+										PreserveLeadingDot:      true,
 									},
 								},
 							},
@@ -4590,6 +4595,7 @@ func TestLoadIngresses(t *testing.T) {
 								AccessControlAllowOriginList:  []string{"*"},
 								AccessControlExposeHeaders:    []string{"X-Forwarded-For", "X-Forwarded-Host"},
 								AccessControlMaxAge:           new(int64(42)),
+								CORSStrict:                    true,
 							},
 						},
 						"default-7-ingress-with-cors-17-rule-0-path-0-tls-cors": {
@@ -4600,6 +4606,7 @@ func TestLoadIngresses(t *testing.T) {
 								AccessControlAllowOriginList:  []string{"*"},
 								AccessControlExposeHeaders:    []string{"X-Forwarded-For", "X-Forwarded-Host"},
 								AccessControlMaxAge:           new(int64(42)),
+								CORSStrict:                    true,
 							},
 						},
 						"default-7-ingress-with-cors-17-rule-0-path-0-retry": {
@@ -4731,6 +4738,7 @@ func TestLoadIngresses(t *testing.T) {
 								AccessControlAllowOriginListRegex: []string{`^(?i)https://[A-Za-z0-9-]+\.example\.com$`},
 								AccessControlExposeHeaders:        []string{"X-Forwarded-For", "X-Forwarded-Host"},
 								AccessControlMaxAge:               new(int64(42)),
+								CORSStrict:                        true,
 							},
 						},
 						"default-7-ingress-with-cors-wildcard-origin-33-rule-0-path-0-tls-cors": {
@@ -4742,6 +4750,7 @@ func TestLoadIngresses(t *testing.T) {
 								AccessControlAllowOriginListRegex: []string{`^(?i)https://[A-Za-z0-9-]+\.example\.com$`},
 								AccessControlExposeHeaders:        []string{"X-Forwarded-For", "X-Forwarded-Host"},
 								AccessControlMaxAge:               new(int64(42)),
+								CORSStrict:                        true,
 							},
 						},
 						"default-7-ingress-with-cors-wildcard-origin-33-rule-0-path-0-retry": {
@@ -9082,6 +9091,7 @@ func TestLoadIngresses(t *testing.T) {
 								AccessControlAllowMethods:     []string{"GET", "PUT", "POST", "DELETE", "PATCH", "OPTIONS"},
 								AccessControlAllowOriginList:  []string{"*"},
 								AccessControlMaxAge:           new(int64(1728000)),
+								CORSStrict:                    true,
 							},
 						},
 						"default-backend-tls-cors": {
@@ -9092,6 +9102,7 @@ func TestLoadIngresses(t *testing.T) {
 								AccessControlAllowMethods:     []string{"GET", "PUT", "POST", "DELETE", "PATCH", "OPTIONS"},
 								AccessControlAllowOriginList:  []string{"*"},
 								AccessControlMaxAge:           new(int64(1728000)),
+								CORSStrict:                    true,
 							},
 						},
 						"default-backend-retry": {
@@ -12580,6 +12591,7 @@ func TestLoadIngresses(t *testing.T) {
 								AccessControlAllowOriginList:  []string{"*"},
 								AccessControlExposeHeaders:    []string{"X-Forwarded-For", "X-Forwarded-Host"},
 								AccessControlMaxAge:           new(int64(42)),
+								CORSStrict:                    true,
 							},
 						},
 						"default-7-ingress-with-cors-and-permanent-redirect-40-rule-0-path-0-tls-cors": {
@@ -12590,6 +12602,7 @@ func TestLoadIngresses(t *testing.T) {
 								AccessControlAllowOriginList:  []string{"*"},
 								AccessControlExposeHeaders:    []string{"X-Forwarded-For", "X-Forwarded-Host"},
 								AccessControlMaxAge:           new(int64(42)),
+								CORSStrict:                    true,
 							},
 						},
 						"default-7-ingress-with-cors-and-permanent-redirect-40-rule-0-path-0-redirect": {
@@ -13532,14 +13545,14 @@ func TestLoadIngresses(t *testing.T) {
 					Middlewares: map[string]*dynamic.Middleware{
 						"default-7-ingress-with-redirect-use-regex-31-rule-0-path-0-redirect": {
 							RedirectRegex: &dynamic.RedirectRegex{
-								Regex:       `^https?://[^/]+/(example)(/.*)`,
+								Regex:       `(?i)^https?://[^/]+/(example)(/.*)`,
 								Replacement: "https://redirect.example.com/$1$2",
 								StatusCode:  new(http.StatusMovedPermanently),
 							},
 						},
 						"default-7-ingress-with-redirect-use-regex-31-rule-0-path-0-tls-redirect": {
 							RedirectRegex: &dynamic.RedirectRegex{
-								Regex:       `^https?://[^/]+/(example)(/.*)`,
+								Regex:       `(?i)^https?://[^/]+/(example)(/.*)`,
 								Replacement: "https://redirect.example.com/$1$2",
 								StatusCode:  new(http.StatusMovedPermanently),
 							},
@@ -16820,6 +16833,126 @@ func TestLoadIngresses(t *testing.T) {
 							},
 							ALPNProtocols: []string{"h2", "http/1.1", tlsalpn01.ACMETLS1Protocol},
 						},
+					},
+				},
+			},
+		},
+		{
+			desc: "Buffering disabled for GRPC backend protocol regardless of annotations",
+			paths: []string{
+				"services.yml",
+				"ingressclasses.yml",
+				"ingresses/ingress-with-grpc-backend-protocol-and-buffering.yml",
+			},
+			expected: &dynamic.Configuration{
+				TCP: &dynamic.TCPConfiguration{
+					Routers:  map[string]*dynamic.TCPRouter{},
+					Services: map[string]*dynamic.TCPService{},
+				},
+				HTTP: &dynamic.HTTPConfiguration{
+					Routers: map[string]*dynamic.Router{
+						"default-7-ingress-with-grpc-backend-protocol-and-buffering-48-rule-0-path-0": {
+							EntryPoints: []string{"http"},
+							Rule:        `Host("hostname.localhost") && Path("/")`,
+							RuleSyntax:  "default",
+							Middlewares: []string{"default-7-ingress-with-grpc-backend-protocol-and-buffering-48-rule-0-path-0-retry"},
+							Service:     "default-7-ingress-with-grpc-backend-protocol-and-buffering-48-whoami-6-80-2",
+							Observability: &dynamic.RouterObservabilityConfig{
+								Metadata: &dynamic.ObservabilityMetadata{
+									Ingress: &dynamic.KubernetesMetadata{
+										Kind:      "Ingress",
+										Namespace: "default",
+										Name:      "ingress-with-grpc-backend-protocol-and-buffering",
+									},
+								},
+							},
+						},
+						"default-7-ingress-with-grpc-backend-protocol-and-buffering-48-rule-0-path-0-tls": {
+							EntryPoints: []string{"https"},
+							Rule:        `Host("hostname.localhost") && Path("/")`,
+							RuleSyntax:  "default",
+							Middlewares: []string{"default-7-ingress-with-grpc-backend-protocol-and-buffering-48-rule-0-path-0-tls-retry"},
+							Service:     "default-7-ingress-with-grpc-backend-protocol-and-buffering-48-whoami-6-80-2",
+							Observability: &dynamic.RouterObservabilityConfig{
+								Metadata: &dynamic.ObservabilityMetadata{
+									Ingress: &dynamic.KubernetesMetadata{
+										Kind:      "Ingress",
+										Namespace: "default",
+										Name:      "ingress-with-grpc-backend-protocol-and-buffering",
+									},
+								},
+							},
+							TLS: &dynamic.RouterTLSConfig{
+								Options: "hostname.localhost",
+							},
+						},
+					},
+					Middlewares: map[string]*dynamic.Middleware{
+						"default-7-ingress-with-grpc-backend-protocol-and-buffering-48-rule-0-path-0-retry": {
+							Retry: &dynamic.Retry{
+								Attempts:            3,
+								MaxRequestBodyBytes: new(defaultProxyBodySize),
+							},
+						},
+						"default-7-ingress-with-grpc-backend-protocol-and-buffering-48-rule-0-path-0-tls-retry": {
+							Retry: &dynamic.Retry{
+								Attempts:            3,
+								MaxRequestBodyBytes: new(defaultProxyBodySize),
+							},
+						},
+					},
+					Services: map[string]*dynamic.Service{
+						"unavailable-service": {
+							LoadBalancer: &dynamic.ServersLoadBalancer{
+								Strategy:       "wrr",
+								PassHostHeader: new(true),
+								ResponseForwarding: &dynamic.ResponseForwarding{
+									FlushInterval: dynamic.DefaultFlushInterval,
+								},
+							},
+						},
+						"default-7-ingress-with-grpc-backend-protocol-and-buffering-48-whoami-6-80-2": {
+							LoadBalancer: &dynamic.ServersLoadBalancer{
+								Servers: []dynamic.Server{
+									{
+										URL: "h2c://10.10.0.1:80",
+									},
+									{
+										URL: "h2c://10.10.0.2:80",
+									},
+								},
+								Strategy:       "wrr",
+								PassHostHeader: new(true),
+								ResponseForwarding: &dynamic.ResponseForwarding{
+									FlushInterval: dynamic.DefaultFlushInterval,
+								},
+								ServersTransport: "default-7-ingress-with-grpc-backend-protocol-and-buffering-48",
+							},
+							Observability: &dynamic.ServiceObservabilityConfig{
+								Metadata: &dynamic.ServiceObservabilityMetadata{
+									Kubernetes: &dynamic.KubernetesServiceMetadata{
+										Namespace: "default",
+										Name:      "whoami",
+										Port:      "80",
+									},
+								},
+							},
+						},
+					},
+					ServersTransports: map[string]*dynamic.ServersTransport{
+						"default-7-ingress-with-grpc-backend-protocol-and-buffering-48": {
+							ForwardingTimeouts: &dynamic.ForwardingTimeouts{
+								DialTimeout:     ptypes.Duration(60 * time.Second),
+								ReadTimeout:     ptypes.Duration(60 * time.Second),
+								WriteTimeout:    ptypes.Duration(60 * time.Second),
+								IdleConnTimeout: ptypes.Duration(60 * time.Second),
+							},
+						},
+					},
+				},
+				TLS: &dynamic.TLSConfiguration{
+					Options: map[string]tls.Options{
+						"hostname.localhost": hostTLSOption(),
 					},
 				},
 			},
@@ -22506,15 +22639,16 @@ func TestLoadIngresses(t *testing.T) {
 							LoadBalancer: &dynamic.ServersLoadBalancer{
 								Sticky: &dynamic.Sticky{
 									Cookie: &dynamic.Cookie{
-										Name:               "foobar",
-										Domain:             "foo.localhost",
-										HTTPOnly:           true,
-										MaxAge:             42,
-										Expires:            42,
-										Path:               new("/foobar"),
-										SameSite:           "none",
-										Secure:             true,
-										PreserveLeadingDot: true,
+										Name:                    "foobar",
+										Domain:                  "foo.localhost",
+										HTTPOnly:                true,
+										MaxAge:                  42,
+										Expires:                 42,
+										Path:                    new("/foobar"),
+										SameSite:                "none",
+										ConditionalSameSiteNone: true,
+										Secure:                  true,
+										PreserveLeadingDot:      true,
 									},
 								},
 								Servers: []dynamic.Server{
@@ -22546,15 +22680,16 @@ func TestLoadIngresses(t *testing.T) {
 							LoadBalancer: &dynamic.ServersLoadBalancer{
 								Sticky: &dynamic.Sticky{
 									Cookie: &dynamic.Cookie{
-										Name:               "foobar",
-										Domain:             "foo.localhost",
-										HTTPOnly:           true,
-										MaxAge:             42,
-										Expires:            42,
-										Path:               new("/foobar"),
-										SameSite:           "none",
-										Secure:             true,
-										PreserveLeadingDot: true,
+										Name:                    "foobar",
+										Domain:                  "foo.localhost",
+										HTTPOnly:                true,
+										MaxAge:                  42,
+										Expires:                 42,
+										Path:                    new("/foobar"),
+										SameSite:                "none",
+										ConditionalSameSiteNone: true,
+										Secure:                  true,
+										PreserveLeadingDot:      true,
 									},
 								},
 								Servers: []dynamic.Server{
@@ -22586,15 +22721,16 @@ func TestLoadIngresses(t *testing.T) {
 							Weighted: &dynamic.WeightedRoundRobin{
 								Sticky: &dynamic.Sticky{
 									Cookie: &dynamic.Cookie{
-										Name:               "foobar-wrr",
-										Domain:             "foo.localhost",
-										HTTPOnly:           true,
-										MaxAge:             42,
-										Expires:            42,
-										Path:               new("/foobar"),
-										SameSite:           "none",
-										Secure:             true,
-										PreserveLeadingDot: true,
+										Name:                    "foobar-wrr",
+										Domain:                  "foo.localhost",
+										HTTPOnly:                true,
+										MaxAge:                  42,
+										Expires:                 42,
+										Path:                    new("/foobar"),
+										SameSite:                "none",
+										ConditionalSameSiteNone: true,
+										Secure:                  true,
+										PreserveLeadingDot:      true,
 									},
 								},
 								Services: []dynamic.WRRService{
@@ -22823,6 +22959,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-29-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -22858,6 +22995,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-29-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23031,6 +23169,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "bar"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-value-35-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23066,6 +23205,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "bar"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-value-35-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23239,6 +23379,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Foo", "bar(.*)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-pattern-37-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23274,6 +23415,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Foo", "bar(.*)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-pattern-37-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23608,6 +23750,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-cookie-29-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23643,6 +23786,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-cookie-29-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23875,6 +24019,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-and-limit-allowlist-39-whoami-6-80-2-canary",
 							Middlewares: []string{"default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-limit-rps", "default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-retry"},
 							Observability: &dynamic.RouterObservabilityConfig{
@@ -23891,6 +24036,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-and-limit-allowlist-39-whoami-6-80-2-canary",
 							Middlewares: []string{"default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-tls-limit-rps", "default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-tls-retry"},
 							TLS: &dynamic.RouterTLSConfig{
@@ -23910,7 +24056,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `((Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))) && ClientIP("10.0.0.0/24")`,
 							RuleSyntax:  "default",
-							Priority:    112,
+							Priority:    49,
 							Service:     "default-7-ingress-with-canary-and-limit-allowlist-39-whoami-6-80-2-canary",
 							Middlewares: []string{"default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-limit-allowlist-retry"},
 							Observability: &dynamic.RouterObservabilityConfig{
@@ -23927,7 +24073,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `((Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))) && ClientIP("10.0.0.0/24")`,
 							RuleSyntax:  "default",
-							Priority:    112,
+							Priority:    49,
 							Service:     "default-7-ingress-with-canary-and-limit-allowlist-39-whoami-6-80-2-canary",
 							Middlewares: []string{"default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-tls-limit-allowlist-retry"},
 							TLS: &dynamic.RouterTLSConfig{
@@ -24105,6 +24251,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always") || (HeaderRegexp("Cookie", "(^|;\\s*)foo=always(;|$)") && !Header("Foo", "never")))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-and-cookie-and-weight-51-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24121,6 +24268,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "never") || HeaderRegexp("Cookie", "(^|;\\s*)foo=never(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-and-cookie-and-weight-51-whoami-6-80-2",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24156,6 +24304,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always") || (HeaderRegexp("Cookie", "(^|;\\s*)foo=always(;|$)") && !Header("Foo", "never")))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-and-cookie-and-weight-51-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24175,6 +24324,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "never") || HeaderRegexp("Cookie", "(^|;\\s*)foo=never(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-and-cookie-and-weight-51-whoami-6-80-2",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24363,6 +24513,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-middlewares-31-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24404,6 +24555,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-middlewares-31-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24725,6 +24877,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-middlewares-and-tls-39-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24767,6 +24920,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-middlewares-and-tls-39-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -28080,6 +28234,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-29-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -28250,6 +28405,7 @@ func TestLoadIngresses(t *testing.T) {
 								AccessControlAllowMethods:     []string{"GET", "PUT", "POST", "DELETE", "PATCH", "OPTIONS"},
 								AccessControlAllowOriginList:  []string{"*"},
 								AccessControlMaxAge:           new(int64(1728000)),
+								CORSStrict:                    true,
 							},
 						},
 						"default-backend-tls-retry": {
@@ -28644,12 +28800,234 @@ func TestLoadIngresses(t *testing.T) {
 				p.StrictValidatePathType = *test.strictValidatePathType
 			}
 
+			setDefaultMaxIdleConnsPerHost(test.expected)
+
 			conf := p.loadConfiguration(t.Context())
 			assert.Equal(t, test.expected, conf)
 
 			for name, middleware := range conf.HTTP.Middlewares {
 				_, err := middleware.ResolveURNRefs()
 				assert.NoError(t, err, name)
+			}
+		})
+	}
+}
+
+func setDefaultMaxIdleConnsPerHost(conf *dynamic.Configuration) {
+	if conf == nil || conf.HTTP == nil {
+		return
+	}
+
+	for _, serversTransport := range conf.HTTP.ServersTransports {
+		if serversTransport.MaxIdleConnsPerHost == 0 {
+			serversTransport.MaxIdleConnsPerHost = defaultUpstreamKeepaliveConnections
+		}
+	}
+}
+
+func TestBuildServersTransportMaxIdleConnsPerHost(t *testing.T) {
+	p := Provider{}
+	p.SetDefaults()
+
+	nst, err := p.buildServersTransport(t.Context(), "default", "whoami", IngressConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, defaultUpstreamKeepaliveConnections, nst.ServersTransport.MaxIdleConnsPerHost)
+
+	p.UpstreamKeepaliveConnections = 42
+
+	nst, err = p.buildServersTransport(t.Context(), "default", "whoami", IngressConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, 42, nst.ServersTransport.MaxIdleConnsPerHost)
+
+	p.UpstreamKeepaliveConnections = 0
+
+	nst, err = p.buildServersTransport(t.Context(), "default", "whoami", IngressConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, -1, nst.ServersTransport.MaxIdleConnsPerHost)
+}
+
+func TestLoadIngresses_hostlessRuleKeepsGlobalDefaultBackend(t *testing.T) {
+	k8sObjects := readResources(t, []string{"services.yml", "ingressclasses.yml", "ingresses/ingress-with-hostless-rule-and-default-backend.yml"})
+	kubeClient := kubefake.NewClientset(k8sObjects...)
+	client := newClient(kubeClient)
+
+	eventCh, err := client.WatchAll(t.Context(), "", "")
+	require.NoError(t, err)
+	<-eventCh
+
+	p := Provider{
+		k8sClient:         client,
+		NonTLSEntryPoints: []string{"http"},
+		TLSEntryPoints:    []string{"https"},
+	}
+	p.SetDefaults()
+
+	conf := p.loadConfiguration(t.Context())
+	require.NotNil(t, conf.HTTP)
+
+	var defaultBackendRouters []string
+	for name, router := range conf.HTTP.Routers {
+		assert.NotEmpty(t, router.Rule, name)
+		if strings.HasSuffix(strings.TrimSuffix(name, "-tls"), "-default-backend") {
+			defaultBackendRouters = append(defaultBackendRouters, name)
+			assert.Contains(t, router.Rule, `Host("hostname.localhost")`, name)
+		}
+	}
+
+	assert.NotEmpty(t, defaultBackendRouters)
+}
+
+func TestCanaryRouterPriority(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		desc           string
+		path           string
+		cookie         string
+		expectedSuffix string
+	}{
+		{
+			desc:           "Longest path wins over the canary router of a shorter path",
+			path:           "/data/foo",
+			cookie:         "foo.bar=always",
+			expectedSuffix: "-rule-0-path-0",
+		},
+		{
+			desc:           "Canary router wins over the router of its own path",
+			path:           "/foo",
+			cookie:         "foo.bar=always",
+			expectedSuffix: "-rule-0-path-1-canary",
+		},
+		{
+			desc:           "Longest path wins without the canary cookie",
+			path:           "/data/foo",
+			expectedSuffix: "-rule-0-path-0",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			k8sObjects := readResources(t, []string{
+				"services.yml",
+				"ingressclasses.yml",
+				"ingresses/ingresses-with-canary-and-multiple-paths.yml",
+			})
+
+			kubeClient := kubefake.NewClientset(k8sObjects...)
+			client := newClient(kubeClient)
+
+			eventCh, err := client.WatchAll(t.Context(), "", "")
+			require.NoError(t, err)
+			<-eventCh
+
+			p := Provider{
+				k8sClient:         client,
+				NonTLSEntryPoints: []string{"http"},
+				TLSEntryPoints:    []string{"https"},
+			}
+			p.SetDefaults()
+
+			conf := p.loadConfiguration(t.Context())
+
+			parser, err := httpmuxer.NewSyntaxParser()
+			require.NoError(t, err)
+
+			muxer := httpmuxer.NewMuxer(parser, nil)
+			for name, router := range conf.HTTP.Routers {
+				if router.TLS != nil {
+					continue
+				}
+
+				priority := router.Priority
+				if priority == 0 {
+					priority = httpmuxer.GetRulePriority(router.Rule)
+				}
+
+				handler := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+					rw.Header().Set("X-Router", name)
+				})
+
+				err = muxer.AddRoute(router.Rule, router.RuleSyntax, priority, "", handler)
+				require.NoError(t, err)
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "http://production.localhost"+test.path, http.NoBody)
+			if test.cookie != "" {
+				req.Header.Set("Cookie", test.cookie)
+			}
+
+			recorder := httptest.NewRecorder()
+			requestdecorator.New(nil).ServeHTTP(recorder, req, muxer.ServeHTTP)
+
+			router := recorder.Header().Get("X-Router")
+			assert.True(t, strings.HasSuffix(router, test.expectedSuffix), router)
+		})
+	}
+}
+
+func TestLoadIngresses_serverAliasScope(t *testing.T) {
+	testCases := []struct {
+		desc            string
+		paths           []string
+		expectedAliased map[string]bool
+	}{
+		{
+			desc:  "alias applies to every Ingress of the host in the same namespace",
+			paths: []string{"services.yml", "ingressclasses.yml", "ingresses/ingress-with-server-alias-shared-host.yml"},
+			expectedAliased: map[string]bool{
+				"alias-ingress":      true,
+				"plain-ingress":      true,
+				"late-alias-ingress": true,
+			},
+		},
+		{
+			desc:  "alias never applies to an Ingress of another namespace",
+			paths: []string{"services.yml", "ingressclasses.yml", "ingresses/ingress-with-server-alias-cross-namespace.yml"},
+			expectedAliased: map[string]bool{
+				"alias-ingress":  true,
+				"victim-ingress": false,
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			k8sObjects := readResources(t, test.paths)
+			kubeClient := kubefake.NewClientset(k8sObjects...)
+			client := newClient(kubeClient)
+
+			eventCh, err := client.WatchAll(t.Context(), "", "")
+			require.NoError(t, err)
+			<-eventCh
+
+			p := Provider{
+				k8sClient:         client,
+				NonTLSEntryPoints: []string{"http"},
+				TLSEntryPoints:    []string{"https"},
+			}
+			p.SetDefaults()
+
+			conf := p.loadConfiguration(t.Context())
+			require.NotNil(t, conf.HTTP)
+
+			seen := make(map[string]bool)
+			for _, router := range conf.HTTP.Routers {
+				if router.Observability == nil || router.Observability.Metadata == nil || router.Observability.Metadata.Ingress == nil {
+					continue
+				}
+
+				name := router.Observability.Metadata.Ingress.Name
+				seen[name] = seen[name] || strings.Contains(router.Rule, `Host("alias.localhost")`)
+			}
+
+			for name, expected := range test.expectedAliased {
+				aliased, ok := seen[name]
+				require.True(t, ok, name)
+				assert.Equal(t, expected, aliased, name)
 			}
 		})
 	}
@@ -28890,6 +29268,95 @@ func TestProvider_validateConfiguration(t *testing.T) {
 			assert.Equal(t, test.expectedAllowedHeaders, provider.allowedHeaders)
 			assert.Equal(t, test.expectedBackendServiceName, provider.defaultBackendServiceName)
 			assert.Equal(t, test.expectedBackendServiceNamespace, provider.defaultBackendServiceNamespace)
+		})
+	}
+}
+
+func TestProvider_shouldProcess(t *testing.T) {
+	t.Parallel()
+
+	ingressClassName := "traefik"
+	testCases := []struct {
+		desc                     string
+		ingressClassName         *string
+		annotations              map[string]string
+		ignoreIngressClasses     bool
+		watchIngressWithoutClass bool
+		expected                 bool
+	}{
+		{
+			desc:                     "explicit non-matching class",
+			ingressClassName:         &ingressClassName,
+			watchIngressWithoutClass: true,
+		},
+		{
+			desc:                     "explicit non-matching class with matching annotation",
+			ingressClassName:         &ingressClassName,
+			annotations:              map[string]string{annotationIngressClass: "nginx"},
+			watchIngressWithoutClass: true,
+		},
+		{
+			desc:                     "ignored explicit class with watch without class enabled",
+			ingressClassName:         &ingressClassName,
+			ignoreIngressClasses:     true,
+			watchIngressWithoutClass: true,
+			expected:                 true,
+		},
+		{
+			desc:                 "ignored explicit class with watch without class disabled",
+			ingressClassName:     &ingressClassName,
+			ignoreIngressClasses: true,
+		},
+		{
+			desc:                 "ignored explicit class with matching annotation",
+			ingressClassName:     &ingressClassName,
+			annotations:          map[string]string{annotationIngressClass: "nginx"},
+			ignoreIngressClasses: true,
+			expected:             true,
+		},
+		{
+			desc:                     "ignored explicit class with non-matching annotation",
+			ingressClassName:         &ingressClassName,
+			annotations:              map[string]string{annotationIngressClass: "traefik"},
+			ignoreIngressClasses:     true,
+			watchIngressWithoutClass: true,
+		},
+		{
+			desc:                     "no class with watch without class enabled",
+			watchIngressWithoutClass: true,
+			expected:                 true,
+		},
+		{
+			desc: "no class with watch without class disabled",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			provider := &Provider{
+				WatchIngressWithoutClass: test.watchIngressWithoutClass,
+			}
+			provider.SetDefaults()
+
+			ingressClasses := filterIngressClass([]*netv1.IngressClass{
+				{
+					Name: "traefik",
+					Spec: netv1.IngressClassSpec{
+						Controller: "traefik.io/ingress-controller",
+					},
+				},
+			}, provider.IngressClassByName, provider.IngressClass, provider.ControllerClass)
+
+			ingress := &netv1.Ingress{
+				Annotations: test.annotations,
+				Spec: netv1.IngressSpec{
+					IngressClassName: test.ingressClassName,
+				},
+			}
+
+			assert.Equal(t, test.expected, provider.shouldProcess(ingress, ingressClasses, test.ignoreIngressClasses))
 		})
 	}
 }

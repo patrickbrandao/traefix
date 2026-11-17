@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +181/-7 em 6 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, area/provider/k8s/ingress, size/M |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,22 @@ Label status/2-needs-review; maintainer só confirmou o recebimento, sem revisã
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- Mudança pequena e correta: a annotation `traefik.ingress.kubernetes.io/service.strategy` (no Service) é validada contra as quatro estratégias suportadas e um valor inválido descarta o backend com erro, como as outras annotations inválidas.
+- Sem risco de segurança: a annotation fica no Service, só escolhe o algoritmo de balanceamento.
+- Os testes do PR não compilavam no código atual (`pointer(...)` em vez de `new(...)`, `dynamic.KubernetesIngressMetadata` inexistente, faltava a metadata de observabilidade do Service).
+
+**Ajustes**
+
+- Testes adaptados ao formato atual de metadata e ao helper `new(...)`.
+- Novo `TestLoadServiceUnsupportedStrategy` cobrindo o caminho de erro, que o PR não testava.
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress/` ok.
+- `golangci-lint run ./pkg/provider/kubernetes/ingress/...`: 0 issues.

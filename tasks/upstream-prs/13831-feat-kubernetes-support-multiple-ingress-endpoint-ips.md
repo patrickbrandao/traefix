@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +144/-4 em 4 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, area/provider/k8s/ingress, size/M |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,23 @@ Pequeno (144 linhas), com docs e testes. Base master, status/2-needs-review, rev
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- `ingressEndpoint.ip` passa a aceitar uma lista de IPs separados por vírgula (IPv4/IPv6), com remoção de duplicados. Com um único IP, o formato legado (`{IP, Hostname}` na mesma entrada) é mantido.
+- Os valores não são validados como IP: um item inválido (por exemplo, um hostname colocado em `ip`) vai parar no status do Ingress e o API server rejeita o update inteiro. Antes, um valor único inválido também falhava do mesmo jeito, então não é uma regressão, mas com listas fica mais fácil errar.
+- Sem impacto de segurança: é configuração de instalação (confiável).
+
+**Ajustes**
+
+- Itens que não são IP válido (`net.ParseIP`) são descartados com log de erro, em vez de quebrar a atualização de status de todos os Ingresses. Se todos forem inválidos e não houver hostname, retorna erro e mantém o status atual, em vez de apagá-lo.
+- `TestUpdateIngressStatusPriority` do PR não foi trazido: ele fixava a mensagem de erro antiga, que mudou com #12281. `TestIngressEndpointStatus` ganhou um caso de IP inválido.
+- Docs: tabela do provider e `configuration-options.md` (regenerado).
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress/` ok.
+- `golangci-lint run ./pkg/provider/kubernetes/ingress/...`: 0 issues.

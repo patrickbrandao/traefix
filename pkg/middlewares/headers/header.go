@@ -245,7 +245,8 @@ func (s *Header) processCorsHeaders(rw http.ResponseWriter, req *http.Request) b
 		// are inspected, and a mismatch discards the whole preflight response as a network error.
 		match, ok := s.matchOrigin(originHeader)
 		if !ok {
-			return true
+			// In strict mode the preflight of a non-allowed origin is handed to the backend, like ingress-nginx does.
+			return !s.headers.CORSStrict
 		}
 
 		rw.Header().Set("Access-Control-Allow-Origin", match)

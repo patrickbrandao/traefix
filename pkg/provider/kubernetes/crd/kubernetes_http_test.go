@@ -50,14 +50,14 @@ func Test_serviceOptionsHash(t *testing.T) {
 
 	fooHash, err := serviceOptionsHash(stickyFoo)
 	require.NoError(t, err)
-	assert.Equal(t, "806d6f729f1fb52e", fooHash)
+	assert.Equal(t, "7122ba6b63cac426", fooHash)
 
 	rootHash, err := serviceOptionsHash(stickyRoot)
 	require.NoError(t, err)
-	assert.Equal(t, "2b163e2e6c5e02ca", rootHash)
+	assert.Equal(t, "2e2d91e1e1ae5b98", rootHash)
 	assert.NotEqual(t, fooHash, rootHash)
 
-	assert.Equal(t, "default-whoami-80-806d6f729f1fb52e", appendServiceOptionsHash("default-whoami-80", stickyFoo))
+	assert.Equal(t, "default-whoami-80-7122ba6b63cac426", appendServiceOptionsHash("default-whoami-80", stickyFoo))
 	assert.Equal(t, "default-whoami-80", appendServiceOptionsHash("default-whoami-80", identityOnly))
 
 	traefikService := stickyFoo
