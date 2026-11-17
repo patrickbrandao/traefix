@@ -1,6 +1,7 @@
 package retry
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
+	proxyhttputil "github.com/traefik/traefik/v3/pkg/proxy/httputil"
 	"github.com/traefik/traefik/v3/pkg/testhelpers"
 )
 
@@ -275,6 +277,23 @@ func TestRetryOnStatusWhenProxyNotReached(t *testing.T) {
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, 2, callCount)
 	assert.Equal(t, 1, retryListener.timesCalled)
+}
+
+func TestRetryCanceledContext(t *testing.T) {
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		proxyhttputil.ErrorHandler(rw, req, req.Context().Err())
+	})
+
+	retry, err := New(t.Context(), WrapHandler(next), dynamic.Retry{Attempts: 3}, &countingRetryListener{}, "traefikTest")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	recorder := httptest.NewRecorder()
+	retry.ServeHTTP(recorder, testhelpers.MustNewRequest(http.MethodGet, "http://test", http.NoBody).WithContext(ctx))
+
+	assert.Equal(t, proxyhttputil.StatusClientClosedRequest, recorder.Code)
 }
 
 func TestRetryWithFlush(t *testing.T) {
