@@ -109,6 +109,8 @@ http:
           timeout: 42s
           hostname: foobar
           followRedirects: true
+          body: foobar
+          maxConcurrency: 42
           headers:
             name0: foobar
             name1: foobar
@@ -563,8 +565,10 @@ tcp:
         servers:
           - address: foobar
             tls: true
+            weight: 42
           - address: foobar
             tls: true
+            weight: 42
         serversTransport: foobar
         proxyProtocol:
           version: 42

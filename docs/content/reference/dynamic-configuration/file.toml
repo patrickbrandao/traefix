@@ -107,6 +107,8 @@
           timeout = "42s"
           hostname = "foobar"
           followRedirects = true
+          body = "foobar"
+          maxConcurrency = 42
           [http.services.Service03.loadBalancer.healthCheck.headers]
             name0 = "foobar"
             name1 = "foobar"
@@ -497,10 +499,12 @@
         [[tcp.services.TCPService01.loadBalancer.servers]]
           address = "foobar"
           tls = true
+          weight = 42
 
         [[tcp.services.TCPService01.loadBalancer.servers]]
           address = "foobar"
           tls = true
+          weight = 42
         [tcp.services.TCPService01.loadBalancer.proxyProtocol]
           version = 42
     [tcp.services.TCPService02]

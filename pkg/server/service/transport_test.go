@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -12,10 +13,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
@@ -949,6 +954,65 @@ func TestConnectionTimeoutsAreDefined(t *testing.T) {
 	}
 }
 
+// A reused keep-alive connection must get the whole readTimeout for its response: the transport
+// read loop is already blocked in Read while the connection sits idle, so without re-arming on
+// write the response inherits the deadline anchored to the start of the idle period.
+func TestConnectionReadTimeoutIsArmedOnWrite(t *testing.T) {
+	// These values leave a 500ms margin on each of the three timing constraints the test relies on,
+	// so that scheduling jitter on a loaded runner cannot flip the result: the write must land before
+	// the idle-anchored deadline (readTimeout-idleBeforeUse), the response must arrive before the
+	// re-armed deadline (readTimeout-serverDelay), and it must arrive after the idle-anchored one
+	// (idleBeforeUse+serverDelay-readTimeout) or the test would pass without the fix.
+	const (
+		readTimeout   = 1500 * time.Millisecond
+		idleBeforeUse = 1000 * time.Millisecond
+		serverDelay   = 1000 * time.Millisecond
+	)
+
+	client, server := net.Pipe()
+	t.Cleanup(func() { client.Close() })
+	t.Cleanup(func() { server.Close() })
+
+	conn := &connWithTimeouts{Conn: client, readTimeout: readTimeout}
+
+	readBuf := make([]byte, 4)
+	readErr := make(chan error, 1)
+	go func() {
+		// Mirrors the transport read loop, already blocked in Read while the connection is idle.
+		_, err := conn.Read(readBuf)
+		readErr <- err
+	}()
+
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		req := make([]byte, 3)
+		if _, err := server.Read(req); err != nil {
+			return
+		}
+		// Respond after the deadline anchored to the start of the idle period would have fired,
+		// but before the deadline re-armed when the request was written.
+		time.Sleep(serverDelay)
+		_, _ = server.Write([]byte("RESP"))
+	}()
+
+	// Spend most of the idle budget before the connection is reused.
+	time.Sleep(idleBeforeUse)
+
+	_, err := conn.Write([]byte("REQ"))
+	require.NoError(t, err)
+
+	select {
+	case err := <-readErr:
+		require.NoError(t, err)
+		assert.Equal(t, "RESP", string(readBuf))
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the response read")
+	}
+
+	<-serverDone
+}
+
 // fakeSpiffePKI simulates a SPIFFE aware PKI and allows generating multiple valid SVIDs.
 type fakeSpiffePKI struct {
 	caPrivateKey *rsa.PrivateKey
@@ -1115,6 +1179,50 @@ func TestReleaseTransportOnContext(t *testing.T) {
 			kerberos.ReleaseTransportOnContext(ctx)
 
 			assert.Eventually(t, func() bool { return backendConns.Load() == 0 }, time.Second, 10*time.Millisecond)
+		})
+	}
+}
+
+func TestCreateRootCACertPool(t *testing.T) {
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	require.NoError(t, os.WriteFile(caFile, []byte("not a certificate"), 0o600))
+
+	testCases := []struct {
+		desc        string
+		rootCAs     []types.FileOrContent
+		expectedLog string
+	}{
+		{
+			desc:    "valid content",
+			rootCAs: []types.FileOrContent{types.FileOrContent(localhostCert)},
+		},
+		{
+			desc:        "invalid content",
+			rootCAs:     []types.FileOrContent{"not a certificate"},
+			expectedLog: "No valid certificate found in RootCAs content",
+		},
+		{
+			desc:        "file without certificate",
+			rootCAs:     []types.FileOrContent{types.FileOrContent(caFile)},
+			expectedLog: `"file":"` + caFile + `","message":"No valid certificate found in RootCAs file"`,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			var buf bytes.Buffer
+			originalLogger := log.Logger
+			log.Logger = zerolog.New(&buf)
+			t.Cleanup(func() { log.Logger = originalLogger })
+
+			pool := createRootCACertPool(test.rootCAs)
+			require.NotNil(t, pool)
+
+			if test.expectedLog == "" {
+				assert.Empty(t, buf.String())
+				return
+			}
+			assert.Contains(t, buf.String(), test.expectedLog)
 		})
 	}
 }

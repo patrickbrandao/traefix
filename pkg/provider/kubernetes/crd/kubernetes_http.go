@@ -353,7 +353,20 @@ func (c configBuilder) buildTraefikService(ctx context.Context, tService *traefi
 func (c configBuilder) buildServicesLB(ctx context.Context, namespace string, tService traefikv1alpha1.TraefikServiceSpec, id string, parentKey []string, conf map[string]*dynamic.Service) error {
 	var wrrServices []dynamic.WRRService
 
+	// The CRDs have no field to explicitly enable HealthCheck propagation on a Weighted service
+	// (unlike the file provider, which exposes weighted.healthCheck).
+	// Because HealthCheck is only allowed on Kubernetes Service children of type ExternalName
+	// (enforced in loadServers), and because a child without its own HealthCheck configured cannot
+	// register as a status updater for its parent (it would make the config build fail), it is only
+	// safe, and only useful, to automatically enable HealthCheck propagation on this Weighted
+	// service when every child is a Kubernetes Service with HealthCheck configured.
+	healthCheckEnabled := len(tService.Weighted.Services) > 0
+
 	for si, service := range tService.Weighted.Services {
+		if (service.Kind != "" && service.Kind != "Service") || service.HealthCheck == nil {
+			healthCheckEnabled = false
+		}
+
 		serviceKey := makeSafeKey(append(slices.Clone(parentKey), strconv.Itoa(si), namespaceOrParentNamespace(service.Namespace, namespace), service.Name, service.Port.String())...)
 
 		fullName, k8sService, err := c.nameAndService(ctx, namespace, service.LoadBalancerSpec, serviceKey)
@@ -395,11 +408,16 @@ func (c configBuilder) buildServicesLB(ctx context.Context, namespace string, tS
 		}
 	}
 
+	weighted := &dynamic.WeightedRoundRobin{
+		Services: wrrServices,
+		Sticky:   sticky,
+	}
+	if healthCheckEnabled {
+		weighted.HealthCheck = &dynamic.HealthCheck{}
+	}
+
 	addToConfig(log.Ctx(ctx), "service", id, conf, &dynamic.Service{
-		Weighted: &dynamic.WeightedRoundRobin{
-			Services: wrrServices,
-			Sticky:   sticky,
-		},
+		Weighted: weighted,
 	})
 	return nil
 }

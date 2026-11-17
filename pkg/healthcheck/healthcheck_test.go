@@ -2,10 +2,15 @@ package healthcheck
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,11 +71,156 @@ func TestNewServiceHealthChecker_durations(t *testing.T) {
 		t.Run(test.desc, func(t *testing.T) {
 			t.Parallel()
 
-			healthChecker := NewServiceHealthChecker(t.Context(), nil, test.config, nil, nil, http.DefaultTransport, nil, "")
+			healthChecker := NewServiceHealthChecker(t.Context(), nil, test.config, nil, nil, http.DefaultTransport, nil, nil, "")
 			assert.Equal(t, test.expInterval, healthChecker.interval)
 			assert.Equal(t, test.expTimeout, healthChecker.timeout)
 		})
 	}
+}
+
+func TestNewServiceHealthChecker_maxConcurrency(t *testing.T) {
+	testCases := []struct {
+		desc              string
+		maxConcurrency    int
+		expMaxConcurrency int
+	}{
+		{
+			desc:              "default value",
+			expMaxConcurrency: 1,
+		},
+		{
+			desc:              "out of range value",
+			maxConcurrency:    -1,
+			expMaxConcurrency: 1,
+		},
+		{
+			desc:              "custom value",
+			maxConcurrency:    20,
+			expMaxConcurrency: 20,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			config := &dynamic.ServerHealthCheck{MaxConcurrency: test.maxConcurrency}
+			healthChecker := NewServiceHealthChecker(t.Context(), nil, config, nil, nil, http.DefaultTransport, nil, nil, "")
+			assert.Equal(t, test.expMaxConcurrency, healthChecker.maxConcurrency)
+		})
+	}
+}
+
+func TestServiceHealthChecker_checkTargets_maxConcurrency(t *testing.T) {
+	testCases := []struct {
+		desc           string
+		maxConcurrency int
+		expInFlight    int32
+	}{
+		{
+			desc:        "sequential by default",
+			expInFlight: 1,
+		},
+		{
+			desc:           "bounded concurrency",
+			maxConcurrency: 2,
+			expInFlight:    2,
+		},
+		{
+			desc:           "bounded by the number of targets",
+			maxConcurrency: 10,
+			expInFlight:    4,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			var inFlight, maxInFlight atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				current := inFlight.Add(1)
+				defer inFlight.Add(-1)
+
+				for {
+					seen := maxInFlight.Load()
+					if current <= seen || maxInFlight.CompareAndSwap(seen, current) {
+						break
+					}
+				}
+
+				time.Sleep(100 * time.Millisecond)
+
+				if req.URL.Path == "/down" {
+					rw.WriteHeader(http.StatusServiceUnavailable)
+				}
+			}))
+			t.Cleanup(server.Close)
+
+			var targets []target
+			targetURLs := make(map[string]*url.URL)
+			for i, path := range []string{"/up", "/up", "/down", "/down"} {
+				name := strconv.Itoa(i)
+				targetURL := testhelpers.MustParseURL(server.URL + path)
+				targets = append(targets, target{name: name, targetURL: targetURL})
+				targetURLs[name] = targetURL
+			}
+
+			config := &dynamic.ServerHealthCheck{
+				Interval:       dynamic.DefaultHealthCheckInterval,
+				Timeout:        dynamic.DefaultHealthCheckTimeout,
+				MaxConcurrency: test.maxConcurrency,
+			}
+			lb := &testLoadBalancer{RWMutex: &sync.RWMutex{}}
+			hc := NewServiceHealthChecker(t.Context(), &MetricsMock{&testhelpers.CollectingGauge{}}, config, lb, &runtime.ServiceInfo{}, http.DefaultTransport, nil, targetURLs, "foobar")
+
+			// Drains the initial healthy targets, as checkTargets puts every checked target back.
+			for range targets {
+				<-hc.healthyTargets
+			}
+
+			hc.checkTargets(t.Context(), targets)
+
+			assert.Equal(t, test.expInFlight, maxInFlight.Load())
+			assert.Equal(t, 2, lb.numUpsertedServers)
+			assert.Equal(t, 2, lb.numRemovedServers)
+			assert.Len(t, hc.healthyTargets, 2)
+			assert.Len(t, hc.unhealthyTargets, 2)
+		})
+	}
+}
+
+func TestServiceHealthChecker_checkTargets_canceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if calls.Add(1) == 1 {
+			cancel()
+		}
+
+		<-req.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	var targets []target
+	for i := range 4 {
+		targets = append(targets, target{name: strconv.Itoa(i), targetURL: testhelpers.MustParseURL(server.URL)})
+	}
+
+	config := &dynamic.ServerHealthCheck{
+		Interval:       dynamic.DefaultHealthCheckInterval,
+		Timeout:        dynamic.DefaultHealthCheckTimeout,
+		MaxConcurrency: 1,
+	}
+	lb := &testLoadBalancer{RWMutex: &sync.RWMutex{}}
+	hc := NewServiceHealthChecker(ctx, &MetricsMock{&testhelpers.CollectingGauge{}}, config, lb, &runtime.ServiceInfo{}, http.DefaultTransport, nil, nil, "foobar")
+
+	hc.checkTargets(ctx, targets)
+
+	// The checks are neither started nor reported once the configuration is reloaded.
+	assert.Equal(t, int32(1), calls.Load())
+	assert.Equal(t, 0, lb.numUpsertedServers+lb.numRemovedServers)
 }
 
 func TestServiceHealthChecker_newRequest(t *testing.T) {
@@ -83,6 +233,7 @@ func TestServiceHealthChecker_newRequest(t *testing.T) {
 		expHostname string
 		expHeader   string
 		expMethod   string
+		expBody     string
 	}{
 		{
 			desc:      "no port override",
@@ -250,6 +401,19 @@ func TestServiceHealthChecker_newRequest(t *testing.T) {
 			expHostname: "backend1:80",
 			expMethod:   http.MethodHead,
 		},
+		{
+			desc:      "custom body",
+			targetURL: "http://backend1:80",
+			config: dynamic.ServerHealthCheck{
+				Path:   "/jsonrpc",
+				Method: http.MethodPost,
+				Body:   `{"jsonrpc":"2.0","method":"call"}`,
+			},
+			expTarget:   "http://backend1:80/jsonrpc",
+			expHostname: "backend1:80",
+			expMethod:   http.MethodPost,
+			expBody:     `{"jsonrpc":"2.0","method":"call"}`,
+		},
 	}
 
 	for _, test := range testCases {
@@ -272,8 +436,49 @@ func TestServiceHealthChecker_newRequest(t *testing.T) {
 				assert.Equal(t, test.expHeader, req.Header.Get("Custom-Header"))
 				assert.Equal(t, test.expHostname, req.Host)
 				assert.Equal(t, test.expMethod, req.Method)
+
+				body, err := io.ReadAll(req.Body)
+				require.NoError(t, err)
+				assert.Equal(t, test.expBody, string(body))
+				assert.Equal(t, int64(len(test.expBody)), req.ContentLength)
 			}
 		})
+	}
+}
+
+func TestServiceHealthChecker_checkHealthHTTP_Body(t *testing.T) {
+	var gotMethod, gotContentType, gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		gotMethod = req.Method
+		gotContentType = req.Header.Get("Content-Type")
+
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			rw.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		gotBody = string(body)
+	}))
+	t.Cleanup(server.Close)
+
+	config := &dynamic.ServerHealthCheck{
+		Path:     "/jsonrpc",
+		Method:   http.MethodPost,
+		Headers:  map[string]string{"Content-Type": "application/json"},
+		Body:     `{"jsonrpc":"2.0","method":"call"}`,
+		Interval: dynamic.DefaultHealthCheckInterval,
+		Timeout:  dynamic.DefaultHealthCheckTimeout,
+	}
+	healthChecker := NewServiceHealthChecker(t.Context(), nil, config, nil, nil, http.DefaultTransport, nil, nil, "")
+
+	// Checked twice, as the request body must not be consumed by the first check.
+	for range 2 {
+		gotBody = ""
+		require.NoError(t, healthChecker.checkHealthHTTP(t.Context(), testhelpers.MustParseURL(server.URL)))
+
+		assert.Equal(t, http.MethodPost, gotMethod)
+		assert.Equal(t, "application/json", gotContentType)
+		assert.Equal(t, config.Body, gotBody)
 	}
 }
 
@@ -299,7 +504,7 @@ func TestServiceHealthChecker_checkHealthHTTP_NotFollowingRedirects(t *testing.T
 		Interval:        dynamic.DefaultHealthCheckInterval,
 		Timeout:         dynamic.DefaultHealthCheckTimeout,
 	}
-	healthChecker := NewServiceHealthChecker(ctx, nil, config, nil, nil, http.DefaultTransport, nil, "")
+	healthChecker := NewServiceHealthChecker(ctx, nil, config, nil, nil, http.DefaultTransport, nil, nil, "")
 
 	err := healthChecker.checkHealthHTTP(ctx, testhelpers.MustParseURL(server.URL))
 	require.NoError(t, err)
@@ -312,6 +517,7 @@ func TestServiceHealthChecker_Launch(t *testing.T) {
 		desc                  string
 		mode                  string
 		status                int
+		tlsConfig             *tls.Config
 		server                StartTestServer
 		expNumRemovedServers  int
 		expNumUpsertedServers int
@@ -403,6 +609,16 @@ func TestServiceHealthChecker_Launch(t *testing.T) {
 			targetStatus:          runtime.StatusDown,
 		},
 		{
+			desc:                  "healthy grpc server over TLS staying healthy",
+			mode:                  "grpc",
+			tlsConfig:             &tls.Config{InsecureSkipVerify: true},
+			server:                newGRPCTLSServer(healthpb.HealthCheckResponse_SERVING),
+			expNumRemovedServers:  0,
+			expNumUpsertedServers: 1,
+			expGaugeValue:         1,
+			targetStatus:          runtime.StatusUp,
+		},
+		{
 			desc:                  "healthy grpc server toggling to sick and back to healthy",
 			mode:                  "grpc",
 			server:                newGRPCServer(healthpb.HealthCheckResponse_NOT_SERVING, healthpb.HealthCheckResponse_SERVING),
@@ -442,7 +658,7 @@ func TestServiceHealthChecker_Launch(t *testing.T) {
 
 			gauge := &testhelpers.CollectingGauge{}
 			serviceInfo := &runtime.ServiceInfo{}
-			hc := NewServiceHealthChecker(ctx, &MetricsMock{gauge}, config, lb, serviceInfo, http.DefaultTransport, map[string]*url.URL{"test": targetURL}, "foobar")
+			hc := NewServiceHealthChecker(ctx, &MetricsMock{gauge}, config, lb, serviceInfo, http.DefaultTransport, test.tlsConfig, map[string]*url.URL{"test": targetURL}, "foobar")
 
 			wg := sync.WaitGroup{}
 			wg.Go(func() {
@@ -480,6 +696,59 @@ func TestServiceHealthChecker_Launch(t *testing.T) {
 	}
 }
 
+func TestServiceHealthChecker_checkHealthGRPC_TLS(t *testing.T) {
+	roots := x509.NewCertPool()
+	require.True(t, roots.AppendCertsFromPEM(localhostCert))
+
+	testCases := []struct {
+		desc      string
+		tlsConfig *tls.Config
+		expErr    string
+	}{
+		{
+			desc:      "trusted certificate",
+			tlsConfig: &tls.Config{RootCAs: roots, ServerName: "example.com"},
+		},
+		{
+			desc: "untrusted certificate",
+			// An empty pool rather than the system roots, as the platform verifiers (e.g. macOS) report a different error.
+			tlsConfig: &tls.Config{RootCAs: x509.NewCertPool(), ServerName: "example.com"},
+			expErr:    "certificate signed by unknown authority",
+		},
+		{
+			desc:      "server name mismatch",
+			tlsConfig: &tls.Config{RootCAs: roots, ServerName: "foo.example.com"},
+			expErr:    "certificate is valid for example.com, not foo.example.com",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			targetURL, _ := newGRPCTLSServer(healthpb.HealthCheckResponse_SERVING).Start(t, func() {})
+
+			config := &dynamic.ServerHealthCheck{
+				Mode:    "grpc",
+				Timeout: ptypes.Duration(5 * time.Second),
+			}
+			hc := NewServiceHealthChecker(t.Context(), nil, config, nil, nil, http.DefaultTransport, test.tlsConfig, nil, "")
+
+			// A failed handshake must be reported right away, not once the timeout expires.
+			start := time.Now()
+			err := hc.executeHealthCheck(t.Context(), config, targetURL)
+			assert.Less(t, time.Since(start), time.Duration(config.Timeout))
+
+			if test.expErr == "" {
+				require.NoError(t, err)
+				return
+			}
+
+			require.ErrorContains(t, err, test.expErr)
+		})
+	}
+}
+
 func TestDifferentIntervals(t *testing.T) {
 	// The context is passed to the health check and
 	// canonically canceled by the test server once all expected requests have been received.
@@ -508,7 +777,7 @@ func TestDifferentIntervals(t *testing.T) {
 
 	gauge := &testhelpers.CollectingGauge{}
 	serviceInfo := &runtime.ServiceInfo{}
-	hc := NewServiceHealthChecker(ctx, &MetricsMock{gauge}, config, lb, serviceInfo, http.DefaultTransport, map[string]*url.URL{"healthy": healthyURL, "unhealthy": unhealthyURL}, "foobar")
+	hc := NewServiceHealthChecker(ctx, &MetricsMock{gauge}, config, lb, serviceInfo, http.DefaultTransport, nil, map[string]*url.URL{"healthy": healthyURL, "unhealthy": unhealthyURL}, "foobar")
 
 	wg := sync.WaitGroup{}
 	wg.Go(func() {
@@ -526,4 +795,48 @@ func TestDifferentIntervals(t *testing.T) {
 	defer lb.Unlock()
 
 	assert.Greater(t, lb.numRemovedServers, lb.numUpsertedServers, "removed servers greater than upserted servers")
+}
+
+func TestServiceHealthChecker_ImmediateFirstCheck(t *testing.T) {
+	// Verifies that a health check fires immediately on startup without waiting
+	// for the first interval tick. A DOWN server must be identified quickly after
+	// launch, not after one full interval elapses.
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+
+	targetURL := testhelpers.MustParseURL(server.URL)
+
+	lb := &testLoadBalancer{
+		RWMutex: &sync.RWMutex{},
+		eventCh: make(chan struct{}, 5),
+	}
+
+	// Use a very long interval so any observed check must be from the
+	// immediate first firing, not a periodic tick.
+	config := &dynamic.ServerHealthCheck{
+		Path:     "/",
+		Interval: ptypes.Duration(time.Minute),
+		Timeout:  ptypes.Duration(time.Second),
+	}
+
+	gauge := &testhelpers.CollectingGauge{}
+	hc := NewServiceHealthChecker(ctx, &MetricsMock{gauge}, config, lb, &runtime.ServiceInfo{}, http.DefaultTransport, nil, map[string]*url.URL{"test": targetURL}, "foobar")
+
+	go hc.Launch(ctx)
+
+	select {
+	case <-lb.eventCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("health check did not fire immediately; DOWN server not identified within 5 seconds")
+	}
+
+	lb.RLock()
+	defer lb.RUnlock()
+	assert.Equal(t, 1, lb.numRemovedServers)
+	assert.Equal(t, 0, lb.numUpsertedServers)
 }
