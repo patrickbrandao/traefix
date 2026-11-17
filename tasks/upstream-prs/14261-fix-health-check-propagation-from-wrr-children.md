@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +160/-4 em 3 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/provider/k8s/crd |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,26 @@ Base é v3.7, precisa de port para o master. Só altera o comportamento quando t
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados no PR original:
+
+- O bug é real (issue upstream #11622). O WRR pai, gerado pelo provider CRD (o implícito de uma rota com vários `services`, ou um `TraefikService` Weighted), nunca recebia `HealthCheck`. Por isso, os filhos `ExternalName` com `healthCheck` não se registravam como updaters do pai, e o tráfego continuava indo para um backend DOWN indefinidamente.
+- A propagação só é ligada quando todo filho é um Kubernetes Service com `healthCheck`. É a única forma em que todos os filhos conseguem se registrar. Com um filho sem `healthCheck`, o build do serviço falharia com `cannot register ... as updater`. O fixture misto cobre esse caso.
+- Mudança de comportamento: um WRR que cumpre essa condição passa a excluir filhos DOWN sem nenhuma mudança no YAML. É o comportamento esperado por quem configurou `healthCheck`, mas não estava documentado.
+- Interação com o #13511: filhos com peso 0 continuam registrados como updaters. O WRR agora lida com isso sem loop infinito.
+- Nada suspeito no diff.
+
+Ajustes:
+
+- Documentação: nota "Health Check Propagation" na seção Weighted Round Robin de `kubernetes/crd/http/traefikservice.md`, explicando quando a saúde dos filhos é levada em conta.
+- Removido o comentário redundante ("o quê") no bloco que define `weighted.HealthCheck`. O comentário de "porquê" no início da função foi mantido.
+
+Testes:
+
+- `go test ./pkg/provider/kubernetes/crd/ ./pkg/server/service/`: ok.
+- `golangci-lint run ./pkg/provider/kubernetes/crd/`: 0 issues.
+- `go build ./...`: ok.
