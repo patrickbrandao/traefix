@@ -35,6 +35,7 @@ import (
 	apiextensionv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -873,6 +874,46 @@ func getNativeServiceAddress(service corev1.Service, svcPort corev1.ServicePort)
 	}
 
 	return net.JoinHostPort(service.Spec.ClusterIP, strconv.Itoa(int(svcPort.Port))), nil
+}
+
+// nodePortLBNodes returns the nodes to load-balance on for a NodePort service.
+// With externalTrafficPolicy Local, kube-proxy drops the traffic received by a node without a local endpoint,
+// so only the nodes hosting a ready endpoint of the service are kept.
+func nodePortLBNodes(client Client, service *corev1.Service, nodes []*corev1.Node) ([]*corev1.Node, error) {
+	if service.Spec.ExternalTrafficPolicy != corev1.ServiceExternalTrafficPolicyLocal {
+		return nodes, nil
+	}
+
+	endpointSlices, err := client.GetEndpointSlicesForService(service.Namespace, service.Name)
+	if err != nil {
+		return nil, fmt.Errorf("getting endpointslices: %w", err)
+	}
+
+	nodesByName := make(map[string]*corev1.Node, len(nodes))
+	for _, node := range nodes {
+		nodesByName[node.Name] = node
+	}
+
+	// Endpoints are walked in order, rather than nodes, to keep the generated servers stable across rebuilds.
+	var localNodes []*corev1.Node
+	for _, endpointSlice := range endpointSlices {
+		for _, endpoint := range endpointSlice.Endpoints {
+			// From the Kubernetes API documentation, a nil ready condition should be interpreted as "true".
+			if endpoint.NodeName == nil || !ptr.Deref(endpoint.Conditions.Ready, true) {
+				continue
+			}
+
+			node, ok := nodesByName[*endpoint.NodeName]
+			if !ok {
+				continue
+			}
+
+			localNodes = append(localNodes, node)
+			delete(nodesByName, *endpoint.NodeName)
+		}
+	}
+
+	return localNodes, nil
 }
 
 func createPluginMiddleware(k8sClient Client, ns string, plugins map[string]apiextensionv1.JSON, refs k8s.URNRefs) (map[string]dynamic.PluginConf, error) {

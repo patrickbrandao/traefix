@@ -159,6 +159,11 @@ func (p *Provider) loadUDPServers(client Client, namespace string, svc traefikv1
 			return nil, fmt.Errorf("nodes not found for NodePort service %s/%s", svc.Namespace, svc.Name)
 		}
 
+		nodes, err = nodePortLBNodes(client, service, nodes)
+		if err != nil {
+			return nil, err
+		}
+
 		for _, node := range nodes {
 			for _, addr := range node.Status.Addresses {
 				if addr.Type == corev1.NodeInternalIP {

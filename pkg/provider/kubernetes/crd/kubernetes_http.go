@@ -686,6 +686,11 @@ func (c configBuilder) loadServers(svc traefikv1alpha1.LoadBalancerSpec) ([]dyna
 			return nil, fmt.Errorf("nodes not found for NodePort service %s/%s", svc.Namespace, svc.Name)
 		}
 
+		nodes, err = nodePortLBNodes(c.client, service, nodes)
+		if err != nil {
+			return nil, err
+		}
+
 		protocol, err := parseServiceProtocol(svc.Scheme, svcPort.Name, svcPort.Port)
 		if err != nil {
 			return nil, err
