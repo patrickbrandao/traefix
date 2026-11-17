@@ -9074,10 +9074,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"TCP"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-TCP-0-45c28fdcc89d443a020b": {
 							EntryPoints: []string{"TCP"},
@@ -9232,10 +9233,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tcp"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-tls-gateway-ep-tcp-0-d01849ae1c96d9ffe0ef": {
 							EntryPoints: []string{"tcp"},
@@ -9304,10 +9306,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tcp"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-tls-gateway-ep-tcp-0-24d35d31a7578c5062a7": {
 							EntryPoints: []string{"tcp"},
@@ -9375,10 +9378,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-efc0f8d903baa9fb6592": {
 							EntryPoints: []string{"tls"},
@@ -9453,10 +9457,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-85354ef9915a52028174": {
 							EntryPoints: []string{"tls"},
@@ -9524,10 +9529,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-85354ef9915a52028174": {
 							EntryPoints: []string{"tls"},
@@ -9595,10 +9601,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-85354ef9915a52028174": {
 							EntryPoints: []string{"tls"},
@@ -9666,10 +9673,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-85354ef9915a52028174": {
 							EntryPoints: []string{"tls"},
@@ -9769,10 +9777,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-035a9ab93ab8d0d12874": {
 							EntryPoints: []string{"tls"},
@@ -9840,10 +9849,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-default-gw-default-my-gateway-ep-tls-0-76eff62990bc46a9697d": {
 							EntryPoints: []string{"tls"},
@@ -9911,10 +9921,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-default-gw-default-my-gateway-ep-tls-0-76eff62990bc46a9697d": {
 							EntryPoints: []string{"tls"},
@@ -10014,10 +10025,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-bar-tls-app-bar-gw-default-my-gateway-ep-tls-0-58a6fd0c8bc014d99d8b": {
 							EntryPoints: []string{"tls"},
@@ -10085,10 +10097,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tcp-1"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-gw-default-my-gateway-ep-tcp-1-0-2e99b4a7e81cc622b335": {
 							EntryPoints: []string{"tcp-1"},
@@ -10157,10 +10170,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tcp"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-tls-gateway-ep-tcp-0-d01849ae1c96d9ffe0ef": {
 							EntryPoints: []string{"tcp"},
@@ -10225,10 +10239,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tcp"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-tls-gateway-ep-tcp-0-d01849ae1c96d9ffe0ef": {
 							EntryPoints: []string{"tcp"},
@@ -10295,10 +10310,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-5c999a999d12ac0531c5": {
 							EntryPoints: []string{"tls"},
@@ -10382,10 +10398,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-5c999a999d12ac0531c5": {
 							EntryPoints: []string{"tls"},
@@ -10450,10 +10467,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-5c999a999d12ac0531c5": {
 							EntryPoints: []string{"tls"},
@@ -10540,10 +10558,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-5c999a999d12ac0531c5": {
 							EntryPoints: []string{"tls"},
@@ -10633,10 +10652,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-5c999a999d12ac0531c5": {
 							EntryPoints: []string{"tls"},
@@ -10722,10 +10742,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-5c999a999d12ac0531c5": {
 							EntryPoints: []string{"tls"},
@@ -10806,10 +10827,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tcp"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-tls-gateway-ep-tcp-0-d01849ae1c96d9ffe0ef": {
 							EntryPoints: []string{"tcp"},
@@ -10868,10 +10890,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tcp"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-tls-gateway-ep-tcp-0-d01849ae1c96d9ffe0ef": {
 							EntryPoints: []string{"tcp"},
@@ -10940,10 +10963,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 							},
 						},
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tcp"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 					},
 					Middlewares: map[string]*dynamic.TCPMiddleware{},
@@ -11004,10 +11028,11 @@ func TestLoadTLSRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Service:  "deny-unknown-host",
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Service:     "deny-unknown-host",
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-85354ef9915a52028174": {
 							EntryPoints: []string{
@@ -11247,10 +11272,11 @@ func TestLoadMixedRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls-2"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tcproute-default-tcp-app-1-gw-default-my-gateway-ep-tcp-0-5840f3c3c21dcf0402da": {
 							EntryPoints: []string{"tcp"},
@@ -11469,10 +11495,11 @@ func TestLoadMixedRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls-2"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tcproute-default-tcp-app-default-gw-default-my-gateway-ep-tcp-0-df24b7f0f1d9b443e55b": {
 							EntryPoints: []string{"tcp"},
@@ -11661,10 +11688,11 @@ func TestLoadMixedRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls-2"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-default-gw-default-my-gateway-ep-tls-2-0-30cc8c9fb5be933316f8": {
 							EntryPoints: []string{"tls-2"},
@@ -11853,10 +11881,11 @@ func TestLoadMixedRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls-2"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tcproute-bar-tcp-app-bar-gw-default-my-gateway-ep-tcp-0-c5d9e24bf010118167e7": {
 							EntryPoints: []string{"tcp"},
@@ -12319,10 +12348,11 @@ func TestLoadMixedRoutes(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tcp"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-gw-default-my-tls-gateway-ep-tcp-0-06fcfb4c19c97feaa646": {
 							EntryPoints: []string{"tcp"},
@@ -12880,10 +12910,11 @@ func TestLoadRoutesWithReferenceGrants(t *testing.T) {
 				TCP: &dynamic.TCPConfiguration{
 					Routers: map[string]*dynamic.TCPRouter{
 						"deny-unknown-host": {
-							Rule:     "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
-							Priority: 1,
-							Service:  "deny-unknown-host",
-							TLS:      &dynamic.RouterTCPTLSConfig{},
+							EntryPoints: []string{"tls"},
+							Rule:        "HostSNI(`*`) && !ALPN(`h2`) && !ALPN(`http/1.1`)",
+							Priority:    1,
+							Service:     "deny-unknown-host",
+							TLS:         &dynamic.RouterTCPTLSConfig{},
 						},
 						"tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-85354ef9915a52028174": {
 							EntryPoints: []string{"tls"},
@@ -16988,4 +17019,29 @@ func TestLoadHTTPRoutes_externalNameService(t *testing.T) {
 			assert.Equal(t, test.expectedURLs, urls)
 		})
 	}
+}
+
+func TestLoadTLSRoutes_denyUnknownHostEntryPoints(t *testing.T) {
+	k8sObjects, gwObjects := readResources(t, []string{"services.yml", "tlsroute/with_multiple_listeners_different_ports.yml"})
+
+	client := newClientImpl(kubefake.NewClientset(k8sObjects...), newGatewaySimpleClientSet(t, gwObjects...))
+
+	eventCh, err := client.WatchAll(nil, make(chan struct{}))
+	require.NoError(t, err)
+	<-eventCh
+
+	p := Provider{
+		EntryPoints: map[string]Entrypoint{
+			"tls-1":     {Address: ":9001"},
+			"tls-2":     {Address: ":9002"},
+			"websecure": {Address: ":443"},
+		},
+		client: client,
+	}
+
+	conf, _, err := p.loadConfigurationFromGateways(t.Context())
+	require.NoError(t, err)
+
+	require.Contains(t, conf.TCP.Routers, "deny-unknown-host")
+	assert.Equal(t, []string{"tls-1", "tls-2"}, conf.TCP.Routers["deny-unknown-host"].EntryPoints)
 }
