@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +64/-4 em 5 arquivos |
 | Labels | — |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -39,3 +39,22 @@ Em draft, sem reviews. Escopo pequeno (+64/-4, 5 arquivos). Depende da correcao 
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- `grpc_set_header` (a variante gRPC de `proxy_set_header` no NGINX) fazia o snippet inteiro ser rejeitado como diretiva desconhecida. O Traefik encaminha gRPC e HTTP pelo mesmo proxy, então tratar as duas diretivas igual está correto.
+- `$authHeaderN`: o ingress-nginx cria uma variável por entrada de `auth-response-headers`, na ordem, com o valor da resposta do auth. Isso permite repassar ao upstream, com outro nome, um header vindo do serviço de autenticação (por exemplo `grpc_set_header Authorization $authHeader0`).
+- Segurança: as variáveis são preenchidas **só** com a resposta do serviço de autenticação, depois de um auth bem-sucedido. O cliente não consegue injetar valores, porque são variáveis internas do contexto e não vêm de headers da requisição. Sem `auth-url`, elas ficam indefinidas. Só quem já pode escrever snippets (com `allowSnippetAnnotations` ligado) consegue usá-las.
+- Valores múltiplos do mesmo header são juntados com `,`, como o NGINX faz.
+
+**Ajustes**
+
+- Nenhum ajuste funcional.
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/middlewares/ingressnginx/snippet/` ok.
+- `golangci-lint run ./pkg/middlewares/ingressnginx/...`: 0 issues.
