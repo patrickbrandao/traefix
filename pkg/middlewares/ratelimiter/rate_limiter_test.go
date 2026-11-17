@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -28,13 +29,14 @@ const delta float64 = 1e-10
 
 func TestNewRateLimiter(t *testing.T) {
 	testCases := []struct {
-		desc             string
-		config           dynamic.RateLimit
-		expectedMaxDelay time.Duration
-		expectedSourceIP string
-		requestHeader    string
-		expectedError    string
-		expectedRTL      rate.Limit
+		desc                string
+		config              dynamic.RateLimit
+		expectedMaxDelay    time.Duration
+		expectedSourceIP    string
+		requestHeader       string
+		expectedError       string
+		expectedRTL         rate.Limit
+		expectedDenyOnError *bool
 	}{
 		{
 			desc: "no ratelimit on Average == 0",
@@ -102,6 +104,49 @@ func TestNewRateLimiter(t *testing.T) {
 				},
 			},
 		},
+		{
+			desc: "denyOnError true for Redis",
+			config: dynamic.RateLimit{
+				Average: 200,
+				Burst:   10,
+				Redis: &dynamic.Redis{
+					Endpoints:   []string{"localhost:6379"},
+					DenyOnError: new(true),
+				},
+			},
+			expectedDenyOnError: new(true),
+		},
+		{
+			desc: "denyOnError can be set to false for Redis",
+			config: dynamic.RateLimit{
+				Average: 200,
+				Burst:   10,
+				Redis: &dynamic.Redis{
+					Endpoints:   []string{"localhost:6379"},
+					DenyOnError: new(false),
+				},
+			},
+			expectedDenyOnError: new(false),
+		},
+		{
+			desc: "denyOnError defaults to true for Redis when unset",
+			config: dynamic.RateLimit{
+				Average: 200,
+				Burst:   10,
+				Redis: &dynamic.Redis{
+					Endpoints: []string{"localhost:6379"},
+				},
+			},
+			expectedDenyOnError: new(true),
+		},
+		{
+			desc: "denyOnError is true for the in-memory limiter",
+			config: dynamic.RateLimit{
+				Average: 200,
+				Burst:   10,
+			},
+			expectedDenyOnError: new(true),
+		},
 	}
 
 	for _, test := range testCases {
@@ -150,6 +195,97 @@ func TestNewRateLimiter(t *testing.T) {
 			if test.expectedRTL != 0 {
 				assert.InDelta(t, float64(test.expectedRTL), float64(rtl.rate), delta)
 			}
+			if test.expectedDenyOnError != nil {
+				assert.Equal(t, *test.expectedDenyOnError, rtl.denyOnError)
+			}
+		})
+	}
+}
+
+func TestNewRateLimiter_ttl(t *testing.T) {
+	testCases := []struct {
+		desc        string
+		config      dynamic.RateLimit
+		expectedTTL int
+	}{
+		{
+			desc: "no ratelimit on Average == 0",
+			config: dynamic.RateLimit{
+				Average: 0,
+				Burst:   10,
+			},
+			expectedTTL: 2,
+		},
+		{
+			desc: "high rate, bucket refills within the default ttl",
+			config: dynamic.RateLimit{
+				Average: 200,
+				Burst:   10,
+			},
+			expectedTTL: 2,
+		},
+		{
+			desc: "high rate, large burst",
+			config: dynamic.RateLimit{
+				Average: 100,
+				Burst:   1000,
+			},
+			expectedTTL: 10,
+		},
+		{
+			desc: "low rate, burst of 1",
+			config: dynamic.RateLimit{
+				Average: 30,
+				Period:  ptypes.Duration(time.Minute),
+				Burst:   1,
+			},
+			expectedTTL: 3,
+		},
+		{
+			desc: "low rate, large burst",
+			config: dynamic.RateLimit{
+				Average: 30,
+				Period:  ptypes.Duration(time.Minute),
+				Burst:   30,
+			},
+			expectedTTL: 60,
+		},
+		{
+			desc: "low rate, refill time is rounded up",
+			config: dynamic.RateLimit{
+				Average: 7,
+				Period:  ptypes.Duration(10 * time.Second),
+				Burst:   5,
+			},
+			expectedTTL: 8,
+		},
+		{
+			desc: "very low rate, huge burst, ttl is bounded",
+			config: dynamic.RateLimit{
+				Average: 1,
+				Period:  ptypes.Duration(24 * time.Hour),
+				Burst:   math.MaxInt64,
+			},
+			expectedTTL: math.MaxInt32,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+
+			h, err := New(t.Context(), next, test.config, "rate-limiter")
+			require.NoError(t, err)
+
+			rtl, ok := h.(*rateLimiter)
+			require.True(t, ok)
+
+			limiter, ok := rtl.limiter.(*inMemoryRateLimiter)
+			require.True(t, ok)
+
+			assert.Equal(t, test.expectedTTL, limiter.ttl)
 		})
 	}
 }
@@ -551,13 +687,130 @@ func TestRedisRateLimit(t *testing.T) {
 	}
 }
 
+// An average of 0 means no rate limiting (see the ratelimit reference), so every request
+// must be allowed. The Redis backend must behave like the in-memory one in this case.
+func TestRedisRateLimitAverageZeroDisablesLimiting(t *testing.T) {
+	config := dynamic.RateLimit{
+		Average: 0,
+		Burst:   1,
+		Redis: &dynamic.Redis{
+			Endpoints: []string{"localhost:6379"},
+		},
+	}
+
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+	})
+
+	h, err := New(t.Context(), next, config, "rate-limiter")
+	require.NoError(t, err)
+
+	l := h.(*rateLimiter)
+	rl := l.limiter.(*redisLimiter)
+	rl.client = newMockRedisClient(rl.ttl)
+
+	for range 10 {
+		req := testhelpers.MustNewRequest(http.MethodGet, "http://localhost", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+
+		rw := httptest.NewRecorder()
+		h.ServeHTTP(rw, req)
+
+		assert.Equal(t, http.StatusOK, rw.Code)
+	}
+}
+
+func TestRateLimiterDenyOnError(t *testing.T) {
+	testCases := []struct {
+		desc           string
+		config         dynamic.RateLimit
+		expectedStatus int
+	}{
+		{
+			desc: "deny on error true returns 500",
+			config: dynamic.RateLimit{
+				Average: 100,
+				Burst:   1,
+				Redis: &dynamic.Redis{
+					Endpoints:   []string{"localhost:6379"},
+					DenyOnError: new(true),
+				},
+			},
+			expectedStatus: http.StatusInternalServerError,
+		},
+		{
+			desc: "deny on error false passes request through",
+			config: dynamic.RateLimit{
+				Average: 100,
+				Burst:   1,
+				Redis: &dynamic.Redis{
+					Endpoints:   []string{"localhost:6379"},
+					DenyOnError: new(false),
+				},
+			},
+			expectedStatus: http.StatusOK,
+		},
+		{
+			// A provider that does not apply defaults, such as the REST provider, leaves the
+			// option unset. That must keep the existing fail-closed behavior.
+			desc: "deny on error unset returns 500",
+			config: dynamic.RateLimit{
+				Average: 100,
+				Burst:   1,
+				Redis: &dynamic.Redis{
+					Endpoints: []string{"localhost:6379"},
+				},
+			},
+			expectedStatus: http.StatusInternalServerError,
+		},
+		{
+			desc: "in-memory limiter returns 500",
+			config: dynamic.RateLimit{
+				Average: 100,
+				Burst:   1,
+			},
+			expectedStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+
+			h, err := New(t.Context(), next, test.config, "rate-limiter")
+			require.NoError(t, err)
+
+			// Swap the limiter for one that always returns an error (simulates Redis being unavailable).
+			h.(*rateLimiter).limiter = &errorLimiter{}
+
+			req := testhelpers.MustNewRequest(http.MethodGet, "http://localhost", nil)
+			req.RemoteAddr = "127.0.0.1:1234"
+			w := httptest.NewRecorder()
+
+			h.ServeHTTP(w, req)
+			assert.Equal(t, test.expectedStatus, w.Code)
+		})
+	}
+}
+
+// errorLimiter is a limiter stub that always returns an error, simulating a broken Redis connection.
+type errorLimiter struct{}
+
+func (e *errorLimiter) Allow(_ context.Context, _ string) (*time.Duration, error) {
+	return nil, errors.New("redis unavailable")
+}
+
 type mockRedisClient struct {
 	ttl  int
-	keys *ttlmap.Map[[]string]
+	keys *ttlmap.Map[map[string]string]
 }
 
 func newMockRedisClient(ttl int) Rediser {
-	buckets, _ := ttlmap.New[[]string](65536)
+	buckets, _ := ttlmap.New[map[string]string](65536)
 	return &mockRedisClient{
 		ttl:  ttl,
 		keys: buckets,
@@ -588,26 +841,34 @@ func (m *mockRedisClient) EvalSha(ctx context.Context, _ string, keys []string, 
 			switch state.Get(1).String() {
 			case "hset":
 				key := state.Get(2).String()
-				keyLast := state.Get(3).String()
-				last := state.Get(4).String()
-				keyTokens := state.Get(5).String()
-				tokens := state.Get(6).String()
-				table := []string{keyLast, last, keyTokens, tokens}
-				_ = m.keys.Set(key, table, m.ttl)
-			case "hgetall":
-				key := state.Get(2).String()
-				value, ok := m.keys.Get(key)
-				table := state.NewTable()
-				if !ok {
-					state.Push(table)
-				} else {
-					if len(value) == 4 {
-						for i := range value {
-							table.Append(lua.LString(value[i]))
-						}
-					}
-					state.Push(table)
+				fields := map[string]string{}
+				for i := 3; i < state.GetTop(); i += 2 {
+					fields[state.Get(i).String()] = state.Get(i + 1).String()
 				}
+				_ = m.keys.Set(key, fields, m.ttl)
+			case "hmget":
+				fields, _ := m.keys.Get(state.Get(2).String())
+				table := state.NewTable()
+				for i := 3; i <= state.GetTop(); i++ {
+					// Redis converts a missing field to false, not nil.
+					var value lua.LValue = lua.LFalse
+					if v, ok := fields[state.Get(i).String()]; ok {
+						value = lua.LString(v)
+					}
+					table.Append(value)
+				}
+				state.Push(table)
+			case "hgetall":
+				// Redis does not guarantee the field order of a hash: returning tokens first catches a script relying on it.
+				fields, _ := m.keys.Get(state.Get(2).String())
+				table := state.NewTable()
+				for _, name := range []string{"tokens", "last"} {
+					if v, ok := fields[name]; ok {
+						table.Append(lua.LString(name))
+						table.Append(lua.LString(v))
+					}
+				}
+				state.Push(table)
 			case "expire":
 			default:
 				return 0
@@ -682,4 +943,77 @@ func computeMinCount(wantCount int) int {
 	}
 
 	return wantCount * 95 / 100
+}
+
+type fixedDelayLimiter struct {
+	delay time.Duration
+}
+
+func (l fixedDelayLimiter) Allow(ctx context.Context, _ string) (*time.Duration, error) {
+	if l.delay < 0 {
+		return nil, fmt.Errorf("evaluating script: %w", ctx.Err())
+	}
+
+	return &l.delay, nil
+}
+
+func TestRateLimit_CanceledRequest(t *testing.T) {
+	testCases := []struct {
+		desc           string
+		delay          time.Duration
+		expectedStatus int
+		expectedNext   bool
+	}{
+		{
+			desc:           "no delay, request is forwarded",
+			delay:          0,
+			expectedStatus: http.StatusOK,
+			expectedNext:   true,
+		},
+		{
+			desc:           "client gone while waiting for the delay",
+			delay:          time.Minute,
+			expectedStatus: 499,
+			expectedNext:   false,
+		},
+		{
+			desc:           "client gone while the limiter is evaluated",
+			delay:          -1,
+			expectedStatus: 499,
+			expectedNext:   false,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			var nextCalled bool
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				nextCalled = true
+				w.WriteHeader(http.StatusOK)
+			})
+
+			h, err := New(t.Context(), next, dynamic.RateLimit{Average: 100, Burst: 100}, "rate-limiter")
+			require.NoError(t, err)
+
+			rl, ok := h.(*rateLimiter)
+			require.True(t, ok)
+			rl.limiter = fixedDelayLimiter{delay: test.delay}
+			rl.maxDelay = 2 * time.Minute
+
+			// The client has already gone away when the middleware runs.
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+
+			req := testhelpers.MustNewRequest(http.MethodGet, "http://localhost", nil).WithContext(ctx)
+			req.RemoteAddr = "127.0.0.1:1234"
+			rw := httptest.NewRecorder()
+
+			h.ServeHTTP(rw, req)
+
+			assert.Equal(t, test.expectedStatus, rw.Code)
+			assert.Equal(t, test.expectedNext, nextCalled)
+		})
+	}
 }

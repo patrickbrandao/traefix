@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +93/-5 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, area/middleware |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -37,3 +37,21 @@ Mudança pequena e localizada, com teste. Sem goroutine de fundo, para evitar va
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado.**
+
+Achados: correção correta e segura. Hoje uma entrada expirada só sai do `ttlmap` quando a mesma chave é
+lida de novo ou quando o mapa enche, então cada limiter in-memory cresce até `maxSources` (65536) e fica
+lá. O sweep é limitado a 16 entradas por `Set` (sem stall com o mutex), não cria goroutine (middlewares
+não são fechados no reload) e para na primeira entrada viva do heap, então nunca remove entradas vivas.
+Conferido o caso em que a chave do próprio `Set` é varrida antes da busca: cai no caminho de inserção, ok.
+Nada suspeito no diff.
+
+Relação com o grupo: complementa o #13958 (TTL maior para buckets com burst grande): com TTLs mais longos,
+reclamar os expirados de forma contínua mantém a memória proporcional às fontes ativas.
+
+Ajustes: nenhum.
+
+Testes: `go test ./pkg/middlewares/ratelimiter/ttlmap/` ok (três testes novos), `golangci-lint` 0 issues.

@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +34/-3 em 2 arquivos |
 | Labels | status/0-needs-triage, size/M, area/middleware |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,32 @@ Alternativa à #13619, que resolve o mesmo vazamento compartilhando clientes. N�
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes (combinado com o #13619).**
+
+Achados no PR original:
+
+- A ideia está certa: fechar o cliente no cancelamento do contexto de configuração cortaria requisições
+  ainda em andamento no handler anterior; usar `runtime.AddCleanup` no limiter, com
+  `runtime.KeepAlive(r)` durante o script, fecha só quando o limiter fica inalcançável.
+- Sozinho, porém, ainda cria um pool Redis por router a cada reload (e o fecha depois): com N routers
+  usando o middleware são N pools e N conjuntos de conexões, churn a cada reload.
+- Sobreposição direta com o #13619 (cache compartilhado sem `Close`).
+
+Ajustes (combinação dos dois PRs):
+
+- O cache do #13619 passou a contar referências: `acquireRedisClient` incrementa, e o cleanup do limiter
+  chama `releaseRedisClient`, que fecha o cliente e remove a entrada quando a contagem chega a zero.
+  Resultado: um cliente por configuração distinta, reaproveitado entre routers e entre reloads (os novos
+  limiters adquirem antes de os antigos serem coletados), e fechado quando a configuração deixa de ser
+  usada ou o certificado TLS muda.
+- O `Close` roda fora do lock do cache.
+- `runtime.KeepAlive(r)` mantido em `evaluateScript`.
+- Teste `TestRedisLimiter_clientClosedWhenUnused`: um limiter vivo mantém o cliente aberto; quando o último
+  é coletado, o cliente responde `redis.ErrClosed` e sai do cache. Substitui o `TestRedisClientCleanup` do PR.
+
+Testes: `go test ./pkg/middlewares/ratelimiter/ -count=3` dos testes novos e de construção ok;
+`golangci-lint` 0 issues. `-race` não rodou: o disco da máquina encheu durante o build com race
+(ENOSPC); fica pendente rodar `go test -race ./pkg/middlewares/ratelimiter/`.

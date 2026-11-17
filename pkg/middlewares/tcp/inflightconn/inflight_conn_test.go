@@ -1,10 +1,12 @@
 package inflightconn
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/tcp"
@@ -53,6 +55,24 @@ func TestInFlightConn_ServeTCP(t *testing.T) {
 	requireMessage(t, proceedCh)
 }
 
+func TestInFlightConn_ReleasedConnectionsAreForgotten(t *testing.T) {
+	middleware, err := New(t.Context(), tcp.HandlerFunc(func(tcp.WriteCloser) {}), dynamic.TCPInFlightConn{Amount: 1}, "foo")
+	require.NoError(t, err)
+
+	inFlight, ok := middleware.(*inFlightConn)
+	require.True(t, ok)
+
+	// Each connection is fully served, and therefore released, before the next one starts.
+	for i := range 256 {
+		inFlight.ServeTCP(fakeConn{addr: fmt.Sprintf("10.0.0.%d:9000", i)})
+	}
+
+	inFlight.mu.Lock()
+	defer inFlight.mu.Unlock()
+
+	assert.Empty(t, inFlight.connections)
+}
+
 func requireMessage(t *testing.T, c chan struct{}) {
 	t.Helper()
 	select {
@@ -75,7 +95,12 @@ func (c fakeConn) RemoteAddr() net.Addr {
 }
 
 func (c fakeConn) Close() error {
-	close(c.closeCh)
+	// The middleware closes every connection it rejects, including the ones
+	// the test does not watch.
+	if c.closeCh != nil {
+		close(c.closeCh)
+	}
+
 	return nil
 }
 
