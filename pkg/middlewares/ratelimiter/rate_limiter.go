@@ -3,6 +3,7 @@ package ratelimiter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/middlewares"
 	"github.com/traefik/traefik/v3/pkg/middlewares/observability"
+	"github.com/traefik/traefik/v3/pkg/proxy/httputil"
 	"github.com/vulcand/oxy/v2/utils"
 	"golang.org/x/time/rate"
 )
@@ -167,6 +169,13 @@ func (rl *rateLimiter) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	rlSource := fmt.Sprintf("%s:%s", rl.name, source)
 	delay, err := rl.limiter.Allow(ctx, rlSource)
 	if err != nil {
+		// A client going away cancels the Redis call: that is not a Redis failure.
+		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+			observability.SetStatusErrorf(ctx, "Context canceled")
+			http.Error(rw, httputil.StatusClientClosedRequestText, httputil.StatusClientClosedRequest)
+			return
+		}
+
 		if !rl.denyOnError {
 			rl.logger.Error().Err(err).Msg("Could not insert/update bucket, forwarding the request without rate limiting")
 			rl.next.ServeHTTP(rw, req)
@@ -190,13 +199,17 @@ func (rl *rateLimiter) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	select {
-	case <-ctx.Done():
-		observability.SetStatusErrorf(ctx, "Context canceled")
-		http.Error(rw, "context canceled", http.StatusInternalServerError)
-		return
+	// Only wait when there is an actual delay: with a zero delay, selecting on ctx.Done()
+	// would reject requests whose client already went away even though they are allowed.
+	if *delay > 0 {
+		select {
+		case <-ctx.Done():
+			observability.SetStatusErrorf(ctx, "Context canceled")
+			http.Error(rw, httputil.StatusClientClosedRequestText, httputil.StatusClientClosedRequest)
+			return
 
-	case <-time.After(*delay):
+		case <-time.After(*delay):
+		}
 	}
 
 	rl.next.ServeHTTP(rw, req)
