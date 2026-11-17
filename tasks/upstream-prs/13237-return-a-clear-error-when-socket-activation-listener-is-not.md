@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +72/-1 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/server |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,22 @@ PR base v3.7 (precisa ser portado para master). Review APPROVED. Mudança pequen
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, aprovado por um revisor externo; status "review".
+
+### Achados no PR original
+
+- Correção simples e correta: troca um type assertion que entrava em pânico (`listener.(*net.TCPListener)`) por um erro
+  quando o socket activation entrega, por exemplo, um `*net.UnixListener`.
+- O teste usa `/tmp` e sockets Unix e estava num arquivo sem build tag, o que quebraria no Windows.
+
+### Ajustes
+
+- Teste movido para `socket_activation_unix_test.go`, com `//go:build !windows`, como os demais arquivos de socket activation.
+
+### Testes
+
+- `go test ./pkg/server/ -run TestBuildListenerSocketActivation` ok; `go vet ./pkg/server/` ok.
+- `golangci-lint run ./pkg/server/...`: 0 issues.
