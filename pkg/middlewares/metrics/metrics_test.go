@@ -152,6 +152,7 @@ func Test_grpcStatusCode(t *testing.T) {
 	testCases := []struct {
 		desc     string
 		status   string
+		trailer  bool
 		expected codes.Code
 	}{
 		{
@@ -174,6 +175,12 @@ func Test_grpcStatusCode(t *testing.T) {
 			status:   `"OK"`,
 			expected: codes.OK,
 		},
+		{
+			desc:     "unannounced trailer",
+			status:   "0",
+			trailer:  true,
+			expected: codes.OK,
+		},
 	}
 
 	for _, test := range testCases {
@@ -181,7 +188,11 @@ func Test_grpcStatusCode(t *testing.T) {
 			t.Parallel()
 
 			rw := httptest.NewRecorder()
-			rw.Header().Set("Grpc-Status", test.status)
+			if test.trailer {
+				rw.Header().Set(http.TrailerPrefix+"Grpc-Status", test.status)
+			} else {
+				rw.Header().Set("Grpc-Status", test.status)
+			}
 
 			code := grpcStatusCode(rw)
 
