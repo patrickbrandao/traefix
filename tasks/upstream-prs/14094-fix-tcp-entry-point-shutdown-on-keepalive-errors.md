@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +60/-7 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/server |
-| Status | pendente |
+| Status | adiado (combinado no #14010) |
 
 ## O que faz
 
@@ -37,3 +37,24 @@ Duplicado funcional do #14010 (mesmo arquivo e mesma correcao, com o teste no Fr
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, status "review".
+
+### Achados no PR original
+
+- Corrige o mesmo bug do #14010: uma conexão resetada logo depois do `accept` faz o setsockopt de keep-alive falhar
+  (`ECONNRESET` no FreeBSD), e o erro era devolvido como erro do listener, derrubando o entrypoint para sempre (DoS
+  remoto sem autenticação).
+- Implementação limpa (função `acceptTCPWithKeepAlive` com dependências injetadas, sem variável global), mas só registra
+  em debug: uma falha sistemática descartaria todo o tráfego sem nenhum sinal no nível padrão de log.
+
+### Veredito: combinado no #14010
+
+A estrutura deste PR foi usada na importação do #14010, junto com o aviso com limite de taxa daquele PR. Ver a seção de
+revisão do #14010 e o commit `Import traefik/traefik#14010`. Nada a aplicar separadamente.
+
+### Testes
+
+Cobertos pela importação do #14010 (`TestAcceptTCPWithKeepAlive`, baseado no teste deste PR).
