@@ -160,6 +160,7 @@
         usersFile = "foobar"
         realm = "foobar"
         removeHeader = true
+        allowCORSPreflight = true
         headerField = "foobar"
     [http.middlewares.Middleware03]
       [http.middlewares.Middleware03.buffering]

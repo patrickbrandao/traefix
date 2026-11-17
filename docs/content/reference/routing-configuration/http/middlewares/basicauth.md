@@ -69,6 +69,19 @@ spec:
 | <a id="opt-realm" href="#opt-realm" title="#opt-realm">`realm`</a> | Allow customizing the realm for the authentication.| "traefik"      | No      |
 | <a id="opt-headerField" href="#opt-headerField" title="#opt-headerField">`headerField`</a> | Allow defining a header field to store the authenticated user.| ""      | No      |
 | <a id="opt-removeHeader" href="#opt-removeHeader" title="#opt-removeHeader">`removeHeader`</a> | Allow removing the authorization header before forwarding the request to your service. | false      | No      |
+| <a id="opt-allowCORSPreflight" href="#opt-allowCORSPreflight" title="#opt-allowCORSPreflight">`allowCORSPreflight`</a> | Forward CORS preflight requests without authentication: `OPTIONS` requests with non-empty `Origin` and `Access-Control-Request-Method` headers. Other requests still require authentication.<br />More information [here](#allowcorspreflight). | false | No |
+
+### allowCORSPreflight
+
+Browsers send a CORS preflight request without credentials before a cross-origin request that carries credentials.
+With BasicAuth, this preflight is rejected with a `401 Unauthorized` response, so the browser never sends the actual request.
+
+When `allowCORSPreflight` is `true`, an `OPTIONS` request with non-empty `Origin` and `Access-Control-Request-Method` headers is forwarded to the service without authentication.
+The `headerField` header is removed from it, as no user was authenticated.
+
+!!! warning
+
+    Any client can send such a request: make sure the service answers `OPTIONS` requests with the CORS headers only, and never with protected content.
 
 ### Passwords format
 

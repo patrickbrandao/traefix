@@ -62,6 +62,11 @@ spec:
                   This middleware restricts access to your services to known users.
                   More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/basicauth/
                 properties:
+                  allowCORSPreflight:
+                    description: |-
+                      AllowCORSPreflight allows the CORS preflight requests (OPTIONS requests with non-empty Origin and Access-Control-Request-Method headers) to pass through without authentication.
+                      Default: false.
+                    type: boolean
                   headerField:
                     description: |-
                       HeaderField defines a header field to store the authenticated user.

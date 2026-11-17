@@ -160,6 +160,7 @@ http:
         usersFile: foobar
         realm: foobar
         removeHeader: true
+        allowCORSPreflight: true
         headerField: foobar
     Middleware03:
       buffering:
