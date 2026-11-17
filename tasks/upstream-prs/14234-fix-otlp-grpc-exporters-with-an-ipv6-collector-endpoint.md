@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +137/-3 em 5 arquivos |
 | Labels | kind/bug/fix, size/M, area/otel |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -38,3 +38,21 @@ Base é o branch v3.7, então o port para o master precisa de ajuste. O bug exis
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+### Achados
+
+- Correção pequena e correta: os três exporters OTLP gRPC (traces, métricas, logs) remontavam o endereço com `fmt.Sprintf("%s:%s")`, perdendo os colchetes do IPv6 (`::1:4317`), e nunca conectavam a um collector IPv6. `net.JoinHostPort` resolve.
+- Sem review de maintainer; sem impacto de segurança. O autor não rodou lint nem a suíte completa.
+- O teste novo de métricas chama `newGRPCExporter` com a assinatura antiga; no Traefix ela recebe o seletor de temporalidade (#12789).
+
+### Ajustes
+
+- Teste `TestNewGRPCExporter_IPv6Endpoint` adaptado para a assinatura com `TemporalitySelector` (`nil`, default do SDK).
+
+### Testes
+
+- `go vet ./pkg/observability/...`: ok.
+- `go test ./pkg/observability/types/ ./pkg/observability/metrics/ ./pkg/observability/tracing/`: ok; os três testes IPv6 rodaram (não foram pulados) e passaram.
+- `golangci-lint run ./pkg/observability/...`: 0 issues.
