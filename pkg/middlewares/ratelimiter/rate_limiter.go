@@ -20,6 +20,8 @@ import (
 const (
 	typeName   = "RateLimiter"
 	maxSources = 65536
+	// maxTTL is the longest bucket TTL, in seconds.
+	maxTTL = math.MaxInt32
 )
 
 type limiter interface {
@@ -99,6 +101,14 @@ func New(ctx context.Context, next http.Handler, config dynamic.RateLimit, name 
 		ttl++
 	} else if rtl > 0 {
 		ttl += int(1 / rtl)
+	}
+	// An expired bucket is recreated full,
+	// so never expire a bucket before it would have refilled completely.
+	// Otherwise, a client pausing between bursts would get the missing tokens for free.
+	if rtl > 0 {
+		// Bounded so that converting the TTL to a time.Duration cannot overflow.
+		refill := min(math.Ceil(float64(burst)/rtl), maxTTL)
+		ttl = max(ttl, int(refill))
 	}
 	var limiter limiter
 	if config.Redis != nil {
