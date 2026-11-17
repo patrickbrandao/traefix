@@ -498,6 +498,72 @@ func TestNewHTTP3ServerTimeouts(t *testing.T) {
 	assert.NotNil(t, entryPoint.http3Server.Server.Handler)
 }
 
+func TestNewHTTP3ServerInitialPacketSize(t *testing.T) {
+	testCases := []struct {
+		desc          string
+		size          int
+		expectedSize  uint16
+		expectedError string
+	}{
+		{
+			desc: "default",
+		},
+		{
+			desc:         "minimum",
+			size:         1200,
+			expectedSize: 1200,
+		},
+		{
+			desc:         "maximum",
+			size:         1452,
+			expectedSize: 1452,
+		},
+		{
+			desc:          "too small",
+			size:          1199,
+			expectedError: "initial packet size must be between 1200 and 1452, got 1199",
+		},
+		{
+			desc:          "too large",
+			size:          1453,
+			expectedError: "initial packet size must be between 1200 and 1452, got 1453",
+		},
+		{
+			desc:          "uint16 overflow",
+			size:          65536 + 1300,
+			expectedError: "initial packet size must be between 1200 and 1452, got 66836",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			epConfig := &static.EntryPointsTransport{}
+			epConfig.SetDefaults()
+
+			entryPoint, err := NewTCPEntryPoint(t.Context(), "foo", &static.EntryPoint{
+				Address:          "127.0.0.1:0",
+				Transport:        epConfig,
+				ForwardedHeaders: &static.ForwardedHeaders{},
+				HTTP2:            &static.HTTP2Config{},
+				HTTP3:            &static.HTTP3Config{InitialPacketSize: test.size},
+			}, nil, nil)
+			if test.expectedError != "" {
+				require.ErrorContains(t, err, test.expectedError)
+				return
+			}
+			require.NoError(t, err)
+
+			t.Cleanup(func() {
+				_ = entryPoint.listener.Close()
+				_ = entryPoint.http3Server.http3conn.Close()
+			})
+
+			assert.Equal(t, test.expectedSize, entryPoint.http3Server.Server.QUICConfig.InitialPacketSize)
+			assert.False(t, entryPoint.http3Server.Server.QUICConfig.Allow0RTT)
+		})
+	}
+}
+
 type clientSessionCache struct {
 	cache tls.ClientSessionCache
 

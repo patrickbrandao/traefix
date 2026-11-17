@@ -157,7 +157,8 @@ func (c *HTTP2Config) SetDefaults() {
 
 // HTTP3Config is the HTTP3 configuration of an entry point.
 type HTTP3Config struct {
-	AdvertisedPort int `description:"UDP port to advertise, on which HTTP/3 is available." json:"advertisedPort,omitempty" toml:"advertisedPort,omitempty" yaml:"advertisedPort,omitempty" export:"true"`
+	AdvertisedPort    int `description:"UDP port to advertise, on which HTTP/3 is available." json:"advertisedPort,omitempty" toml:"advertisedPort,omitempty" yaml:"advertisedPort,omitempty" export:"true"`
+	InitialPacketSize int `description:"Initial size (and lower limit) in bytes of the QUIC packets sent, between 1200 and 1452. Defaults to the QUIC library value." json:"initialPacketSize,omitempty" toml:"initialPacketSize,omitempty" yaml:"initialPacketSize,omitempty" export:"true"`
 }
 
 // Redirections is a set of redirection for an entry point.

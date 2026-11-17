@@ -30,6 +30,12 @@ type http3server struct {
 	getter func(data tcpmuxer.ConnData) (*tls.Config, string, error)
 }
 
+// RFC 9000 section 14.1 requires at least 1200 bytes, quic-go does not support more than 1452 bytes.
+const (
+	minHTTP3InitialPacketSize = 1200
+	maxHTTP3InitialPacketSize = 1452
+)
+
 func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint, httpsServer *httpServer) (*http3server, error) {
 	var conn net.PacketConn
 	var err error
@@ -40,6 +46,11 @@ func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint,
 
 	if config.HTTP3.AdvertisedPort < 0 {
 		return nil, errors.New("advertised port must be greater than or equal to zero")
+	}
+
+	// The upper bound is the maximum packet size supported by quic-go, larger values would be silently capped.
+	if size := config.HTTP3.InitialPacketSize; size != 0 && (size < minHTTP3InitialPacketSize || size > maxHTTP3InitialPacketSize) {
+		return nil, fmt.Errorf("initial packet size must be between %d and %d, got %d", minHTTP3InitialPacketSize, maxHTTP3InitialPacketSize, size)
 	}
 
 	// if we have predefined connections from socket activation
@@ -78,7 +89,8 @@ func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint,
 		MaxHeaderBytes: config.HTTP.MaxHeaderBytes,
 		IdleTimeout:    time.Duration(config.Transport.RespondingTimeouts.IdleTimeout),
 		QUICConfig: &quic.Config{
-			Allow0RTT: false,
+			Allow0RTT:         false,
+			InitialPacketSize: uint16(config.HTTP3.InitialPacketSize),
 		},
 		ConnContext: func(ctx context.Context, c *quic.Conn) context.Context {
 			// This adds an empty struct in order to store a RoundTripper in the ConnContext in case of Kerberos or NTLM.
