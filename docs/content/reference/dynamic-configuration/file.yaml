@@ -433,6 +433,10 @@ http:
         scheme: foobar
         port: foobar
         permanent: true
+    Middleware20a:
+      redirectTrailingSlash:
+        mode: add
+        permanent: true
     Middleware21:
       replacePath:
         path: foobar

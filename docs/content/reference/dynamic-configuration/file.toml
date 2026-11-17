@@ -381,6 +381,10 @@
         scheme = "foobar"
         port = "foobar"
         permanent = true
+    [http.middlewares.Middleware20a]
+      [http.middlewares.Middleware20a.redirectTrailingSlash]
+        mode = "add"
+        permanent = true
     [http.middlewares.Middleware21]
       [http.middlewares.Middleware21.replacePath]
         path = "foobar"
