@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +218/-1 em 6 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, area/logs, size/L, area/middleware |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -41,3 +41,24 @@ Tamanho L (+218 linhas), com mudança no ErrorHandlerWithContext compartilhado p
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+### Achados
+
+- Sem review de maintainer; mudança pequena no ponto único de erro do proxy (`ErrorHandlerWithContext`), reaproveitando o `LogData.Core`.
+- Vazamento de dados: o PR gravava `err.Error()` cru. Um `*url.Error` inclui a URL completa da requisição, com query string, o que contornaria `accesslog.fields.queryParameters` (tokens em query iriam para o log).
+- Log injection: algumas mensagens embutem valores do cliente (ex.: `client tried to switch to invalid protocol %q` com o header `Upgrade`). O campo vai para o JSON (escapado), mas também para o OTLP e outras saídas; sem limite de tamanho.
+- Com retries, o campo guarda o erro da última tentativa que falhou mesmo se uma tentativa posterior der certo; isso não estava documentado.
+
+### Ajustes
+
+- `originErrorMessage`: desembrulha `*url.Error` (sem URL), troca caracteres de controle por espaço e limita a 512 bytes (UTF-8 válido).
+- Conflitos de doc e teste resolvidos sobre a versão do Traefix; linha do `OriginError` na tabela de campos JSON, incluindo o comportamento com retries.
+- Testes reescritos: URL não vaza, caracteres de controle, 499 sem campo, limite de tamanho, ausência de `LogData`.
+
+### Testes
+
+- `go vet ./...` (compilação de todos os pacotes): ok. O link do binário em `go build ./...` falhou por falta de espaço em disco na máquina (ENOSPC), não por erro de código.
+- `go test ./pkg/proxy/... ./pkg/middlewares/accesslog/`: ok.
+- `golangci-lint run ./pkg/proxy/httputil/... ./pkg/middlewares/accesslog/...`: 0 issues.

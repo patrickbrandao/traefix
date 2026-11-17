@@ -6,9 +6,41 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/traefik/traefik/v3/pkg/observability/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
+
+func TestNewService_serviceNameInContext(t *testing.T) {
+	testCases := []struct {
+		desc           string
+		tracingEnabled bool
+		expected       string
+	}{
+		{desc: "tracing enabled", tracingEnabled: true, expected: "myService"},
+		{desc: "tracing disabled", tracingEnabled: false},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			tracer := tracing.NewTracer(&mockTracer{}, nil, nil, nil)
+			ctx, span := tracer.Start(t.Context(), "entry", trace.WithSpanKind(trace.SpanKindServer))
+			defer span.End()
+
+			ctx = WithObservability(ctx, Observability{TracingEnabled: test.tracingEnabled})
+			req := httptest.NewRequest(http.MethodGet, "http://www.test.com/", nil).WithContext(ctx)
+
+			var got string
+			next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				got, _ = ServiceNameFromContext(r.Context())
+			})
+
+			NewService(t.Context(), "myService", next).ServeHTTP(httptest.NewRecorder(), req)
+
+			assert.Equal(t, test.expected, got)
+		})
+	}
+}
 
 func TestNewService(t *testing.T) {
 	type expected struct {

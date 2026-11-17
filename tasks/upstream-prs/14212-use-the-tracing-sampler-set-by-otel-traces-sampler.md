@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +216/-4 em 4 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/middleware/tracing, area/otel |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,22 @@ Muda a precedência entre env e sampleRate; quem já define OTEL_TRACES_SAMPLER 
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+### Achados
+
+- Fixes #11334, abordagem sugerida por maintainer na issue (suportar `OTEL_TRACES_SAMPLER`/`OTEL_TRACES_SAMPLER_ARG` em vez de opção nova). Reviews: automatizadas (Aikido, agente do Traefik, sem achados) e do autor.
+- Correção real: o SDK aplica o sampler do ambiente antes das opções, então o `WithSampler` explícito do Traefik sempre anulava as variáveis.
+- Segurança/custo: se o valor do ambiente for inválido, o SDK amostra 100% das raízes. O PR valida nome e razão (inclusive NaN) antes de ceder ao ambiente e, em caso de erro, mantém `sampleRate` com warning: um typo não liga amostragem total. A lista de samplers bate com `sdk/trace/sampler_env.go` da versão do SDK no `go.mod`.
+- Mudança de comportamento: quem já tem `OTEL_TRACES_SAMPLER` definido (ex.: OpenTelemetry Operator) passa a usá-lo em vez de `tracing.sampleRate`. Documentado.
+
+### Ajustes
+
+- Conflito em `docs/content/migrate/v3.md`: o PR documentava a mudança em `v3.7.19`; no Traefix a nota foi colocada na seção `v3.8.0` (base do fork).
+- Código e testes aplicados como estão.
+
+### Testes
+
+- `go test ./pkg/observability/types/`: ok.
+- `golangci-lint run ./pkg/observability/types/...`: 0 issues.

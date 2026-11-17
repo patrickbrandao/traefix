@@ -356,6 +356,9 @@
     [metrics.prometheus.headerLabels]
       name0 = "foobar"
       name1 = "foobar"
+    [metrics.prometheus.responseHeaderLabels]
+      name0 = "foobar"
+      name1 = "foobar"
   [metrics.datadog]
     address = "foobar"
     pushInterval = "42s"
@@ -458,6 +461,10 @@
 [accessLog]
   filePath = "foobar"
   format = "foobar"
+  maxSize = 42
+  maxAge = 42
+  maxBackups = 42
+  compress = true
   bufferingSize = 42
   addInternals = true
   [accessLog.filters]

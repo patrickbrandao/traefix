@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +30/-14 em 3 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, area/logs, size/S, area/middleware |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -38,3 +38,20 @@ Muda o formato do campo time, o que pode quebrar parsers que esperam RFC3339 sem
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+### Achados
+
+- Sem review de maintainer; correção pequena (fixes #9317): o campo `time` do access log JSON usava o default do logrus (RFC3339, segundos) e requisições no mesmo segundo ficavam com timestamps iguais.
+- O formato novo (`2006-01-02T15:04:05.000Z07:00`) continua RFC3339 válido, com largura fixa; parsers que esperam RFC3339 seguem funcionando. Só o formato `json` muda.
+- Nada de segurança envolvido.
+
+### Ajustes
+
+Nenhum: aplicado como está (o PR já reforça os testes existentes do formatter JSON).
+
+### Testes
+
+- `go test ./pkg/middlewares/accesslog/`: ok.
+- `golangci-lint run ./pkg/middlewares/accesslog/...`: 0 issues.

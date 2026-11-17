@@ -57,8 +57,10 @@ func (e *entryPointTracing) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 	start := time.Now()
 
 	// Follow semantic conventions defined by OTEL: https://opentelemetry.io/docs/specs/semconv/http/http-spans/#name
-	// At the moment this implementation only gets the {method} as there is no guarantee {target} is low cardinality.
+	// Only the {method} is known here, as there is no guarantee {target} is low cardinality:
+	// the router tracing middleware renames the span after its route when it has an unambiguous one.
 	tracingCtx, span := e.tracer.Start(tracingCtx, req.Method, trace.WithSpanKind(trace.SpanKindServer), trace.WithTimestamp(start))
+	tracingCtx = context.WithValue(tracingCtx, serverSpanKey{}, span)
 
 	// Associate the request context with the logger.
 	// This allows the logger to be aware of the tracing context and log accordingly (TraceID, SpanID, etc.).
@@ -71,6 +73,11 @@ func (e *entryPointTracing) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 
 	e.tracer.CaptureServerRequest(span, req)
 
+	// Plugins only see raw headers: without this, the outbound calls they make carry the
+	// client's trace context instead of Traefik's span and produce orphaned traces.
+	// Injected after CaptureServerRequest so the span records the headers the client sent.
+	tracing.InjectContextIntoCarrier(req)
+
 	recorder := newStatusCodeRecorder(rw, http.StatusOK)
 	e.next.ServeHTTP(recorder, req)
 
@@ -78,4 +85,11 @@ func (e *entryPointTracing) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 
 	end := time.Now()
 	span.End(trace.WithTimestamp(end))
+}
+
+type serverSpanKey struct{}
+
+func serverSpanFromContext(ctx context.Context) trace.Span {
+	span, _ := ctx.Value(serverSpanKey{}).(trace.Span)
+	return span
 }

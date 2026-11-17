@@ -3,6 +3,7 @@ package types
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/url"
 
@@ -50,6 +51,8 @@ type TraefikLog struct {
 func (l *TraefikLog) SetDefaults() {
 	l.Format = CommonFormat
 	l.Level = "ERROR"
+	// Rotated Traefik log files were always compressed before the option was honored.
+	l.Compress = true
 }
 
 // AccessLog holds the configuration settings for the access logger (middlewares/accesslog).
@@ -61,14 +64,35 @@ type AccessLog struct {
 	BufferingSize int64             `description:"Number of access log lines to process in a buffered way." json:"bufferingSize,omitempty" toml:"bufferingSize,omitempty" yaml:"bufferingSize,omitempty" export:"true"`
 	AddInternals  bool              `description:"Enables access log for internal services (ping, dashboard, etc...)." json:"addInternals,omitempty" toml:"addInternals,omitempty" yaml:"addInternals,omitempty" export:"true"`
 	DualOutput    bool              `description:"Enables access log output alongside OTLP. By default, this output is disabled when OTLP is configured." json:"dualOutput,omitempty" toml:"dualOutput,omitempty" yaml:"dualOutput,omitempty" export:"true"`
+	MaxSize       int               `description:"Maximum size in megabytes of the access log file before it gets rotated." json:"maxSize,omitempty" toml:"maxSize,omitempty" yaml:"maxSize,omitempty" export:"true"`
+	MaxAge        int               `description:"Maximum number of days to retain old access log files based on the timestamp encoded in their filename." json:"maxAge,omitempty" toml:"maxAge,omitempty" yaml:"maxAge,omitempty" export:"true"`
+	MaxBackups    int               `description:"Maximum number of old access log files to retain." json:"maxBackups,omitempty" toml:"maxBackups,omitempty" yaml:"maxBackups,omitempty" export:"true"`
+	Compress      bool              `description:"Determines if the rotated access log files should be compressed using gzip." json:"compress,omitempty" toml:"compress,omitempty" yaml:"compress,omitempty" export:"true"`
+	SampleRate    float64           `description:"Sampling rate for the OpenTelemetry access logs, between 0.0 and 1.0 (0.0 is treated as unset and keeps every record). Access log records are dropped randomly and independently of tracing." json:"sampleRate,omitempty" toml:"sampleRate,omitempty" yaml:"sampleRate,omitempty" export:"true"`
+
+	Anonymization *AccessLogAnonymization `description:"Access log client IP anonymization settings." json:"anonymization,omitempty" toml:"anonymization,omitempty" yaml:"anonymization,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 
 	OTLP *OTelLog `description:"Settings for OpenTelemetry." json:"otlp,omitempty" toml:"otlp,omitempty" yaml:"otlp,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+}
+
+// AccessLogAnonymization holds the client IP truncation settings for access logs.
+type AccessLogAnonymization struct {
+	IPv4Subnet int `description:"Truncate client IPv4 addresses to this prefix length (1-32); 0 disables truncation." json:"ipv4Subnet,omitempty" toml:"ipv4Subnet,omitempty" yaml:"ipv4Subnet,omitempty" export:"true"`
+	IPv6Subnet int `description:"Truncate client IPv6 addresses to this prefix length (1-128); 0 disables truncation." json:"ipv6Subnet,omitempty" toml:"ipv6Subnet,omitempty" yaml:"ipv6Subnet,omitempty" export:"true"`
+}
+
+// SetDefaults sets the default values.
+// Both families default to a prefix so that enabling anonymization never leaves one of them logged in full.
+func (a *AccessLogAnonymization) SetDefaults() {
+	a.IPv4Subnet = 24
+	a.IPv6Subnet = 48
 }
 
 // SetDefaults sets the default values.
 func (l *AccessLog) SetDefaults() {
 	l.Format = CommonFormat
 	l.FilePath = ""
+	l.SampleRate = 1.0
 	l.Filters = &AccessLogFilters{}
 	l.Fields = &AccessLogFields{}
 	l.Fields.SetDefaults()
@@ -180,7 +204,8 @@ func (o *OTelLog) SetDefaults() {
 }
 
 // NewLoggerProvider creates a new OpenTelemetry logger provider.
-func (o *OTelLog) NewLoggerProvider(ctx context.Context) (*otelsdk.LoggerProvider, error) {
+// The sampleRate, between 0.0 and 1.0, defines the proportion of log records actually exported.
+func (o *OTelLog) NewLoggerProvider(ctx context.Context, sampleRate float64) (*otelsdk.LoggerProvider, error) {
 	var (
 		err      error
 		exporter otelsdk.Exporter
@@ -201,12 +226,52 @@ func (o *OTelLog) NewLoggerProvider(ctx context.Context) (*otelsdk.LoggerProvide
 
 	// Register the trace provider to allow the global logger to access it.
 	bp := otelsdk.NewBatchProcessor(exporter)
+
+	// The OpenTelemetry logs SDK has no sampler, so sampling has to be done by wrapping the processor.
+	// Records are sampled randomly and independently of any trace, as logs do not necessarily belong to a trace.
+	var processor otelsdk.Processor = bp
+	// A zero rate means the option was not set (an AccessLog built without SetDefaults),
+	// and must not silently drop every record.
+	if sampleRate > 0 && sampleRate < 1.0 {
+		processor = newSamplingProcessor(bp, sampleRate)
+	}
+
 	loggerProvider := otelsdk.NewLoggerProvider(
 		otelsdk.WithResource(res),
-		otelsdk.WithProcessor(bp),
+		otelsdk.WithProcessor(processor),
 	)
 
 	return loggerProvider, nil
+}
+
+// samplingProcessor drops a fraction of the log records before they reach the wrapped processor.
+type samplingProcessor struct {
+	next       otelsdk.Processor
+	sampleRate float64
+}
+
+func newSamplingProcessor(next otelsdk.Processor, sampleRate float64) otelsdk.Processor {
+	return &samplingProcessor{next: next, sampleRate: sampleRate}
+}
+
+func (p *samplingProcessor) Enabled(ctx context.Context, params otelsdk.EnabledParameters) bool {
+	return p.next.Enabled(ctx, params)
+}
+
+func (p *samplingProcessor) OnEmit(ctx context.Context, record *otelsdk.Record) error {
+	if rand.Float64() >= p.sampleRate {
+		return nil
+	}
+
+	return p.next.OnEmit(ctx, record)
+}
+
+func (p *samplingProcessor) Shutdown(ctx context.Context) error {
+	return p.next.Shutdown(ctx)
+}
+
+func (p *samplingProcessor) ForceFlush(ctx context.Context) error {
+	return p.next.ForceFlush(ctx)
 }
 
 func (o *OTelLog) buildHTTPExporter() (*otlploghttp.Exporter, error) {
@@ -248,7 +313,7 @@ func (o *OTelLog) buildGRPCExporter() (*otlploggrpc.Exporter, error) {
 	}
 
 	opts := []otlploggrpc.Option{
-		otlploggrpc.WithEndpoint(fmt.Sprintf("%s:%s", host, port)),
+		otlploggrpc.WithEndpoint(net.JoinHostPort(host, port)),
 		otlploggrpc.WithHeaders(o.GRPC.Headers),
 		otlploggrpc.WithCompressor(gzip.Name),
 	}

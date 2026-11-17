@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +438/-5 em 12 arquivos |
 | Labels | kind/enhancement, status/1-needs-design-review, size/L |
-| Status | pendente |
+| Status | adiado |
 
 ## O que faz
 
@@ -42,3 +42,25 @@ Label needs-design-review e sem comentários de maintainer. Implementa o primeir
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+### Achados
+
+- Sem nenhum comentário ou review de maintainer; é feature nova (endpoint `/ready`) que o upstream ainda não discutiu (issue #10458 aberta).
+- Bug de correção grave: a prontidão é calculada por `len(newConfigs) >= expectedProviderCount` em `applyConfigurations`, mas `receiveConfigurations` descarta mensagens vazias (`Skipping empty configuration`). Um provider sem recursos (Docker sem containers, CRD sem IngressRoute, Consul sem serviços...) nunca entra no mapa e o `/ready` fica em 503 para sempre: o pod nunca fica Ready no Kubernetes.
+- O provider `rest` entra na contagem, mas o `Provide` dele não envia nada até o primeiro PUT: com `providers.rest` habilitado o `/ready` também nunca fica pronto. O mesmo vale para plugins de provider que só enviam sob demanda.
+- Rota `PathPrefix(/ready)` com prioridade máxima: se `ready.entryPoint` apontar para um entrypoint público, captura qualquer caminho que comece com `/ready` (`/readyz`, `/ready-made`...). Deveria ser `Path`.
+- Exposição: só devolve status (sem dados), no entrypoint interno `traefik` por padrão, como o `/ping`; aceitável.
+
+### Ajustes
+
+Nenhum.
+
+### Testes
+
+Não aplicável.
+
+### Motivo
+
+Adiado: a lógica de prontidão precisa ser refeita (contar providers que já reportaram, inclusive com configuração vazia, e excluir providers sob demanda como `rest`) antes de ser confiável como readiness probe; sem isso o endpoint pode travar rollouts. Reavaliar quando o upstream discutir o design.

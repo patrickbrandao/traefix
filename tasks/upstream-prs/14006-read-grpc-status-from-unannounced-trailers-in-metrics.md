@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +21/-3 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/middleware/metrics |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -37,3 +37,21 @@ Pequeno (+21/-3), em um arquivo de metrics. Um review COMMENTED; autor pediu rev
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+### Achados
+
+- Correção pequena e correta (fixes #14005): quando o backend envia `grpc-status` como trailer sem anunciá-lo (Kestrel), o reverse proxy grava `Trailer:Grpc-Status` no header, e as métricas registravam toda chamada bem-sucedida como `code="2"` (Unknown).
+- `Header().Get(http.TrailerPrefix + "Grpc-Status")` funciona porque a chave com `:` não é canonicalizada, e o proxy grava exatamente esse formato.
+- Sem risco de cardinalidade: o valor passa por `codes.Code.UnmarshalJSON`; valores inválidos viram `Unknown`.
+- Só review automatizada; sem maintainer humano.
+
+### Ajustes
+
+Nenhum: aplicado como está (com o teste do PR).
+
+### Testes
+
+- `go test ./pkg/middlewares/metrics/`: ok.
+- `golangci-lint run ./pkg/middlewares/metrics/...`: 0 issues.

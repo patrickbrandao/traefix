@@ -47,14 +47,15 @@ const (
 	routerRespsBytesTotalName = metricRouterPrefix + "responses_bytes_total"
 
 	// service level.
-	metricServicePrefix        = MetricNamePrefix + "service_"
-	serviceReqsTotalName       = metricServicePrefix + "requests_total"
-	serviceReqsTLSTotalName    = metricServicePrefix + "requests_tls_total"
-	serviceReqDurationName     = metricServicePrefix + "request_duration_seconds"
-	serviceRetriesTotalName    = metricServicePrefix + "retries_total"
-	serviceServerUpName        = metricServicePrefix + "server_up"
-	serviceReqsBytesTotalName  = metricServicePrefix + "requests_bytes_total"
-	serviceRespsBytesTotalName = metricServicePrefix + "responses_bytes_total"
+	metricServicePrefix         = MetricNamePrefix + "service_"
+	serviceReqsTotalName        = metricServicePrefix + "requests_total"
+	serviceReqsTLSTotalName     = metricServicePrefix + "requests_tls_total"
+	serviceReqDurationName      = metricServicePrefix + "request_duration_seconds"
+	serviceRetriesTotalName     = metricServicePrefix + "retries_total"
+	serviceServerUpName         = metricServicePrefix + "server_up"
+	serviceInflightRequestsName = metricServicePrefix + "inflight_requests"
+	serviceReqsBytesTotalName   = metricServicePrefix + "requests_bytes_total"
+	serviceRespsBytesTotalName  = metricServicePrefix + "responses_bytes_total"
 )
 
 // promState holds all metric state internally and acts as the only Collector we register for Prometheus.
@@ -147,7 +148,7 @@ func initStandardRegistry(config *otypes.Prometheus) Registry {
 		entryPointReqs := newCounterWithHeadersFrom(stdprometheus.CounterOpts{
 			Name: entryPointReqsTotalName,
 			Help: "How many HTTP requests processed on an entrypoint, partitioned by status code, protocol, and method.",
-		}, config.HeaderLabels, []string{"code", "method", "protocol", "entrypoint"})
+		}, config.HeaderLabels, config.ResponseHeaderLabels, []string{"code", "method", "protocol", "entrypoint"})
 		entryPointReqsTLS := newCounterFrom(stdprometheus.CounterOpts{
 			Name: entryPointReqsTLSTotalName,
 			Help: "How many HTTP requests with TLS processed on an entrypoint, partitioned by TLS Version and TLS cipher Used.",
@@ -185,7 +186,7 @@ func initStandardRegistry(config *otypes.Prometheus) Registry {
 		routerReqs := newCounterWithHeadersFrom(stdprometheus.CounterOpts{
 			Name: routerReqsTotalName,
 			Help: "How many HTTP requests are processed on a router, partitioned by service, status code, protocol, and method.",
-		}, config.HeaderLabels, []string{"code", "method", "protocol", "router", "service"})
+		}, config.HeaderLabels, config.ResponseHeaderLabels, []string{"code", "method", "protocol", "router", "service"})
 		routerReqsTLS := newCounterFrom(stdprometheus.CounterOpts{
 			Name: routerReqsTLSTotalName,
 			Help: "How many HTTP requests with TLS are processed on a router, partitioned by service, TLS Version, and TLS cipher Used.",
@@ -222,7 +223,7 @@ func initStandardRegistry(config *otypes.Prometheus) Registry {
 		serviceReqs := newCounterWithHeadersFrom(stdprometheus.CounterOpts{
 			Name: serviceReqsTotalName,
 			Help: "How many HTTP requests processed on a service, partitioned by status code, protocol, and method.",
-		}, config.HeaderLabels, []string{"code", "method", "protocol", "service"})
+		}, config.HeaderLabels, config.ResponseHeaderLabels, []string{"code", "method", "protocol", "service"})
 		serviceReqsTLS := newCounterFrom(stdprometheus.CounterOpts{
 			Name: serviceReqsTLSTotalName,
 			Help: "How many HTTP requests with TLS processed on a service, partitioned by TLS version and TLS cipher.",
@@ -240,6 +241,10 @@ func initStandardRegistry(config *otypes.Prometheus) Registry {
 			Name: serviceServerUpName,
 			Help: "service server is up, described by gauge value of 0 or 1.",
 		}, []string{"service", "url"})
+		serviceInflightRequests := newGaugeFrom(stdprometheus.GaugeOpts{
+			Name: serviceInflightRequestsName,
+			Help: "The number of in-flight requests on a service, partitioned by method and protocol. For upgraded connections (WebSocket/SSE) this includes the full session lifetime.",
+		}, []string{"method", "protocol", "service"})
 		serviceReqsBytesTotal := newCounterFrom(stdprometheus.CounterOpts{
 			Name: serviceReqsBytesTotalName,
 			Help: "The total size of requests in bytes received by a service, partitioned by status code, protocol, and method.",
@@ -255,6 +260,7 @@ func initStandardRegistry(config *otypes.Prometheus) Registry {
 			serviceReqDurations.hv,
 			serviceRetries.cv,
 			serviceServerUp.gv,
+			serviceInflightRequests.gv,
 			serviceReqsBytesTotal.cv,
 			serviceRespsBytesTotal.cv,
 		)
@@ -264,6 +270,7 @@ func initStandardRegistry(config *otypes.Prometheus) Registry {
 		reg.serviceReqDurationHistogram, _ = NewHistogramWithScale(serviceReqDurations, time.Second)
 		reg.serviceRetriesCounter = serviceRetries
 		reg.serviceServerUpGauge = serviceServerUp
+		reg.serviceInflightRequestsGauge = serviceInflightRequests
 		reg.serviceReqsBytesCounter = serviceReqsBytesTotal
 		reg.serviceRespsBytesCounter = serviceRespsBytesTotal
 	}
@@ -486,17 +493,31 @@ func (d *dynamicConfig) hasServerURL(serviceName, serverURL string) bool {
 	return false
 }
 
-func newCounterWithHeadersFrom(opts stdprometheus.CounterOpts, headers map[string]string, labelNames []string) *counterWithHeaders {
+func newCounterWithHeadersFrom(opts stdprometheus.CounterOpts, reqHeaders, respHeaders map[string]string, labelNames []string) *counterWithHeaders {
 	var headerLabels []string
-	for k := range headers {
+	for k := range reqHeaders {
 		headerLabels = append(headerLabels, k)
 	}
 
+	// A label declared both for a request and a response header would make the CounterVec
+	// panic on every request (duplicate label names), so the request header wins.
+	filteredRespHeaders := make(map[string]string, len(respHeaders))
+	for k, v := range respHeaders {
+		if _, exists := reqHeaders[k]; exists {
+			log.Warn().Str("label", k).Str("metric", opts.Name).Msg("Ignoring response header label already defined as a request header label")
+			continue
+		}
+		filteredRespHeaders[k] = v
+		headerLabels = append(headerLabels, k)
+	}
+	respHeaders = filteredRespHeaders
+
 	cv := stdprometheus.NewCounterVec(opts, append(labelNames, headerLabels...))
 	c := &counterWithHeaders{
-		name:    opts.Name,
-		headers: headers,
-		cv:      cv,
+		name:            opts.Name,
+		requestHeaders:  reqHeaders,
+		responseHeaders: respHeaders,
+		cv:              cv,
 	}
 	if len(labelNames) == 0 && len(headerLabels) == 0 {
 		c.collector = cv.WithLabelValues()
@@ -509,18 +530,23 @@ type counterWithHeaders struct {
 	name             string
 	cv               *stdprometheus.CounterVec
 	labelNamesValues labelNamesValues
-	headers          map[string]string
+	requestHeaders   map[string]string
+	responseHeaders  map[string]string
 	collector        stdprometheus.Counter
 }
 
-func (c *counterWithHeaders) With(headers http.Header, labelValues ...string) CounterWithHeaders {
-	for headerLabel, headerKey := range c.headers {
-		labelValues = append(labelValues, headerLabel, headers.Get(headerKey))
+func (c *counterWithHeaders) With(reqHeaders, respHeaders http.Header, labelValues ...string) CounterWithHeaders {
+	for headerLabel, headerKey := range c.requestHeaders {
+		labelValues = append(labelValues, headerLabel, reqHeaders.Get(headerKey))
+	}
+	for headerLabel, headerKey := range c.responseHeaders {
+		labelValues = append(labelValues, headerLabel, respHeaders.Get(headerKey))
 	}
 	lnv := c.labelNamesValues.With(labelValues...)
 	return &counterWithHeaders{
 		name:             c.name,
-		headers:          c.headers,
+		requestHeaders:   c.requestHeaders,
+		responseHeaders:  c.responseHeaders,
 		cv:               c.cv,
 		labelNamesValues: lnv,
 		collector:        c.cv.With(lnv.ToLabels()),

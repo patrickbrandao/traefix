@@ -60,6 +60,9 @@ func (w *middlewareTracing) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 
 		req = req.WithContext(tracingCtx)
 
+		// Plugins only see raw headers: the outbound calls they make must carry this span.
+		tracing.InjectContextIntoCarrier(req)
+
 		span.SetAttributes(attribute.String("traefik.middleware.name", w.name))
 	}
 

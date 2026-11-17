@@ -12,9 +12,11 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/traefik/traefik/v3/pkg/middlewares/accesslog"
 	"github.com/traefik/traefik/v3/pkg/observability/logs"
 	"golang.org/x/net/http/httpguts"
 )
@@ -199,10 +201,45 @@ func ErrorHandlerWithContext(ctx context.Context, w http.ResponseWriter, err err
 		logger.Debug().Err(err).Msgf("%d %s", statusCode, statusText(statusCode))
 	}
 
+	// Populate the access log OriginError field, unless the client closed the request.
+	if statusCode != StatusClientClosedRequest {
+		if table := accesslog.GetLogDataTable(ctx); table != nil {
+			table.Core[accesslog.OriginError] = originErrorMessage(err)
+		}
+	}
+
 	w.WriteHeader(statusCode)
 	if _, werr := w.Write([]byte(statusText(statusCode))); werr != nil {
 		logger.Debug().Err(werr).Msg("Error while writing status code")
 	}
+}
+
+// maxOriginErrorLength bounds the OriginError access log field, as some error messages
+// embed values sent by the client (e.g. the requested Upgrade protocol).
+const maxOriginErrorLength = 512
+
+// originErrorMessage returns the error message for the OriginError access log field.
+// A *url.Error is unwrapped because its message embeds the full request URL, query string included,
+// which would bypass the access log query parameters redaction. Control characters are replaced
+// so that client-controlled values cannot forge lines in non-JSON log outputs.
+func originErrorMessage(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		err = urlErr.Err
+	}
+
+	msg := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, err.Error())
+
+	if len(msg) > maxOriginErrorLength {
+		msg = strings.ToValidUTF8(msg[:maxOriginErrorLength], "")
+	}
+
+	return msg
 }
 
 func statusText(statusCode int) string {

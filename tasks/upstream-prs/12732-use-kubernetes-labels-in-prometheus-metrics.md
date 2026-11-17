@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +101/-44 em 5 arquivos |
 | Labels | kind/enhancement, status/1-needs-design-review, size/L, area/middleware/metrics |
-| Status | pendente |
+| Status | adiado |
 
 ## O que faz
 
@@ -39,3 +39,26 @@ Depende de PRs ainda não merged (#12721 e #12913, que o autor disse ter rebasea
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+### Achados
+
+- Em `status/1-needs-design-review`: os maintainers disseram que querem definir o conjunto completo de labels (equivalente ao ingress-nginx) antes de mudar as séries, para não quebrar dashboards depois. Sem decisão até agora.
+- Os labels são lidos do `accesslog.LogData` do contexto, que só existe quando o access log está habilitado: sem access log, todas as séries saem com `namespace="none"`, `name="none"`, sem aviso.
+- `NeedsKubernetesLabels` no `MultiRegistry` vira `true` se qualquer registry pedir, e os labels extras passam a ir também para Datadog/StatsD/InfluxDB/OTLP, que não declararam essas dimensões.
+- `kind` é fixo em `ingress` (CRD/Gateway API não cobertos); type assertions `v.(string)` sem checagem podem dar panic se o tipo do campo mudar.
+- Sem testes e sem documentação (checklist do PR desmarcado).
+- Cardinalidade: aumenta as séries por namespace/ingress/serviço (limitado ao número de recursos, aceitável, mas multiplica todas as séries HTTP).
+
+### Ajustes
+
+Nenhum.
+
+### Testes
+
+Não aplicável.
+
+### Motivo
+
+Adiado: design ainda em aberto no upstream (conjunto de labels não definido), dependência implícita do access log e vazamento dos labels para os outros backends de métricas. Reavaliar quando o upstream fechar o design.

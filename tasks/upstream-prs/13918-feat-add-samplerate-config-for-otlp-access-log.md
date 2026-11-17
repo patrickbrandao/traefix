@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +262/-4 em 9 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, area/logs, size/L, area/middleware |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,25 @@ Amostragem aleatória simples, sem determinismo; o autor deixou aberto se for ne
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+### Achados
+
+- Reviews só automatizadas (agente de IA, Aikido) e do próprio autor; sem maintainer humano. PR feito com assistência de IA, declarado.
+- Amostragem aleatória (`math/rand/v2`, seguro para concorrência) via wrapper do processor OTLP; só afeta a exportação OTLP do access log, não o arquivo/stdout.
+- Armadilha: `SampleRate` é `float64` com default 1.0 via `SetDefaults`. Um `AccessLog` montado sem `SetDefaults` (código, testes) tem `SampleRate == 0` e, no PR, isso descartava TODO o access log OTLP em silêncio. O próprio teste do PR tratava 0 como "descarta tudo".
+- Conflito com os campos de rotação (#12752) e anonimização (#13526) já importados em `AccessLog`.
+
+### Ajustes
+
+- `NewLoggerProvider` só envolve o processor quando `0 < sampleRate < 1`; 0 é tratado como "não definido" (exporta tudo). Documentado na descrição do campo e na doc.
+- Teste `TestAccessLogSampling` ajustado: taxa ínfima (1e-12) não exporta; 0 exporta.
+- Conflito resolvido mantendo `MaxSize/MaxAge/MaxBackups/Compress` e `Anonymization`; `go generate`.
+- Esta assinatura nova de `NewLoggerProvider` (com `sampleRate`) é a base para #13993/#13994.
+
+### Testes
+
+- `go vet ./pkg/... ./cmd/...`: ok.
+- `go test ./pkg/middlewares/accesslog/ ./pkg/observability/types/ ./pkg/config/static/ ./pkg/observability/logs/`: ok.
+- `golangci-lint run ./pkg/middlewares/accesslog/... ./pkg/observability/... ./pkg/config/static/...`: 0 issues.

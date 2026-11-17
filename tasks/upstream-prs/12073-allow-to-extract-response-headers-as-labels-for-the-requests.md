@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +306/-53 em 18 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/S, area/middleware/metrics |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,27 @@ Toca 18 arquivos, boa parte testes e config. Label status/2-needs-review, sem re
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+### Achados
+
+- Sem review de maintainer; feature opt-in (`metrics.prometheus.responseHeaderLabels`), só no Prometheus.
+- Bug: um mesmo nome de label em `headerLabels` e `responseHeaderLabels` gera nomes duplicados no `CounterVec`; o `With` do Prometheus entra em panic a cada requisição.
+- Risco de cardinalidade: cada valor distinto do header vira série em memória. Os valores vêm do backend (não do cliente, como em `headerLabels`), mas um header com IDs ou datas cresce sem limite.
+- O PR adicionava `integration/fixtures/grpc/config_1598140383.toml`, um arquivo temporário gerado por teste (com chave privada de teste), lixo sem uso.
+- Nenhum teste novo exercitava de fato os headers de resposta (só ajustes de assinatura).
+
+### Ajustes
+
+- Labels de resposta que repetem um label de request são ignorados com warning (o request vence), evitando o panic.
+- Removido o fixture temporário; `cli-ref.md`/`env-ref.md` mantidos como estão no Traefix; `docs/content/observability/metrics/prometheus.md` não existe mais e ficou de fora.
+- Doc: aviso de cardinalidade e da regra de colisão.
+- Teste novo `TestCounterWithHeaders_responseHeaderLabels` (valor do header de resposta e colisão sem panic).
+- `go generate` rodado: docs gerados consistentes.
+
+### Testes
+
+- `go build ./...`: ok.
+- `go test ./pkg/observability/metrics/ ./pkg/middlewares/metrics/`: ok (`TestInfluxDB2` é instável por timing e falhou uma vez; passa isolado e na reexecução, sem relação com a mudança).
+- `golangci-lint run ./pkg/observability/metrics/... ./pkg/middlewares/metrics/...`: 0 issues.

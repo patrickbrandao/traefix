@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +97/-12 em 4 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, area/logs, size/M, area/otel |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,23 @@ Muda a assinatura de SetupOTelLogger (funcao exportada, mas com um unico caller 
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+### Achados
+
+- Mesmo bug do #13993, no provider dos logs do próprio Traefik (`log.otlp`): nunca era encerrado e os registros na fila do batch processor se perdiam a cada parada.
+- O `defer` do closer é registrado antes do `svr.Close()`, então roda depois dele e os logs do desligamento também são exportados. Correto.
+- Reviews só automatizadas e do autor; sem maintainer humano.
+- O diff não aplica sobre o Traefix: `setupLogger` já devolve a função de rotação do log (#12752) e `NewLoggerProvider` recebe `sampleRate` (#13918).
+
+### Ajustes
+
+- `setupLogger` passa a devolver `(rotate func() error, closer io.Closer, err)`, preservando a rotação do #12752; `runCmd` e o teste de `cmd/traefik` ajustados.
+- `SetupOTelLogger` reimplementado com a assinatura nova (`zerolog.Logger, io.Closer, error`) e `NewLoggerProvider(ctx, 1.0)`; testes do PR aplicados sem mudanças.
+
+### Testes
+
+- `go vet ./cmd/traefik/ ./pkg/observability/logs/`: ok.
+- `go test ./cmd/traefik/ ./pkg/observability/logs/`: ok.
+- `golangci-lint run ./cmd/traefik/... ./pkg/observability/logs/...`: 0 issues.
