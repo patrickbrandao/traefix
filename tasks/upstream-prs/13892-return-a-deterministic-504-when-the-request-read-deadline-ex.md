@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +194/-3 em 5 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/server |
-| Status | pendente |
+| Status | adiado |
 
 ## O que faz
 
@@ -38,3 +38,28 @@ Mexe em ComputeStatusCode e no contexto da requisição no entrypoint. Status ne
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, status "review". Revisores externos apontaram uma corrida no próprio mecanismo, sem decisão de maintainer.
+
+### Achados no PR original
+
+- **Heurística com corrida reconhecida pelo autor:** o PR distingue timeout de leitura de desconexão do cliente comparando
+  `time.Now()` com um deadline recalculado na entrada do handler, que não é o deadline realmente aplicado à conexão.
+  Uma desconexão real perto do deadline vira `504`, e a corrida entre os dois caminhos de cancelamento só fica menor,
+  não desaparece.
+- **Mudança de API exportada:** `ComputeStatusCode(err)` vira `ComputeStatusCode(ctx, err)` e a chave de contexto é do
+  tipo string (`key = "ReadDeadline"`), contra a convenção do projeto de usar chaves struct não exportadas.
+- O ganho é só cosmético (o status registrado em access log e métricas, `499` ou `504`), sem impacto de segurança.
+- Sobreposição com o #13528 (já importado), que mexe no mesmo `ComputeStatusCode` e adiciona um teste
+  `Test_ComputeStatusCode`. O Traefix também tem um `withReadTimeout` local no HTTP/3 que precisaria ser considerado.
+
+### Motivo do adiamento
+
+Benefício pequeno contra uma mudança de assinatura exportada e uma heurística com corrida conhecida. Vale reavaliar se o
+upstream aceitar a abordagem ou passar a usar o deadline real da conexão.
+
+### Testes
+
+Nenhum. O PR não foi aplicado.
