@@ -257,7 +257,7 @@ func TestBalancerOneServerFenced(t *testing.T) {
 	assert.Equal(t, 0, recorder.save["second"])
 }
 
-// TestBalancerAllFencedServers tests that all fenced servers result in no available server.
+// TestBalancerAllFencedServers tests that fenced servers get new requests when no other server is healthy.
 func TestBalancerAllFencedServers(t *testing.T) {
 	balancer := New(nil, false)
 
@@ -267,7 +267,7 @@ func TestBalancerAllFencedServers(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	assert.Equal(t, http.StatusServiceUnavailable, recorder.Result().StatusCode)
+	assert.Equal(t, http.StatusOK, recorder.Result().StatusCode)
 }
 
 // TestBalancerRegisterStatusUpdaterWithoutHealthCheck tests error when registering updater without health check.

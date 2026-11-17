@@ -281,18 +281,25 @@ func (b *Balancer) Add(name string, handler http.Handler, weight *int, fenced bo
 	}
 }
 
-// getHealthyServers returns the list of healthy, non-fenced servers.
+// getHealthyServers returns the list of healthy, non-fenced servers, or the healthy fenced ones when there are none.
 func (b *Balancer) getHealthyServers() []*namedHandler {
 	b.handlersMu.RLock()
 	defer b.handlersMu.RUnlock()
 
-	var healthy []*namedHandler
+	var healthy, healthyFenced []*namedHandler
 	for _, h := range b.handlers {
 		if _, ok := b.status[h.name]; ok {
-			if _, fenced := b.fenced[h.name]; !fenced {
+			if _, fenced := b.fenced[h.name]; fenced {
+				healthyFenced = append(healthyFenced, h)
+			} else {
 				healthy = append(healthy, h)
 			}
 		}
+	}
+	// Fenced (terminating yet still serving) handlers only get new requests when no other healthy handler is left,
+	// like kube-proxy does, so that single replica or Recreate rollouts do not answer 503 during the termination.
+	if len(healthy) == 0 {
+		healthy = healthyFenced
 	}
 	return healthy
 }

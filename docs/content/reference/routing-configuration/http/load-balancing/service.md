@@ -142,6 +142,13 @@ Servers represent individual backend instances for your service. The [service lo
 
 The `strategy` option on the load balancer determines how traffic is distributed among the backend servers.
 
+!!! info "Terminating Kubernetes endpoints"
+
+    With the Kubernetes providers, servers backed by terminating yet still serving endpoints are fenced:
+    they only keep receiving the requests tied to their sticky cookie.
+    When no other healthy server is left, for example during the rollout of a single replica or with the `Recreate` deployment strategy,
+    every strategy sends the new requests to the fenced servers instead of answering `503`.
+
 #### Weighted Round Robin (wrr)
 
 The default strategy. Distributes requests evenly across all servers in rotation, respecting server weights.

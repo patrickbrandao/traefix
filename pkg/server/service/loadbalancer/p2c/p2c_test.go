@@ -265,7 +265,7 @@ func TestBalancerAllServersFenced(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	assert.Equal(t, http.StatusServiceUnavailable, recorder.Result().StatusCode)
+	assert.Equal(t, http.StatusOK, recorder.Result().StatusCode)
 }
 
 type responseRecorder struct {

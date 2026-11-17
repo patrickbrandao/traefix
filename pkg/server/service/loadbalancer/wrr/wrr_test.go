@@ -227,7 +227,63 @@ func TestBalancerAllServersFenced(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	assert.Equal(t, http.StatusServiceUnavailable, recorder.Result().StatusCode)
+	assert.Equal(t, http.StatusOK, recorder.Result().StatusCode)
+}
+
+func TestBalancerFencedFallback(t *testing.T) {
+	balancer := New(nil, true)
+
+	recorder := &responseRecorder{ResponseRecorder: httptest.NewRecorder(), save: map[string]int{}}
+
+	balancer.Add("first", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("server", "first")
+		rw.WriteHeader(http.StatusOK)
+	}), new(1), false)
+
+	balancer.Add("fenced", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("server", "fenced")
+		rw.WriteHeader(http.StatusOK)
+	}), new(1), true)
+
+	balancer.SetStatus(t.Context(), "first", false)
+
+	for range 3 {
+		balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	}
+
+	assert.Equal(t, 3, recorder.save["fenced"])
+
+	balancer.SetStatus(t.Context(), "first", true)
+
+	for range 3 {
+		balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	}
+
+	assert.Equal(t, 3, recorder.save["first"])
+	assert.Equal(t, 3, recorder.save["fenced"])
+}
+
+func TestBalancerFencedNotPreferredOverLowWeight(t *testing.T) {
+	balancer := New(nil, false)
+
+	recorder := &responseRecorder{ResponseRecorder: httptest.NewRecorder(), save: map[string]int{}}
+
+	balancer.Add("fenced", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("server", "fenced")
+		rw.WriteHeader(http.StatusOK)
+	}), new(100), true)
+
+	balancer.Add("light", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("server", "light")
+		rw.WriteHeader(http.StatusOK)
+	}), new(1), false)
+
+	for range 5 {
+		balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	}
+
+	assert.Equal(t, 5, recorder.save["light"])
+	assert.Equal(t, 0, recorder.save["fenced"])
 }
 
 func TestSticky(t *testing.T) {
