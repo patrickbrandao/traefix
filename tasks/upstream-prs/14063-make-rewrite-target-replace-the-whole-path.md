@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +41/-17 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/provider/k8s/ingress-nginx |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -37,3 +37,23 @@ Pequeno (+41/-17). Muda comportamento para ingresses que dependiam do sufixo ser
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- `rewrite-target` usava `ReplaceAllString`, que substitui só o **trecho casado** e mantém o resto do caminho. Com um regex não ancorado (por exemplo, `/api` → `/`), `/api/v1/users` virava `//v1/users`, e `/api/api` com `/new` virava `/new/new`. O ingress-nginx usa `rewrite regex replacement`, que troca o caminho inteiro. O PR passa a usar `FindStringSubmatchIndex` + `ExpandString`: casa uma vez e expande só o template.
+- Com isso, o hack que acrescentava `.*` ao regex quando o destino era uma URL absoluta deixa de ser necessário (o sufixo não casado já não vaza).
+- O `X-Forwarded-Prefix` também era calculado com `ReplaceAllString` e carregava o sufixo; agora usa o mesmo match.
+- Segurança: a mudança reduz a superfície, porque o caminho enviado ao backend passa a ser exatamente o template, sem trechos do caminho do cliente que não foram casados. Aprovado por maintainer (gndz07).
+- Compatível com #13754/#13770: a URI e o caminho originais continuam guardados antes do rewrite.
+
+**Ajustes**
+
+- Nenhum ajuste funcional.
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/middlewares/ingressnginx/...` ok.
+- `golangci-lint run ./pkg/middlewares/ingressnginx/...`: 0 issues.
