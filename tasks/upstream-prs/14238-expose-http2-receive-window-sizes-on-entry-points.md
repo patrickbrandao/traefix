@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +26/-6 em 5 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/S, area/server |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,26 @@ O próprio autor marca como draft para discussão, com contribuição assistida 
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, status "review"; o autor o descreve como "draft for discussion".
+
+### Achados no PR original
+
+- Repassa `MaxReceiveBufferPerConnection` e `MaxReceiveBufferPerStream` ao `http.HTTP2Config` do Go. O padrão (`0`)
+  mantém o comportamento atual. A validação rejeita conexão abaixo de 65535 e valores de stream negativos.
+- **Risco de memória (configuração do operador):** janelas maiores permitem que cada cliente envie mais dados ainda não
+  lidos. O pior caso por conexão é `maxReceiveBufferPerConnection`, e um valor alto multiplicado por muitas conexões abre
+  espaço para DoS de memória. O PR não avisava sobre isso.
+- O teste só confere o repasse dos valores, sem cobrir a validação.
+
+### Ajustes
+
+- Doc: aviso sobre o consumo de memória por conexão nas duas opções.
+- Testes de validação (conexão abaixo do mínimo, stream negativo).
+
+### Testes
+
+- `go test ./pkg/server/ -run 'TestHTTP2Config|TestHTTP2ReceiveBufferValidation'` ok; `go test ./pkg/config/static/` ok.
+- `golangci-lint run ./pkg/server/... ./pkg/config/static/...`: 0 issues.

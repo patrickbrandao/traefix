@@ -1336,6 +1336,8 @@ func TestHTTP2Config(t *testing.T) {
 	expectedMaxConcurrentStreams := 42
 	expectedEncoderTableSize := 128
 	expectedDecoderTableSize := 256
+	expectedReceiveBufferPerConnection := 33554432
+	expectedReceiveBufferPerStream := 16777216
 
 	// Create a listener for the server.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -1350,6 +1352,8 @@ func TestHTTP2Config(t *testing.T) {
 	configuration.HTTP2.MaxConcurrentStreams = int32(expectedMaxConcurrentStreams)
 	configuration.HTTP2.MaxEncoderHeaderTableSize = int32(expectedEncoderTableSize)
 	configuration.HTTP2.MaxDecoderHeaderTableSize = int32(expectedDecoderTableSize)
+	configuration.HTTP2.MaxReceiveBufferPerConnection = int32(expectedReceiveBufferPerConnection)
+	configuration.HTTP2.MaxReceiveBufferPerStream = int32(expectedReceiveBufferPerStream)
 
 	// Create the HTTP server using newHTTPServer.
 	server, err := newHTTPServer(t.Context(), ln, configuration, false, requestdecorator.New(nil))
@@ -1361,6 +1365,62 @@ func TestHTTP2Config(t *testing.T) {
 	assert.Equal(t, expectedMaxConcurrentStreams, httpServer.HTTP2.MaxConcurrentStreams)
 	assert.Equal(t, expectedEncoderTableSize, httpServer.HTTP2.MaxEncoderHeaderTableSize)
 	assert.Equal(t, expectedDecoderTableSize, httpServer.HTTP2.MaxDecoderHeaderTableSize)
+	assert.Equal(t, expectedReceiveBufferPerConnection, httpServer.HTTP2.MaxReceiveBufferPerConnection)
+	assert.Equal(t, expectedReceiveBufferPerStream, httpServer.HTTP2.MaxReceiveBufferPerStream)
+}
+
+func TestHTTP2ReceiveBufferValidation(t *testing.T) {
+	testCases := []struct {
+		desc          string
+		perConnection int32
+		perStream     int32
+		expectedError string
+	}{
+		{
+			desc: "defaults",
+		},
+		{
+			desc:          "per connection minimum",
+			perConnection: 65535,
+		},
+		{
+			desc:          "per connection below minimum",
+			perConnection: 65534,
+			expectedError: "max receive buffer per connection value must be zero or at least 65535 bytes",
+		},
+		{
+			desc:          "per connection negative",
+			perConnection: -1,
+			expectedError: "max receive buffer per connection value must be zero or at least 65535 bytes",
+		},
+		{
+			desc:          "per stream negative",
+			perStream:     -1,
+			expectedError: "max receive buffer per stream value must be greater than or equal to zero",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = ln.Close() })
+
+			configuration := &static.EntryPoint{}
+			configuration.SetDefaults()
+			configuration.HTTP2.MaxReceiveBufferPerConnection = test.perConnection
+			configuration.HTTP2.MaxReceiveBufferPerStream = test.perStream
+
+			_, err = newHTTPServer(t.Context(), ln, configuration, false, requestdecorator.New(nil))
+			if test.expectedError != "" {
+				require.EqualError(t, err, test.expectedError)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
 
 // TestRequestTargetForms tests the handling of the request target forms through the whole entrypoint handler chain,
