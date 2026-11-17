@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/codes"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -17044,4 +17045,39 @@ func TestLoadTLSRoutes_denyUnknownHostEntryPoints(t *testing.T) {
 
 	require.Contains(t, conf.TCP.Routers, "deny-unknown-host")
 	assert.Equal(t, []string{"tls-1", "tls-2"}, conf.TCP.Routers["deny-unknown-host"].EntryPoints)
+}
+
+func TestEndpointSliceReadyCondition(t *testing.T) {
+	service := &corev1.Service{
+		Name:      "backend",
+		Namespace: "default",
+		Spec:      corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "app", Port: 8000}}},
+	}
+	endpointSlice := &discoveryv1.EndpointSlice{
+		Name:        "backend-abc",
+		Namespace:   "default",
+		Labels:      map[string]string{discoveryv1.LabelServiceName: "backend"},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Ports:       []discoveryv1.EndpointPort{{Name: new("app"), Port: new(int32(8000))}},
+		Endpoints: []discoveryv1.Endpoint{
+			{Addresses: []string{"10.10.0.1"}},
+			{Addresses: []string{"10.10.0.2"}, Conditions: discoveryv1.EndpointConditions{Ready: new(true)}},
+			{Addresses: []string{"10.10.0.3"}, Conditions: discoveryv1.EndpointConditions{Ready: new(false)}},
+		},
+	}
+	kubeClient := kubefake.NewClientset(service, endpointSlice)
+	client := newClientImpl(kubeClient, newGatewaySimpleClientSet(t))
+	stopCh := make(chan struct{})
+	t.Cleanup(func() { close(stopCh) })
+	_, err := client.WatchAll(nil, stopCh)
+	require.NoError(t, err)
+
+	p := Provider{client: client}
+	addresses, port, err := p.getBackendAddresses("default", gatev1.BackendRef{
+		Name: "backend",
+		Port: new(gatev1.PortNumber(8000)),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, service.Spec.Ports[0], port)
+	assert.Equal(t, []backendAddress{{IP: "10.10.0.1", Port: 8000}, {IP: "10.10.0.2", Port: 8000}}, addresses)
 }

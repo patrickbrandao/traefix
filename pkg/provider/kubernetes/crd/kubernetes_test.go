@@ -20,6 +20,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/tls"
 	"github.com/traefik/traefik/v3/pkg/types"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	kubefake "k8s.io/client-go/kubernetes/fake"
@@ -15895,4 +15896,42 @@ func TestGlobalNativeLB(t *testing.T) {
 			assert.Equal(t, test.expected, conf)
 		})
 	}
+}
+
+func TestEndpointSliceReadyCondition(t *testing.T) {
+	service := &corev1.Service{
+		Name:      "backend",
+		Namespace: "default",
+		Spec:      corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "app", Port: 8000}}},
+	}
+	endpointSlice := &discoveryv1.EndpointSlice{
+		Name:        "backend-abc",
+		Namespace:   "default",
+		Labels:      map[string]string{discoveryv1.LabelServiceName: "backend"},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Ports:       []discoveryv1.EndpointPort{{Name: new("app"), Port: new(int32(8000))}},
+		Endpoints: []discoveryv1.Endpoint{
+			{Addresses: []string{"10.10.0.1"}},
+			{Addresses: []string{"10.10.0.2"}, Conditions: discoveryv1.EndpointConditions{Ready: new(true)}},
+			{Addresses: []string{"10.10.0.3"}, Conditions: discoveryv1.EndpointConditions{Ready: new(false)}},
+		},
+	}
+	kubeClient := kubefake.NewClientset(service, endpointSlice)
+	client := newClientImpl(kubeClient, traefikcrdfake.NewClientset())
+	stopCh := make(chan struct{})
+	t.Cleanup(func() { close(stopCh) })
+	_, err := client.WatchAll(nil, stopCh)
+	require.NoError(t, err)
+
+	p := Provider{}
+	t.Run("TCP", func(t *testing.T) {
+		servers, err := p.loadTCPServers(client, "default", traefikv1alpha1.ServiceTCP{Name: "backend", Port: intstr.FromInt(8000)})
+		require.NoError(t, err)
+		assert.Equal(t, []dynamic.TCPServer{{Address: "10.10.0.1:8000"}, {Address: "10.10.0.2:8000"}}, servers)
+	})
+	t.Run("UDP", func(t *testing.T) {
+		servers, err := p.loadUDPServers(client, "default", traefikv1alpha1.ServiceUDP{Name: "backend", Port: intstr.FromInt(8000)})
+		require.NoError(t, err)
+		assert.Equal(t, []dynamic.UDPServer{{Address: "10.10.0.1:8000"}, {Address: "10.10.0.2:8000"}}, servers)
+	})
 }
