@@ -109,6 +109,7 @@ http:
           timeout: 42s
           hostname: foobar
           followRedirects: true
+          body: foobar
           headers:
             name0: foobar
             name1: foobar

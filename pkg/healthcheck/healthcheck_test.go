@@ -2,6 +2,7 @@ package healthcheck
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -83,6 +84,7 @@ func TestServiceHealthChecker_newRequest(t *testing.T) {
 		expHostname string
 		expHeader   string
 		expMethod   string
+		expBody     string
 	}{
 		{
 			desc:      "no port override",
@@ -250,6 +252,19 @@ func TestServiceHealthChecker_newRequest(t *testing.T) {
 			expHostname: "backend1:80",
 			expMethod:   http.MethodHead,
 		},
+		{
+			desc:      "custom body",
+			targetURL: "http://backend1:80",
+			config: dynamic.ServerHealthCheck{
+				Path:   "/jsonrpc",
+				Method: http.MethodPost,
+				Body:   `{"jsonrpc":"2.0","method":"call"}`,
+			},
+			expTarget:   "http://backend1:80/jsonrpc",
+			expHostname: "backend1:80",
+			expMethod:   http.MethodPost,
+			expBody:     `{"jsonrpc":"2.0","method":"call"}`,
+		},
 	}
 
 	for _, test := range testCases {
@@ -272,8 +287,49 @@ func TestServiceHealthChecker_newRequest(t *testing.T) {
 				assert.Equal(t, test.expHeader, req.Header.Get("Custom-Header"))
 				assert.Equal(t, test.expHostname, req.Host)
 				assert.Equal(t, test.expMethod, req.Method)
+
+				body, err := io.ReadAll(req.Body)
+				require.NoError(t, err)
+				assert.Equal(t, test.expBody, string(body))
+				assert.Equal(t, int64(len(test.expBody)), req.ContentLength)
 			}
 		})
+	}
+}
+
+func TestServiceHealthChecker_checkHealthHTTP_Body(t *testing.T) {
+	var gotMethod, gotContentType, gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		gotMethod = req.Method
+		gotContentType = req.Header.Get("Content-Type")
+
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			rw.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		gotBody = string(body)
+	}))
+	t.Cleanup(server.Close)
+
+	config := &dynamic.ServerHealthCheck{
+		Path:     "/jsonrpc",
+		Method:   http.MethodPost,
+		Headers:  map[string]string{"Content-Type": "application/json"},
+		Body:     `{"jsonrpc":"2.0","method":"call"}`,
+		Interval: dynamic.DefaultHealthCheckInterval,
+		Timeout:  dynamic.DefaultHealthCheckTimeout,
+	}
+	healthChecker := NewServiceHealthChecker(t.Context(), nil, config, nil, nil, http.DefaultTransport, nil, "")
+
+	// Checked twice, as the request body must not be consumed by the first check.
+	for range 2 {
+		gotBody = ""
+		require.NoError(t, healthChecker.checkHealthHTTP(t.Context(), testhelpers.MustParseURL(server.URL)))
+
+		assert.Equal(t, http.MethodPost, gotMethod)
+		assert.Equal(t, "application/json", gotContentType)
+		assert.Equal(t, config.Body, gotBody)
 	}
 }
 
