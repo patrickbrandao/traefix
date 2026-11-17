@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +37/-3 em 4 arquivos |
 | Labels | status/2-needs-review, area/provider/docker, kind/bug/fix, size/S |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -39,3 +39,15 @@ Escopo pequeno (4 arquivos, +37/-3). Maintainer pediu rebase para v3.6 (branch d
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- Containers ligados só a redes `internal: true` não têm `NetworkSettings.Ports`, então a detecção automática de porta falhava ("port is missing"). O PR passa a usar `Config.ExposedPorts` como fallback e mantém a precedência: label explícita, depois portas em runtime, depois portas expostas (a menor delas).
+- A mudança é pequena e determinística (as portas são ordenadas). Não afeta o Swarm, que não preenche `ExposedPorts`.
+- Segurança: a porta vem da imagem/config do próprio container e o IP continua sendo o da rede dele, então nada sai do escopo do container. O único efeito é que containers que antes ficavam sem servidor (erro de porta ausente) agora recebem um servidor, que é o objetivo da correção.
+
+**Ajustes:** nenhum.
+
+**Testes:** `go build ./pkg/... ./internal/...` + `go vet ./cmd/...` ok (o link dos binários em `go build ./...` falhou por falta de espaço em disco na máquina, sem erro de compilação); `go test ./pkg/provider/docker/` ok; `golangci-lint run ./pkg/provider/docker/...` com 0 issues.
