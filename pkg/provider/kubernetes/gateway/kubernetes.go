@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"reflect"
 	"slices"
@@ -402,7 +403,7 @@ func (p *Provider) loadConfigurationFromGateways(ctx context.Context) (*dynamic.
 		},
 	}
 
-	addresses, err := p.gatewayAddresses()
+	defaultAddresses, err := p.resolveStatusAddress(p.StatusAddress)
 	if err != nil {
 		return nil, nil, fmt.Errorf("getting gateway addresses: %w", err)
 	}
@@ -526,6 +527,16 @@ func (p *Provider) loadConfigurationFromGateways(ctx context.Context) (*dynamic.
 		accepted := len(gwl.listeners) == 0 || slices.ContainsFunc(gwl.listeners, func(listener gatewayListener) bool {
 			return len(listener.Status.Conditions) == 0
 		})
+
+		// An invalid status address override must not take the Gateway routing down:
+		// it only falls back to the install configuration addresses.
+		addresses, err := p.gatewayStatusAddresses(gwl.gateway)
+		if err != nil {
+			logger.Error().Err(err).Msg("Unable to get Gateway status addresses from annotations, using the default ones")
+		}
+		if addresses == nil {
+			addresses = defaultAddresses
+		}
 
 		gatewayStatus, errConditions := p.makeGatewayStatus(gwl, addresses, accepted)
 		if len(errConditions) > 0 {
@@ -1430,28 +1441,66 @@ func makeGatewayResolvedRefsCondition(gwl gatewayWithListeners, unresolvedListen
 	}
 }
 
-func (p *Provider) gatewayAddresses() ([]gatev1.GatewayStatusAddress, error) {
-	if p.StatusAddress == nil {
+// gatewayStatusAddresses resolves status addresses from Gateway annotations.
+// Returns nil, nil when no statusaddress annotations are present.
+func (p *Provider) gatewayStatusAddresses(gateway *gatev1.Gateway) ([]gatev1.GatewayStatusAddress, error) {
+	sa, err := parseGatewayAnnotations(gateway.Annotations)
+	if err != nil {
+		return nil, fmt.Errorf("parsing Gateway annotations: %w", err)
+	}
+
+	if sa == nil {
 		return nil, nil
 	}
 
-	if p.StatusAddress.IP != "" {
+	// Unlike the install configuration, annotations are written by the Gateway owners.
+	if sa.IP != "" && net.ParseIP(sa.IP) == nil {
+		return nil, fmt.Errorf("invalid status address IP %q", sa.IP)
+	}
+
+	if sa.Service.Name != "" && sa.Service.Namespace == "" {
+		sa.Service.Namespace = gateway.Namespace
+	}
+
+	// Annotation-sourced service references require a ReferenceGrant for
+	// cross-namespace access (static config is operator-controlled and exempt).
+	if sa.Service.Name != "" && sa.Service.Namespace != gateway.Namespace {
+		if err := p.isReferenceGranted(kindGateway, gateway.Namespace, groupCore, kindService, sa.Service.Name, sa.Service.Namespace); err != nil {
+			return nil, fmt.Errorf("cross-namespace service reference from Gateway %s/%s to Service %s/%s: %w",
+				gateway.Namespace, gateway.Name, sa.Service.Namespace, sa.Service.Name, err)
+		}
+	}
+
+	return p.resolveStatusAddress(sa)
+}
+
+// resolveStatusAddress resolves a StatusAddress configuration to Gateway API
+// status addresses.
+func (p *Provider) resolveStatusAddress(sa *StatusAddress) ([]gatev1.GatewayStatusAddress, error) {
+	if sa == nil {
+		return nil, nil
+	}
+
+	if sa.IP != "" {
 		return []gatev1.GatewayStatusAddress{{
 			Type:  new(gatev1.IPAddressType),
-			Value: p.StatusAddress.IP,
+			Value: sa.IP,
 		}}, nil
 	}
 
-	if p.StatusAddress.Hostname != "" {
+	if sa.Hostname != "" {
 		return []gatev1.GatewayStatusAddress{{
 			Type:  new(gatev1.HostnameAddressType),
-			Value: p.StatusAddress.Hostname,
+			Value: sa.Hostname,
 		}}, nil
 	}
 
-	svcRef := p.StatusAddress.Service
-	if svcRef.Name != "" && svcRef.Namespace != "" {
-		svc, err := p.client.GetService(svcRef.Namespace, svcRef.Name)
+	if sa.Service.Name != "" || sa.Service.Namespace != "" {
+		if sa.Service.Name == "" || sa.Service.Namespace == "" {
+			return nil, errors.New("statusAddress service requires both name and namespace")
+		}
+
+		svc, err := p.client.GetService(sa.Service.Namespace, sa.Service.Name)
 		if err != nil {
 			return nil, fmt.Errorf("getting service: %w", err)
 		}

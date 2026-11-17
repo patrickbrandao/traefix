@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +402/-12 em 5 arquivos |
 | Labels | kind/enhancement, status/1-needs-design-review, size/L, area/provider/k8s/gatewayapi |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,23 @@ Label status/1-needs-design-review; maintainer abriu design review em abril e n�
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados no PR original:
+- Uma annotation inválida (IP vazio, Service inexistente, ReferenceGrant ausente) fazia `continue` no loop de Gateways: o Gateway inteiro sumia da configuração e o tráfego dele parava, só por causa de um problema de status. Um erro de digitação do dono do Gateway derrubaria o roteamento.
+- O IP da annotation não era validado; como o valor vem do dono do Gateway (não do operador), um valor arbitrário iria para `.status.addresses` e, via external-dns, para o DNS.
+- Referência cross-namespace a Service: o PR exige ReferenceGrant (`from: Gateway`, `to: Service`), o que é correto; o static config continua isento por ser do operador. Sem teste para esse caminho.
+- Conflitos com o fork (ListenerSets, `gatewayWithListeners`, `new(...)` em vez de `ptr.To`).
+
+Ajustes:
+- Erro nas annotations agora só é logado e o Gateway usa o `statusAddress` da configuração de instalação; o roteamento não é afetado.
+- Validação de IP com `net.ParseIP`.
+- Testes novos: IP inválido e Service cross-namespace sem ReferenceGrant; testes adaptados ao estilo do fork.
+- Docs mencionam o fallback em caso de annotation inválida.
+
+Risco residual: o dono de um Gateway passa a controlar o endereço publicado no status do próprio Gateway (antes só o operador). Rotas de outros namespaces que se anexam a esse Gateway já confiam nele, então o impacto fica restrito.
+
+Testes: `go test ./pkg/provider/kubernetes/gateway/` ok; `golangci-lint run ./pkg/provider/kubernetes/gateway/...` 0 issues.
