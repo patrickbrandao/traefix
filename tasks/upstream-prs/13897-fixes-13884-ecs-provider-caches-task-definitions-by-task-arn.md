@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +113/-11 em 2 arquivos |
 | Labels | status/2-needs-review, area/provider/ecs, kind/bug/fix, size/M |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -37,3 +37,17 @@ Mudança contida ao cache do provider, com testes sem credenciais AWS. Status ne
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- Correto: revisões de task definition são imutáveis, então o ARN da task definition (que inclui região, conta, família e revisão) é uma chave de cache segura e mais adequada que o ARN da task. Tasks que compartilham a mesma revisão, inclusive as de substituição em deploys, deixam de gerar `DescribeTaskDefinition` repetidos, o que reduz o risco de throttling na API do ECS.
+- ARN vazio/nil não usa o cache, o que evita colisão na chave vazia. Erros não são cacheados.
+- O cache é global e compartilhado entre instâncias/clusters do provider. Como o ARN é globalmente único, não há vazamento entre clusters ou contas. A memória continua limitada pela expiração existente (30 min).
+- Os testes usam um `HTTPClient` em memória (`smithyhttp.ClientDoFunc`), sem rede e sem credenciais. Não há dependência nova: `smithy-go` e `go-cache` já são diretas no `go.mod`.
+- O review automático do upstream só tinha um nit cosmético, já resolvido pelo autor.
+
+**Ajustes:** nenhum.
+
+**Testes:** `go build ./pkg/...` ok; `go test ./pkg/provider/ecs/` ok; `golangci-lint run ./pkg/provider/ecs/...` com 0 issues.
