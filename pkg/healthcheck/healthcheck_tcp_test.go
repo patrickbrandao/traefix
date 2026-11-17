@@ -475,8 +475,6 @@ func TestServiceTCPHealthChecker_Launch(t *testing.T) {
 
 			service := NewServiceTCPHealthChecker(ctx, test.config, lb, serviceInfo, targets, "serviceName")
 
-			go service.Launch(ctx)
-
 			// Timeout for each event - TLS handshake can take longer.
 			eventTimeout := 500 * time.Millisecond
 			if test.server.TLS {
@@ -487,6 +485,11 @@ func TestServiceTCPHealthChecker_Launch(t *testing.T) {
 			// Iterate over StatusSequence to release each connection via Next().
 			for i := range test.server.StatusSequence {
 				test.server.Next()
+
+				// Launched once the first sequence is in place, as the first check runs immediately.
+				if i == 0 {
+					go service.Launch(ctx)
+				}
 
 				select {
 				case <-lb.eventCh:
@@ -604,6 +607,7 @@ type sequencedTCPServer struct {
 	StatusSequence []tcpMockSequence
 	TLS            bool
 	release        chan struct{}
+	ready          chan struct{}
 	mu             sync.Mutex
 	listener       net.Listener
 }
@@ -626,11 +630,14 @@ func newTCPServer(t *testing.T, tlsEnabled bool, statusSequence ...tcpMockSequen
 		TLS:            tlsEnabled,
 		StatusSequence: statusSequence,
 		release:        make(chan struct{}),
+		ready:          make(chan struct{}),
 	}
 }
 
+// Next moves the server to the next sequence, and returns once it is in place.
 func (s *sequencedTCPServer) Next() {
 	s.release <- struct{}{}
+	<-s.ready
 }
 
 func (s *sequencedTCPServer) Close() {
@@ -657,6 +664,7 @@ func (s *sequencedTCPServer) Start(t *testing.T) {
 			s.mu.Unlock()
 
 			if !seq.accept {
+				s.ready <- struct{}{}
 				continue
 			}
 
@@ -693,6 +701,8 @@ func (s *sequencedTCPServer) Start(t *testing.T) {
 			s.mu.Lock()
 			s.listener = listener
 			s.mu.Unlock()
+
+			s.ready <- struct{}{}
 
 			conn, err := listener.Accept()
 			if err != nil {
