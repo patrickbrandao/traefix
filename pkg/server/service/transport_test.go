@@ -1,12 +1,15 @@
 package service
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -1115,6 +1118,82 @@ func TestReleaseTransportOnContext(t *testing.T) {
 			kerberos.ReleaseTransportOnContext(ctx)
 
 			assert.Eventually(t, func() bool { return backendConns.Load() == 0 }, time.Second, 10*time.Millisecond)
+		})
+	}
+}
+
+func TestDisableCompression(t *testing.T) {
+	const payload = "hello disable compression"
+
+	var gzipped bytes.Buffer
+	gzWriter := gzip.NewWriter(&gzipped)
+	_, err := gzWriter.Write([]byte(payload))
+	require.NoError(t, err)
+	require.NoError(t, gzWriter.Close())
+	gzippedBytes := gzipped.Bytes()
+
+	testCases := []struct {
+		desc                  string
+		disableCompression    bool
+		expectContentEncoding string
+		expectBodyEqualsGzip  bool
+		expectBodyEqualsPlain bool
+	}{
+		{
+			desc:                  "default behavior decompresses upstream gzip when client did not request it",
+			disableCompression:    false,
+			expectContentEncoding: "",
+			expectBodyEqualsPlain: true,
+		},
+		{
+			desc:                  "disableCompression preserves upstream Content-Encoding and gzip body",
+			disableCompression:    true,
+			expectContentEncoding: "gzip",
+			expectBodyEqualsGzip:  true,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				rw.Header().Set("Content-Type", "application/octet-stream")
+				rw.Header().Set("Content-Encoding", "gzip")
+				rw.WriteHeader(http.StatusOK)
+				_, _ = rw.Write(gzippedBytes)
+			}))
+			t.Cleanup(srv.Close)
+
+			transportManager := NewTransportManager(nil)
+			transportManager.Update(map[string]*dynamic.ServersTransport{
+				"test": {
+					DisableCompression: test.disableCompression,
+				},
+			})
+
+			tr, err := transportManager.GetRoundTripper("test")
+			require.NoError(t, err)
+
+			req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+			require.NoError(t, err)
+
+			resp, err := (&http.Client{Transport: tr}).Do(req)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = resp.Body.Close() })
+
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, test.expectContentEncoding, resp.Header.Get("Content-Encoding"))
+
+			if test.expectBodyEqualsGzip {
+				assert.Equal(t, gzippedBytes, body)
+			}
+			if test.expectBodyEqualsPlain {
+				assert.Equal(t, payload, string(body))
+			}
 		})
 	}
 }

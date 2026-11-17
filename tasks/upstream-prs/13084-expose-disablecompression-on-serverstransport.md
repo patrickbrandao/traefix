@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +119/-0 em 15 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/M, area/provider/k8s/crd, area/provider/k8s |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -40,3 +40,20 @@ Label status/2-needs-review; autor corrigiu os checks e pediu nova revisão. Toc
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados:
+- Mudança simples e segura: `disableCompression` (padrão false) é repassado a `http.Transport.DisableCompression`. Como o smart round tripper e o transporte HTTP/2 nativo são clones do mesmo `http.Transport`, a opção vale para HTTP/1.1, HTTP/2 e h2c. O FastProxy não pede gzip ao backend por conta própria, então já se comporta como `disableCompression: true`.
+- Sem risco de segurança: não muda TLS nem validação; só deixa de pedir gzip transparente e repassa `Content-Encoding`/corpo do backend como vieram.
+- O PR editava à mão arquivos gerados (applyconfiguration, CRDs YAML) e páginas de docs que não existem no fork (`routing-configuration/other-providers/file.*`). Teste com mensagens nos asserts.
+- Conflitos com o fork (`PeerCertSANs`, testes de Kerberos).
+
+Ajustes:
+- Código gerado e CRDs regenerados com `make generate-crd`; docs de referência com `make generate`.
+- Conflitos de docs resolvidos à mão: linha na tabela do CRD ServersTransport (sem a âncora duplicada `-2` do PR) e na página de ServersTransport HTTP.
+- `TestDisableCompression` integrado ao arquivo atual, sem mensagens nos asserts.
+
+Testes: `go build ./...` ok; `go test ./pkg/server/service/ ./pkg/config/dynamic/ ./pkg/provider/kubernetes/crd/ ./pkg/redactor/ ./pkg/provider/kv/ ./pkg/provider/file/` ok; `golangci-lint run` nos pacotes tocados: 0 issues.

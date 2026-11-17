@@ -53,6 +53,8 @@ type ServersTransportSpec struct {
 	ForwardingTimeouts *ForwardingTimeouts `json:"forwardingTimeouts,omitempty"`
 	// DisableHTTP2 disables HTTP/2 for connections with backend servers.
 	DisableHTTP2 bool `json:"disableHTTP2,omitempty"`
+	// DisableCompression disables compression handling for connections with backend servers.
+	DisableCompression bool `json:"disableCompression,omitempty"`
 	// PeerCertURI defines the peer cert URI used to match against SAN URI during the peer certificate verification.
 	//
 	// Deprecated: PeerCertURI is deprecated, please use the PeerCertSANs option instead.
