@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +154/-10 em 11 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/M, area/middleware, contributor/waiting-for-feedback |
-| Status | pendente |
+| Status | rejeitado |
 
 ## O que faz
 
@@ -40,3 +40,22 @@ Muda a config dinâmica e os CRDs (inclui arquivos gerados). Fail-open é decis�
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: rejeitado (substituído pelo #13916).**
+
+Achados no PR original:
+
+- `denyOnError` era `bool` com default só via `Redis.SetDefaults`. O provider REST decodifica com
+  `encoding/json` sem chamar `SetDefaults`, então um bloco `redis` sem a opção virava `false` e o
+  middleware passava a **fail-open** silenciosamente: um enfraquecimento de default de segurança.
+- `config.Redis != nil && config.Redis.DenyOnError` dá `false` sem Redis, invertendo o default do
+  in-memory.
+- Sem documentação.
+
+O #13916 (deyanp) contém os dois commits deste PR sem mudanças e corrige os dois pontos acima
+(`*bool`, default `true` quando ausente), com testes e doc. Um maintainer (kevinpollet) propôs fechar
+este PR em favor do #13916. Importado o #13916 no lugar deste.
+
+Testes: nenhum (não importado diretamente).
