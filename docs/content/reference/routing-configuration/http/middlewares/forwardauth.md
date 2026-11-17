@@ -76,6 +76,7 @@ spec:
 | <a id="opt-tls-cert" href="#opt-tls-cert" title="#opt-tls-cert">`tls.cert`</a> | Sets the path to the public certificate used for the secure connection to the authentication server. When using this option, setting the key option is required.                                                                                                            | "" | No |
 | <a id="opt-tls-key" href="#opt-tls-key" title="#opt-tls-key">`tls.key`</a> | Sets the path to the private key used for the secure connection to the authentication server. When using this option, setting the `cert` option is required.                                                                                                                | "" | No |
 | <a id="opt-tls-caSecret" href="#opt-tls-caSecret" title="#opt-tls-caSecret">`tls.caSecret`</a> | Defines the secret that contains the certificate authority used for the secured connection to the authentication server, it defaults to the system bundle. **This option is only available for the Kubernetes CRD**.                                                        | | No |
+| <a id="opt-tls-caConfigMap" href="#opt-tls-caConfigMap" title="#opt-tls-caConfigMap">`tls.caConfigMap`</a> | Name of a ConfigMap in the Middleware namespace containing the certificate authority in `tls.ca` or `ca.crt`. Mutually exclusive with `tls.caSecret`. **This option is only available for the Kubernetes CRD**.<br />More information [here](#ca-certificates-from-a-configmap). | "" | No |
 | <a id="opt-tls-certSecret" href="#opt-tls-certSecret" title="#opt-tls-certSecret">`tls.certSecret`</a> | Defines the secret that contains both the private and public certificates used for the secure connection to the authentication server. **This option is only available for the Kubernetes CRD**.                                                                            |  | No |
 | <a id="opt-tls-insecureSkipVerify" href="#opt-tls-insecureSkipVerify" title="#opt-tls-insecureSkipVerify">`tls.insecureSkipVerify`</a> | During TLS connections, if this option is set to `true`, the authentication server will accept any certificate presented by the server regardless of the host names it covers.                                                                                              | false | No |
 
@@ -328,6 +329,42 @@ which means a slow or unresponsive authentication server can hold requests indef
 # Allow the authentication server up to 2 minutes to answer
 timeout: 2m
 ```
+
+### CA Certificates From a ConfigMap
+
+Set `tls.caConfigMap` to load CA certificates from a ConfigMap in the same namespace as the Middleware.
+The ConfigMap must contain a `tls.ca` or `ca.crt` key; `tls.ca` takes precedence when both keys are present.
+Set only one of `tls.caConfigMap` and `tls.caSecret`.
+If the selected ConfigMap is missing or has neither key, Traefik rejects the Middleware configuration.
+
+```yaml tab="Kubernetes"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-ca
+  namespace: default
+data:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    # Replace with your CA certificate.
+    -----END CERTIFICATE-----
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: test-auth
+  namespace: default
+spec:
+  forwardAuth:
+    address: https://example.com/auth
+    tls:
+      caConfigMap: auth-ca
+```
+
+!!! warning
+
+    The CA decides which authentication servers Traefik trusts.
+    Make sure that the principals allowed to update the ConfigMap are the ones allowed to update the Middleware.
 
 ### trustForwardHeader
 
