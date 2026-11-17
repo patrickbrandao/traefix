@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/traefik/traefik/v3/pkg/config/static"
+	"github.com/traefik/traefik/v3/pkg/fingerprint"
 	"github.com/traefik/traefik/v3/pkg/ip"
 	"github.com/traefik/traefik/v3/pkg/middlewares"
 	"github.com/traefik/traefik/v3/pkg/middlewares/contenttype"
@@ -44,6 +45,8 @@ type key string
 const (
 	connStateKey       key    = "connState"
 	debugConnectionEnv string = "DEBUG_CONNECTION"
+	// fingerprintPrototypeEnv enables the connection capture prototype until it gets an entry point option.
+	fingerprintPrototypeEnv string = "TRAEFIX_FINGERPRINT_PROTOTYPE"
 )
 
 var (
@@ -65,6 +68,8 @@ type httpForwarder struct {
 	errChan   chan error
 	closeChan chan struct{}
 	closeOnce sync.Once
+
+	wrapConn func(net.Conn) net.Conn
 }
 
 func newHTTPForwarder(ln net.Listener) *httpForwarder {
@@ -78,6 +83,11 @@ func newHTTPForwarder(ln net.Listener) *httpForwarder {
 
 // ServeTCP uses the connection to serve it later in "Accept".
 func (h *httpForwarder) ServeTCP(conn tcp.WriteCloser) {
+	if h.wrapConn != nil {
+		h.connChan <- h.wrapConn(conn)
+		return
+	}
+
 	h.connChan <- conn
 }
 
@@ -799,6 +809,11 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 
 	handler = populateRequestTLS(handler)
 
+	captureConn := os.Getenv(fingerprintPrototypeEnv) != ""
+	if captureConn {
+		handler = fingerprint.Handler(handler)
+	}
+
 	// The round trippers and connection pools dedicated to a connection (Kerberos or NTLM) are only reachable from its
 	// context, which is kept until the ConnState hook reports the connection closed to release them.
 	var transportConnContexts connContexts
@@ -811,7 +826,11 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 		ctx = fast.AddConnPoolsOnContext(ctx)
 		transportConnContexts.add(ctx, c)
 
-		if tlsConn, ok := c.(*tls.Conn); ok {
+		if captureConn {
+			ctx = fingerprint.ContextWithConn(ctx, c)
+		}
+
+		if tlsConn, ok := fingerprint.UnwrapConn(c).(*tls.Conn); ok {
 			ctx = context.WithValue(ctx, tlsConnKey{}, tlsConn)
 
 			if tlsConnWithOptionsName, ok := tlsConn.NetConn().(tcp.TLSConn); ok {
@@ -874,6 +893,12 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 	}
 
 	listener := newHTTPForwarder(ln)
+	if captureConn {
+		captureConfig := fingerprint.Config{MaxDecoderHeaderTableSize: uint32(configuration.HTTP2.MaxDecoderHeaderTableSize)}
+		listener.wrapConn = func(c net.Conn) net.Conn {
+			return fingerprint.WrapConn(c, captureConfig)
+		}
+	}
 	go func() {
 		err := serverHTTP.Serve(listener)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
