@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +118/-1 em 4 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/provider/k8s/gatewayapi |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,19 @@ Base é v3.7, precisa de port. Relevante para setups com HTTP/3 que usam a mesma
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados:
+- Bug real: `entryPointName` casava listeners e entry points só pelo sufixo da porta, e `GetAddress()` remove o `/udp`. Com HTTP/3 (443 em TCP e UDP), a escolha dependia da ordem aleatória de iteração do mapa: um listener HTTPS/TLS podia cair no entry point UDP e ficar sem tráfego, de forma intermitente entre rebuilds.
+- Conferido que o provider Gateway API do fork não suporta UDPRoute nem listeners UDP, então ignorar entry points UDP não remove nenhuma funcionalidade.
+- Mudança de status: um listener que só casava com um entry point UDP passa a `PortUnavailable`, o que é o correto.
+- Teste de TCPRoute do PR em conflito com o fork (nomes de routers diferentes); a expectativa do caso HTTP não batia (o fork gera `TLS.Options` vazio).
+
+Ajustes:
+- Caso de TCPRoute conflitante substituído por `TestProvider_entryPointName_ignoresUDP`, que repete a busca para cobrir a aleatoriedade do mapa (TCP+UDP na mesma porta e só UDP).
+- Expectativa do caso HTTP ajustada ao fork.
+
+Testes: `go build ./...` ok; `go test ./pkg/provider/kubernetes/gateway/ ./pkg/config/static/` ok; `golangci-lint` nos dois pacotes: 0 issues.

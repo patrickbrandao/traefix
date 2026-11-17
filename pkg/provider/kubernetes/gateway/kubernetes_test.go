@@ -285,6 +285,34 @@ func TestLoadHTTPRoutes(t *testing.T) {
 			},
 		},
 		{
+			desc:  "Empty because only a UDP entry point matches the listener port",
+			paths: []string{"services.yml", "httproute/simple.yml"},
+			entryPoints: map[string]Entrypoint{
+				"udp": {Address: ":80", Protocol: "udp"},
+			},
+			expected: &dynamic.Configuration{
+				UDP: &dynamic.UDPConfiguration{
+					Routers:  map[string]*dynamic.UDPRouter{},
+					Services: map[string]*dynamic.UDPService{},
+				},
+				TCP: &dynamic.TCPConfiguration{
+					Routers:           map[string]*dynamic.TCPRouter{},
+					Middlewares:       map[string]*dynamic.TCPMiddleware{},
+					Services:          map[string]*dynamic.TCPService{},
+					ServersTransports: map[string]*dynamic.TCPServersTransport{},
+				},
+				HTTP: &dynamic.HTTPConfiguration{
+					Routers:           map[string]*dynamic.Router{},
+					Middlewares:       map[string]*dynamic.Middleware{},
+					Services:          map[string]*dynamic.Service{},
+					ServersTransports: map[string]*dynamic.ServersTransport{},
+				},
+				TLS: &dynamic.TLSConfiguration{
+					Options: map[string]tls.Options{},
+				},
+			},
+		},
+		{
 			desc:  "Empty because no http route defined",
 			paths: []string{"services.yml", "httproute/without_httproute.yml"},
 			entryPoints: map[string]Entrypoint{"web": {
@@ -17080,4 +17108,49 @@ func TestEndpointSliceReadyCondition(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, service.Spec.Ports[0], port)
 	assert.Equal(t, []backendAddress{{IP: "10.10.0.1", Port: 8000}, {IP: "10.10.0.2", Port: 8000}}, addresses)
+}
+
+func TestProvider_entryPointName_ignoresUDP(t *testing.T) {
+	testCases := []struct {
+		desc        string
+		entryPoints map[string]Entrypoint
+		expected    string
+		expectedErr bool
+	}{
+		{
+			desc: "TCP and UDP entry points on the same port",
+			entryPoints: map[string]Entrypoint{
+				"tcp": {Address: ":443", Protocol: "tcp"},
+				"udp": {Address: ":443", Protocol: "udp"},
+			},
+			expected: "tcp",
+		},
+		{
+			desc: "only a UDP entry point on the port",
+			entryPoints: map[string]Entrypoint{
+				"udp": {Address: ":443", Protocol: "udp"},
+			},
+			expectedErr: true,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			p := Provider{EntryPoints: test.entryPoints}
+
+			// Repeated lookups, as the entry points map iteration order is random.
+			for range 20 {
+				name, err := p.entryPointName(443, gatev1.TLSProtocolType)
+				if test.expectedErr {
+					require.Error(t, err)
+					continue
+				}
+
+				require.NoError(t, err)
+				assert.Equal(t, test.expected, name)
+			}
+		})
+	}
 }
