@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +107/-1 em 4 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/M, area/middleware, area/authentication |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,26 @@ Maintainers marcaram review e já houve três reviews COMMENTED; o autor pediu a
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+Veredito: **importado com ajustes**.
+
+Achados no PR original:
+- PR aberto, sem review de maintainer (só comentários do agente automático). Mudança pequena, sem dependência nova: usa `http.Protocols` da stdlib (Go 1.24+, e o `go.mod` está em 1.27).
+- Com `tls` configurado e endereço `h2c://`, o TLS era ignorado em silêncio: o transporte com `TLSClientConfig` era reaproveitado e o scheme virava `http`. Isso dá falsa sensação de segurança a quem configura mTLS para o auth server.
+- O código clonava o transporte TLS e ligava `ForceAttemptHTTP2` e `SetHTTP1(false)`, o que é redundante: um `http.Protocols` novo já começa com tudo desligado.
+- O h2c é texto puro; a doc do PR já avisa para usá-lo só em rede interna.
+- Sobreposição com o #13832: `address` e `service` são exclusivos, então não há conflito de comportamento.
+
+Ajustes:
+- `h2c://` com a opção `tls` agora é erro de configuração. Novo teste `TestForwardAuthH2CWithTLS`.
+- O transporte h2c parte sempre de um clone do `DefaultTransport`, só com `UnencryptedHTTP2`.
+- Comentário de porquê (multiplexação em vez de uma conexão por requisição concorrente).
+- Docs: seção `### address` integrada à página atual (que já tem `service`), com o aviso de rede confiável e de exclusividade com `tls`. O conflito de doc com o #13832 foi resolvido à mão.
+- O teste `TestForwardAuthH2C` foi adaptado à assinatura nova de `NewForward`.
+
+Testes:
+- `go build ./...`: ok.
+- `go test ./pkg/middlewares/auth/`: ok.
+- `golangci-lint run ./pkg/middlewares/auth/... ./pkg/config/dynamic/...`: 0 issues.

@@ -55,7 +55,7 @@ spec:
 
 | Field                                                                                                                                          | Description                                                                                                                                                                                                                                                                 | Default | Required |
 |:-----------------------------------------------------------------------------------------------------------------------------------------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:--------|:---------|
-| <a id="opt-address" href="#opt-address" title="#opt-address">`address`</a> | Authentication server address. <br />Mutually exclusive with the `service` option; one of the two is required.                                                                                                                                                                | "" | No[^1]      |
+| <a id="opt-address" href="#opt-address" title="#opt-address">`address`</a> | Authentication server address. <br />Supports the `http`, `https`, and `h2c` schemes. <br />Mutually exclusive with the `service` option; one of the two is required. <br />More information [here](#address).                                                                                                                                                                | "" | No[^1]      |
 | <a id="opt-service" href="#opt-service" title="#opt-service">`service`</a> | Name of a Traefik service to use as the authentication server, instead of `address`. <br />Routing the authentication request through a service enables service discovery, load balancing, health checks and sticky sessions for the authentication server. <br />Mutually exclusive with the `address` and `tls` options. <br />In the Kubernetes CRD, this is a reference to a Kubernetes Service rather than a service name. <br />More information [here](#service).| "" | No[^1]       |
 | <a id="opt-path" href="#opt-path" title="#opt-path">`path`</a> | Path (and optional query string) of the authentication request when using the `service` option. <br />Defaults to the root path.                                                                                                                                             | "" | No       |
 | <a id="opt-trustForwardHeader" href="#opt-trustForwardHeader" title="#opt-trustForwardHeader">`trustForwardHeader`</a> | Trust all `X-Forwarded-*` headers.                                                                                                                                                                                                                                          <br/>The trustForwardHeader option is deprecated and will be removed in the next major version. <br/>More information [here](#trustforwardheader)| - | No      |
@@ -79,6 +79,47 @@ spec:
 | <a id="opt-tls-insecureSkipVerify" href="#opt-tls-insecureSkipVerify" title="#opt-tls-insecureSkipVerify">`tls.insecureSkipVerify`</a> | During TLS connections, if this option is set to `true`, the authentication server will accept any certificate presented by the server regardless of the host names it covers.                                                                                              | false | No |
 
 [^1]: Exactly one of `address` or `service` must be set.
+
+### address
+
+The `address` option accepts the `http`, `https`, and `h2c` schemes.
+
+Use the `h2c` scheme to reach an authentication server that speaks unencrypted HTTP/2 (cleartext, with prior knowledge):
+
+```yaml tab="Structured (YAML)"
+http:
+  middlewares:
+    test-auth:
+      forwardAuth:
+        address: "h2c://auth-server:8080/auth"
+```
+
+```toml tab="Structured (TOML)"
+[http.middlewares]
+  [http.middlewares.test-auth.forwardAuth]
+    address = "h2c://auth-server:8080/auth"
+```
+
+```yaml tab="Labels"
+labels:
+  - "traefik.http.middlewares.test-auth.forwardauth.address=h2c://auth-server:8080/auth"
+```
+
+```yaml tab="Kubernetes"
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: test-auth
+spec:
+  forwardAuth:
+    address: h2c://auth-server:8080/auth
+```
+
+With `http`, a burst of concurrent authentication requests opens as many connections to the authentication server.
+With `h2c`, the requests are multiplexed on a few HTTP/2 connections, which avoids exhausting the ephemeral ports at high request rates.
+
+The `h2c` traffic is not encrypted: use it only on a trusted network.
+The `h2c` scheme and the `tls` option are mutually exclusive.
 
 ### service
 

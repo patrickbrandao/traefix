@@ -190,6 +190,25 @@ func NewForward(ctx context.Context, next http.Handler, config dynamic.ForwardAu
 		}
 	}
 
+	// The HTTP client has no h2c scheme: h2c is plain HTTP with HTTP/1 disabled on the transport,
+	// so that the requests are multiplexed on a few connections instead of opening one per concurrent request.
+	if addr, err := url.Parse(config.Address); err == nil && addr.Scheme == "h2c" {
+		if config.TLS != nil {
+			return nil, errors.New("forward authentication cannot use the tls option with an h2c address, which is not encrypted")
+		}
+
+		addr.Scheme = "http"
+		fa.address = addr.String()
+
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.Protocols = new(http.Protocols)
+		tr.Protocols.SetUnencryptedHTTP2(true)
+		transport = tr
+		newTransport = func() http.RoundTripper {
+			return tr.Clone()
+		}
+	}
+
 	// The auth server may use a connection-bound authentication scheme (NTLM or Kerberos, as IIS Windows
 	// Authentication does), which requires the authentication requests of a client connection to be sent
 	// on a connection to the auth server dedicated to it.
