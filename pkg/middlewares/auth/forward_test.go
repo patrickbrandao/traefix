@@ -19,6 +19,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/middlewares/forwardedheaders"
 	"github.com/traefik/traefik/v3/pkg/middlewares/observability"
@@ -1517,6 +1518,99 @@ func TestForwardAuthPreserveRequestMethod(t *testing.T) {
 	}
 }
 
+func TestForwardAuthTimeout(t *testing.T) {
+	testCases := []struct {
+		desc           string
+		timeout        ptypes.Duration
+		expectedStatus int
+		expectedBody   string
+	}{
+		{
+			desc:           "authentication server slower than the timeout",
+			timeout:        ptypes.Duration(50 * time.Millisecond),
+			expectedStatus: http.StatusInternalServerError,
+			expectedBody:   "",
+		},
+		{
+			desc:           "authentication server faster than the timeout",
+			timeout:        ptypes.Duration(5 * time.Second),
+			expectedStatus: http.StatusOK,
+			expectedBody:   "traefik\n",
+		},
+		{
+			desc:           "timeout disabled",
+			timeout:        0,
+			expectedStatus: http.StatusOK,
+			expectedBody:   "traefik\n",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case <-time.After(300 * time.Millisecond):
+				case <-r.Context().Done():
+					return
+				}
+				fmt.Fprintln(w, "Success")
+			}))
+			t.Cleanup(server.Close)
+
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintln(w, "traefik")
+			})
+
+			auth := dynamic.ForwardAuth{
+				Address: server.URL,
+				Timeout: test.timeout,
+			}
+
+			middleware, err := NewForward(t.Context(), next, auth, nil, "timeoutTest")
+			require.NoError(t, err)
+
+			ts := httptest.NewServer(middleware)
+			t.Cleanup(ts.Close)
+
+			req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+			res, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+
+			assert.Equal(t, test.expectedStatus, res.StatusCode)
+
+			body, err := io.ReadAll(res.Body)
+			require.NoError(t, err)
+			err = res.Body.Close()
+			require.NoError(t, err)
+
+			assert.Equal(t, test.expectedBody, string(body))
+		})
+	}
+}
+
+func TestForwardAuthDefaultTimeout(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+
+	auth := dynamic.ForwardAuth{Address: "http://auth.example.com"}
+	auth.SetDefaults()
+
+	middleware, err := NewForward(t.Context(), next, auth, nil, "defaultTimeoutTest")
+	require.NoError(t, err)
+
+	fa, ok := middleware.(*forwardAuth)
+	require.True(t, ok)
+	assert.Equal(t, 30*time.Second, fa.client.Timeout)
+}
+
+func TestForwardAuthNegativeTimeout(t *testing.T) {
+	auth := dynamic.ForwardAuth{Address: "http://auth.example.com", Timeout: ptypes.Duration(-time.Second)}
+
+	_, err := NewForward(t.Context(), nil, auth, nil, "negativeTimeoutTest")
+	require.Error(t, err)
+}
+
 func TestForwardAuthMaxResponseBodySize(t *testing.T) {
 	testCases := []struct {
 		desc                string
@@ -2095,12 +2189,10 @@ func TestForwardAuthServiceTimeout(t *testing.T) {
 		t.Error("next handler should not be called")
 	})
 
-	middleware, err := NewForward(t.Context(), next, dynamic.ForwardAuth{Service: "auth@file"}, mockServiceBuilder{handler: authService}, "authTest")
-	require.NoError(t, err)
+	auth := dynamic.ForwardAuth{Service: "auth@file", Timeout: ptypes.Duration(50 * time.Millisecond)}
 
-	fa, ok := middleware.(*forwardAuth)
-	require.True(t, ok)
-	fa.client.Timeout = 50 * time.Millisecond
+	middleware, err := NewForward(t.Context(), next, auth, mockServiceBuilder{handler: authService}, "authTest")
+	require.NoError(t, err)
 
 	recorder := httptest.NewRecorder()
 	middleware.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "http://example.com/", nil))

@@ -221,7 +221,8 @@
 				"authResponseHeaders": [
 					"X-Auth-User"
 				],
-				"maxBodySize": -1
+				"maxBodySize": -1,
+				"timeout": "30s"
 			},
 			"status": "enabled",
 			"usedBy": [

@@ -1292,6 +1292,12 @@ func (p *Provider) createForwardAuthMiddleware(ctx context.Context, client Clien
 		forwardAuth.MaxBodySize = auth.MaxBodySize
 	}
 
+	if auth.Timeout != nil {
+		if err := forwardAuth.Timeout.Set(auth.Timeout.String()); err != nil {
+			return nil, nil, fmt.Errorf("parsing forward authentication timeout: %w", err)
+		}
+	}
+
 	if auth.TLS != nil {
 		forwardAuth.TLS = &dynamic.ClientTLS{
 			InsecureSkipVerify: auth.TLS.InsecureSkipVerify,

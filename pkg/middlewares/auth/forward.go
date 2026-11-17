@@ -127,12 +127,19 @@ func NewForward(ctx context.Context, next http.Handler, config dynamic.ForwardAu
 		logger.Warn().Msg("maxResponseBodySize is not configured, allowing unlimited response body size which can lead to DoS attacks and memory exhaustion. Please set an appropriate limit.")
 	}
 
+	if config.Timeout < 0 {
+		return nil, fmt.Errorf("forward authentication timeout must not be negative: %s", time.Duration(config.Timeout))
+	}
+	if config.Timeout == 0 {
+		logger.Warn().Msg("timeout is disabled: an authentication server that does not answer holds the client requests indefinitely, which can lead to DoS attacks. Please set an appropriate limit.")
+	}
+
 	// Ensure our request client does not follow redirects
 	fa.client = http.Client{
 		CheckRedirect: func(r *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
-		Timeout: 30 * time.Second,
+		Timeout: time.Duration(config.Timeout),
 	}
 
 	if config.Service != "" {

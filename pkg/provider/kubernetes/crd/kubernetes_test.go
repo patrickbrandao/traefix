@@ -7524,6 +7524,7 @@ func TestLoadIngressRoutes(t *testing.T) {
 								Address:     "test.com",
 								MaxBodySize: new(int64(-1)),
 								HeaderField: "X-Header-Field",
+								Timeout:     ptypes.Duration(10 * time.Second),
 								TLS: &dynamic.ClientTLS{
 									CA:   "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----",
 									Cert: "urn:k8s:secret:tlssecret:tls.crt",
@@ -7995,6 +7996,7 @@ func TestLoadIngressRoutes(t *testing.T) {
 								Path:                "/verify",
 								AuthResponseHeaders: []string{"X-Auth-User"},
 								MaxBodySize:         new(int64(-1)),
+								Timeout:             dynamic.ForwardAuthDefaultTimeout,
 							},
 						},
 					},
@@ -8053,6 +8055,7 @@ func TestLoadIngressRoutes(t *testing.T) {
 								Service:     "default-forwardauth-wrr",
 								Path:        "/verify",
 								MaxBodySize: new(int64(-1)),
+								Timeout:     dynamic.ForwardAuthDefaultTimeout,
 							},
 						},
 					},
