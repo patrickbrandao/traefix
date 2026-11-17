@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +119/-1 em 2 arquivos |
 | Labels | status/1-needs-design-review, kind/bug/fix, size/M, area/http3 |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -37,3 +37,28 @@ Pequeno (+119/-1) e reutiliza middlewares.NewResponseModifier. Label status/1-ne
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, em "design-review" para confirmar o bug.
+
+### Achados no PR original
+
+- Correto: quando o HTTP/3 está ativo, o Traefik adiciona o próprio `Alt-Svc`, e o proxy acrescentava o `Alt-Svc` do
+  backend. Um valor sem host (`h3=":9443"`) é resolvido pelo cliente contra a origem do Traefik e anuncia uma porta onde
+  nada escuta. O PR mantém só o valor do Traefik quando outros foram acrescentados depois dele, e respeita uma
+  substituição explícita (por exemplo, `customResponseHeaders` do middleware `headers`).
+- Usa `middlewares.NewResponseModifier`, que tem `Unwrap`, então `http.ResponseController` (flush, hijack, deadlines)
+  continua funcionando.
+- Custo: todo response HTTPS de um entrypoint com HTTP/3 passa a ser embrulhado em mais um `ResponseWriter`
+  (uma alocação por request).
+- Limitação documentada no PR: um valor acrescentado depois do valor do Traefik por um plugin com `Header().Add` também
+  é descartado.
+
+### Ajustes
+
+Nenhum.
+
+### Testes
+
+- `go test ./pkg/server/ -run 'TestHTTP3'` ok; `golangci-lint run ./pkg/server/...`: 0 issues.
