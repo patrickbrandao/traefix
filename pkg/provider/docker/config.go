@@ -172,7 +172,9 @@ func (p *DynConfBuilder) buildUDPServiceConfiguration(ctx context.Context, conta
 func (p *DynConfBuilder) buildServiceConfiguration(ctx context.Context, container dockerData, configuration *dynamic.HTTPConfiguration) error {
 	serviceName := getServiceName(container)
 
+	autoCreatedService := false
 	if len(configuration.Services) == 0 {
+		autoCreatedService = true
 		configuration.Services = make(map[string]*dynamic.Service)
 		lb := &dynamic.ServersLoadBalancer{}
 		lb.SetDefaults()
@@ -196,11 +198,36 @@ func (p *DynConfBuilder) buildServiceConfiguration(ctx context.Context, containe
 	for name, service := range configuration.Services {
 		ctx := log.Ctx(ctx).With().Str(logs.ServiceName, name).Logger().WithContext(ctx)
 		if err := p.addServer(ctx, container, service.LoadBalancer); err != nil {
+			// A service nobody uses must not take down the routers of the container,
+			// e.g. a router to api@internal on a macvlan container without port (upstream issue 13532).
+			if autoCreatedService && !defaultServiceRequired(configuration, name) {
+				log.Ctx(ctx).Warn().Err(err).
+					Msgf("Ignoring auto-created service %q: no router references it", name)
+				delete(configuration.Services, name)
+				continue
+			}
 			return fmt.Errorf("service %q error: %w", name, err)
 		}
 	}
 
 	return nil
+}
+
+// defaultServiceRequired reports whether a router may use the auto-created service:
+// provider.BuildRouterConfiguration creates a default router when there is none,
+// and links routers without an explicit service to the only service of the container.
+func defaultServiceRequired(configuration *dynamic.HTTPConfiguration, serviceName string) bool {
+	if len(configuration.Routers) == 0 {
+		return true
+	}
+
+	for _, router := range configuration.Routers {
+		if router.Service == "" || router.Service == serviceName {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (p *DynConfBuilder) keepContainer(ctx context.Context, container dockerData) bool {

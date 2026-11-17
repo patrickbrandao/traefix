@@ -4961,3 +4961,69 @@ func TestDynConfBuilder_getIPAddress_swarm(t *testing.T) {
 		})
 	}
 }
+
+func TestDynConfBuilder_buildServiceConfiguration_autoServicePortFailure(t *testing.T) {
+	testCases := []struct {
+		desc      string
+		routers   map[string]*dynamic.Router
+		expectErr bool
+	}{
+		{
+			desc: "unused auto-created service is dropped",
+			routers: map[string]*dynamic.Router{
+				"dashboard": {Rule: "PathPrefix(`/dashboard`)", Service: "api@internal"},
+			},
+		},
+		{
+			desc:      "no router",
+			expectErr: true,
+		},
+		{
+			desc: "router without service",
+			routers: map[string]*dynamic.Router{
+				"dashboard": {Rule: "PathPrefix(`/dashboard`)", Service: "api@internal"},
+				"app":       {Rule: "Host(`app.localhost`)"},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "router referencing the auto-created service",
+			routers: map[string]*dynamic.Router{
+				"app": {Rule: "Host(`app.localhost`)", Service: "my-app"},
+			},
+			expectErr: true,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			// Docker does not report ports for a container attached to a macvlan network.
+			container := dockerData{
+				ServiceName: "my-app",
+				Name:        "my-app",
+				NetworkSettings: networkSettings{
+					Ports: networktypes.PortMap{},
+					Networks: map[string]*networkData{
+						"macvlan01": {Name: "macvlan01", Addr: "192.168.1.50"},
+					},
+				},
+			}
+
+			configuration := &dynamic.HTTPConfiguration{Routers: test.routers}
+
+			builder := NewDynConfBuilder(Shared{}, nil, false)
+
+			err := builder.buildServiceConfiguration(t.Context(), container, configuration)
+			if test.expectErr {
+				require.ErrorContains(t, err, "port is missing")
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Empty(t, configuration.Services)
+			assert.Equal(t, test.routers, configuration.Routers)
+		})
+	}
+}
