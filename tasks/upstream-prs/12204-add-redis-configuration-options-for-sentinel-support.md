@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +48/-13 em 6 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/M, area/middleware |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,24 @@ Pequeno (6 arquivos, +48/-13). Sem testes marcados. Status needs-review, sem com
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados no PR original:
+
+- **Vazamento de credencial:** `SentinelUsername` e `SentinelPassword` vinham com `export:"true"`, o que
+  faz o redactor/export anonimizado manter o valor. `Username`/`Password` do Redis usam `loggable:"false"`;
+  os campos do Sentinel passaram a usar o mesmo tag.
+- Comentário de `MasterName` errado ("Default value is the first endpoint"): no go-redis, um `MasterName`
+  não vazio é o que liga o modo Sentinel (`FailoverClient`).
+- O PR não leva os campos ao CRD do Kubernetes (só file/labels/KV). Mantido assim; a doc agora diz isso.
+- Sem testes no PR; o mapeamento é direto para `redis.UniversalOptions`.
+
+Ajustes: tags `loggable:"false"` nas credenciais do Sentinel, comentários corrigidos, doc de `masterName`
+explicando o modo Sentinel e a falta de suporte no CRD.
+
+Testes: `go build ./...` ok; `go test ./pkg/config/... ./pkg/redactor/... ./pkg/middlewares/ratelimiter/...` ok
+(`TestRedisRateLimit` é sensível a tempo e falhou com a máquina em load ~40; passa isolado);
+`golangci-lint run` nos pacotes tocados: 0 issues.
