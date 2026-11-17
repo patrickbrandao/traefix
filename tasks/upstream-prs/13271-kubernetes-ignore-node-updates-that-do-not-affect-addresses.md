@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +78/-0 em 2 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/M, area/provider/k8s |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,18 @@ Sobrepõe o #13255, que também adiciona nodeChanged: é preciso escolher um. Um
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados:
+- Correto e de baixo risco: o heartbeat do kubelet atualiza o status do Node a cada ~10s e hoje cada atualização dispara um rebuild completo da configuração (com recursos cluster-scope habilitados, o padrão). Conferido que no fork nenhum provider usa labels, spec ou condições do Node; só `Status.Addresses` (NodePortLB, inclusive o filtro do #12048, que depende de endpoints e não do Node). Criação e remoção de Node continuam disparando eventos.
+- Sobrepunha o #13255, que foi fechado no upstream; sem conflito.
+- O teste do PR usava `metav1` sem importar no arquivo atual do fork (não compilava).
+
+Ajustes:
+- Testes usam os campos promovidos (`ResourceVersion: "1"`), no estilo do fork.
+- Comentário de *porquê* em `nodeChanged`.
+
+Testes: `go test ./pkg/provider/kubernetes/k8s/` ok; `golangci-lint run ./pkg/provider/kubernetes/k8s/...` 0 issues.

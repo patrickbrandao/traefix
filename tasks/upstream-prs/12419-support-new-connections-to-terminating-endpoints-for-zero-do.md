@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +306/-15 em 4 arquivos |
 | Labels | status/1-needs-design-review, size/L, area/server, area/provider/k8s |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,22 @@ Muda o comportamento de roteamento do WRR no caminho de falha. Status design-rev
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados no PR original:
+- O novo `nextServer` limita a busca a `len(b.handlers)` pops do heap EDF. Com pesos diferentes, um handler pesado sai várias vezes antes de um leve, então um servidor saudável e não fenced de peso baixo podia nunca ser visitado: o WRR cairia no fallback fenced ou devolveria 503 mesmo com servidor saudável disponível (regressão).
+- Bug pré-existente no fork, corrigido de quebra: se o único servidor saudável é fenced e os não fenced estão DOWN (ex.: health check passivo), a checagem `len(b.fenced) == len(b.handlers)` passava e o `for` girava para sempre segurando `handlersMu`, travando todas as requests do serviço (DoS).
+- Só o WRR mudava; P2C, HRW e LeastTime continuariam respondendo 503 no mesmo cenário.
+- Testes do PR verbosos, com mensagens em assert e casos redundantes.
+- As páginas de docs que o PR altera (`docs/content/routing/providers/...`) não existem mais no fork.
+
+Ajustes:
+- WRR: antes do loop, varre o heap para saber se há handler saudável e se algum saudável não é fenced; fenced só é pulado quando existe alternativa. O loop termina sempre, e a escolha entre fenced continua respeitando os pesos.
+- Mesmo fallback (saudáveis não fenced, senão saudáveis fenced) em P2C, HRW e LeastTime.
+- Testes: `TestBalancerAllServersFenced`/`TestBalancerAllFencedServers` agora esperam 200; novos `TestBalancerFencedFallback` (cobre o antigo loop infinito e a volta ao servidor saudável) e `TestBalancerFencedNotPreferredOverLowWeight` (cobre a regressão do PR).
+- Nota em `docs/content/reference/routing-configuration/http/load-balancing/service.md`.
+
+Testes: `go test ./pkg/server/service/loadbalancer/...` ok (o `-race` não rodou até o fim por falta de espaço em disco na máquina, compartilhada com outros builds); `golangci-lint run ./pkg/server/service/loadbalancer/...` 0 issues.

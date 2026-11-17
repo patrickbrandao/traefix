@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +495/-9 em 7 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/L, area/provider/k8s/crd, area/provider/k8s |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,21 @@ Afeta provider CRD para HTTP/TCP/UDP (7 arquivos, +495/-9). Maintainers reconhec
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados no PR original:
+- Panic em potencial: `*endpoint.NodeName` era desreferenciado sem checar nil; `nodeName` é opcional no EndpointSlice (endpoints sem seletor, gerenciados externamente).
+- Nós duplicados: com várias réplicas no mesmo nó, o nó era adicionado uma vez por endpoint, gerando servidores repetidos e distorcendo o peso do WRR.
+- `ready == nil` era tratado como não pronto, contrariando a API do Kubernetes (nil deve ser interpretado como pronto), mesmo problema do #14223.
+- A lógica estava copiada três vezes (HTTP, TCP, UDP).
+
+Ajustes:
+- Lógica extraída para `nodePortLBNodes` em `pkg/provider/kubernetes/crd/kubernetes.go`, chamada nos três providers.
+- `NodeName` nil é ignorado, `Ready` nil conta como pronto, nós deduplicados.
+- A ordem dos servidores segue a ordem dos endpoints (determinística), em vez da ordem do lister de nós, para evitar config instável entre rebuilds.
+- Fixture HTTP ganhou um endpoint extra no mesmo nó e um sem `nodeName` para cobrir dedup e o caso nil; expectativas adaptadas aos campos de Observability do fork.
+
+Testes: `go build ./...` ok; `go test ./pkg/provider/kubernetes/crd/` ok; `golangci-lint run ./pkg/provider/kubernetes/crd/...` 0 issues.

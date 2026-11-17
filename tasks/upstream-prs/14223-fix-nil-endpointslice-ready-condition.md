@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +82/-3 em 5 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/provider/k8s/crd, area/provider/k8s/gatewayapi |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,18 @@ Pequena mudança em três pontos de chamada, com testes. Status: needs-review, b
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados:
+- Correto: pela API do Kubernetes, `ready` nulo significa desconhecido e deve ser tratado como pronto. Os providers HTTP do CRD já faziam isso; TCP, UDP e Gateway API descartavam esses endpoints (Services sem seletor com EndpointSlices gerenciadas à mão ou por outros controllers ficavam sem backend).
+- Risco: endpoints com `ready` nulo passam a receber tráfego. É o comportamento definido pela API e o mesmo do kube-proxy.
+- O mesmo problema existia no filtro de nós do #12048, que já foi importado tratando nil como pronto.
+
+Ajustes:
+- Mudança aplicada nos três pontos do fork (o diff do PR é da base v3.7).
+- Testes `TestEndpointSliceReadyCondition` (CRD TCP/UDP e Gateway API) adaptados ao estilo do fork (`new(...)`, campos promovidos).
+
+Testes: `go test ./pkg/provider/kubernetes/crd/ ./pkg/provider/kubernetes/gateway/` ok; `golangci-lint` nos dois pacotes: 0 issues.

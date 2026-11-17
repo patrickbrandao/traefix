@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +347/-25 em 4 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/L, area/provider/k8s/gatewayapi |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,21 @@ Label status/2-needs-review; usuários aguardam há meses e cobram atualização
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados:
+- Segurança: ExternalName como backend é o vetor clássico de SSRF/bypass em controllers (CVE-2021-25740): um dono de rota pode apontar para nomes internos ou para serviços de outros namespaces. O PR protege com a opção `allowExternalNameServices`, opt-in e desligada por padrão, como nos providers CRD e Ingress. Referências cross-namespace continuam exigindo ReferenceGrant antes de `getBackendAddresses`, então o ExternalName não burla essa checagem.
+- Ao contrário do que diz a descrição, a opção não existia no provider Gateway: o PR a cria em `Provider`.
+- Documentação da nova opção ausente no PR.
+- Os testes do PR esperavam `https://` para a porta 443; no fork o esquema do backend Gateway API vem de `appProtocol`/BackendTLSPolicy, não da porta, então o resultado correto é `http://external.domain:443` sem BackendTLSPolicy.
+- Conflitos no struct `Provider` e na tabela de testes (o fork tem QPS, Burst, Gateways, RetryMaxRequestBodyBytes, etc.).
+
+Ajustes:
+- Campo `AllowExternalNameServices` integrado ao struct atual.
+- Testes reescritos como `TestLoadHTTPRoutes_externalNameService` (flag desligada não gera servidor; ligada gera `http://external.domain:80` e `:443`), em vez das expectativas completas do PR, que não batiam com a geração de routers do fork.
+- Docs: linha na referência do provider (`kubernetes-gateway.md`) e `configuration-options.md` regenerado com `make generate`. O `make generate` também gerou as âncoras da tabela de annotations do #12921 em `gateway-api.md`, incluídas neste commit.
+
+Testes: `go build ./...` ok; `go test ./pkg/provider/kubernetes/gateway/` ok; `golangci-lint run ./pkg/provider/kubernetes/gateway/...` 0 issues.

@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"compress/gzip"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -792,7 +795,7 @@ func TestConnectionTimeouts(t *testing.T) {
 		},
 		{
 			desc:             "read succeeds with sufficient timeout",
-			readTimeout:      ptypes.Duration(500 * time.Millisecond),
+			readTimeout:      ptypes.Duration(3 * time.Second),
 			serverWriteDelay: 100 * time.Millisecond,
 		},
 		{
@@ -806,7 +809,7 @@ func TestConnectionTimeouts(t *testing.T) {
 		},
 		{
 			desc:         "write succeeds within timeout",
-			writeTimeout: ptypes.Duration(500 * time.Millisecond),
+			writeTimeout: ptypes.Duration(3 * time.Second),
 			serverReads:  true,
 		},
 		{
@@ -1223,6 +1226,116 @@ func TestCreateRootCACertPool(t *testing.T) {
 				return
 			}
 			assert.Contains(t, buf.String(), test.expectedLog)
+		})
+	}
+}
+
+func TestReadTimeout_http2QuietConnection(t *testing.T) {
+	backend := httptest.NewUnstartedServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		// Stay quiet for longer than the read timeout before responding,
+		// as a server-streaming gRPC backend would.
+		time.Sleep(3 * time.Second)
+		rw.WriteHeader(http.StatusOK)
+	}))
+	backend.EnableHTTP2 = true
+	backend.StartTLS()
+	t.Cleanup(backend.Close)
+
+	transportManager := NewTransportManager(nil)
+
+	rt, err := transportManager.createRoundTripper(&dynamic.ServersTransport{
+		InsecureSkipVerify: true,
+		ForwardingTimeouts: &dynamic.ForwardingTimeouts{
+			ReadTimeout:     ptypes.Duration(time.Second),
+			ReadIdleTimeout: ptypes.Duration(500 * time.Millisecond),
+		},
+	}, &tls.Config{InsecureSkipVerify: true})
+	require.NoError(t, err)
+
+	client := http.Client{Transport: rt}
+
+	// The ping health check keeps frames flowing on the quiet HTTP/2 connection,
+	// which must survive the read deadline.
+	res, err := client.Get(backend.URL)
+	require.NoError(t, err)
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, 2, res.ProtoMajor)
+}
+
+func TestDisableCompression(t *testing.T) {
+	const payload = "hello disable compression"
+
+	var gzipped bytes.Buffer
+	gzWriter := gzip.NewWriter(&gzipped)
+	_, err := gzWriter.Write([]byte(payload))
+	require.NoError(t, err)
+	require.NoError(t, gzWriter.Close())
+	gzippedBytes := gzipped.Bytes()
+
+	testCases := []struct {
+		desc                  string
+		disableCompression    bool
+		expectContentEncoding string
+		expectBodyEqualsGzip  bool
+		expectBodyEqualsPlain bool
+	}{
+		{
+			desc:                  "default behavior decompresses upstream gzip when client did not request it",
+			disableCompression:    false,
+			expectContentEncoding: "",
+			expectBodyEqualsPlain: true,
+		},
+		{
+			desc:                  "disableCompression preserves upstream Content-Encoding and gzip body",
+			disableCompression:    true,
+			expectContentEncoding: "gzip",
+			expectBodyEqualsGzip:  true,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				rw.Header().Set("Content-Type", "application/octet-stream")
+				rw.Header().Set("Content-Encoding", "gzip")
+				rw.WriteHeader(http.StatusOK)
+				_, _ = rw.Write(gzippedBytes)
+			}))
+			t.Cleanup(srv.Close)
+
+			transportManager := NewTransportManager(nil)
+			transportManager.Update(map[string]*dynamic.ServersTransport{
+				"test": {
+					DisableCompression: test.disableCompression,
+				},
+			})
+
+			tr, err := transportManager.GetRoundTripper("test")
+			require.NoError(t, err)
+
+			req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+			require.NoError(t, err)
+
+			resp, err := (&http.Client{Transport: tr}).Do(req)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = resp.Body.Close() })
+
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, test.expectContentEncoding, resp.Header.Get("Content-Encoding"))
+
+			if test.expectBodyEqualsGzip {
+				assert.Equal(t, gzippedBytes, body)
+			}
+			if test.expectBodyEqualsPlain {
+				assert.Equal(t, payload, string(body))
+			}
 		})
 	}
 }

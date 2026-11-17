@@ -60,7 +60,7 @@ func TestConnPool_ConnReuse(t *testing.T) {
 				return &mockConn{doneCh: make(chan struct{})}, nil
 			}
 
-			pool := newConnPool(2, 0, 0, dialer)
+			pool := newConnPool(2, 0, 0, 0, 0, dialer)
 			test.poolFn(pool)
 
 			assert.Equal(t, test.expected, connAlloc)
@@ -113,7 +113,7 @@ func TestConnPool_MaxIdleConn(t *testing.T) {
 				}, nil
 			}
 
-			pool := newConnPool(test.maxIdleConn, 0, 0, dialer)
+			pool := newConnPool(test.maxIdleConn, 0, 0, 0, 0, dialer)
 			test.poolFn(pool)
 
 			assert.Equal(t, test.expected, keepOpenedConn)
@@ -134,7 +134,7 @@ func TestConnPool_CloseIdleConns(t *testing.T) {
 		}, nil
 	}
 
-	pool := newConnPool(2, 0, 0, dialer)
+	pool := newConnPool(2, 0, 0, 0, 0, dialer)
 
 	c1, err := pool.AcquireConn()
 	require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestGC(t *testing.T) {
 		return c, nil
 	}
 
-	pools["test"] = newConnPool(10, 1*time.Second, 0, dialer)
+	pools["test"] = newConnPool(10, 1*time.Second, 0, 0, 0, dialer)
 	runtime.SetFinalizer(pools["test"], func(p *connPool) {
 		isDestroyed = true
 	})

@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +1325/-50 em 15 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/L, area/provider/k8s/crd |
-| Status | pendente |
+| Status | rejeitado |
 
 ## O que faz
 
@@ -39,3 +39,16 @@ Maintainer comentou que a abordagem está errada: middlewares só deveriam ser p
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: rejeitado.**
+
+Achados:
+- Um maintainer (juliens) disse que a abordagem está errada: middlewares só deveriam ser aceitos direto no `LoadBalancerSpec` quando ele aponta para um Service Kubernetes; para um TraefikService, devem ser definidos no próprio serviço alvo. Sugeriu, no lugar, emitir um aviso quando um TraefikService é referenciado com middlewares.
+- O PR acrescenta um campo `middlewares` em `WRRService`, `HRWService`, `MirrorService` e `Failover` da configuração dinâmica (todos os providers, não só o CRD) e envolve handlers filhos no service manager: superfície grande (+1325 linhas, base v3.7) para uma API que o upstream não quer.
+- Do ponto de vista de segurança, o problema descrito (um middleware de autenticação ignorado em silêncio) é real, mas a correção certa é o aviso/erro sugerido pelo maintainer, não uma nova API.
+
+Motivo: abordagem rejeitada pelo upstream; adotar no fork criaria uma API divergente difícil de manter. Se for necessário, implementar só o aviso quando houver middlewares num filho que referencia TraefikService.
+
+Testes: nenhum (não importado).

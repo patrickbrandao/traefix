@@ -136,7 +136,7 @@ spec:
                       description: |-
                         Priority defines the router's priority.
                         More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/routing/rules-and-priority/#priority
-                      maximum: 9223372036854775000
+                      maximum: 9007199254740991
                       type: integer
                     respondingTimeouts:
                       description: RespondingTimeouts defines the timeouts for responding
@@ -609,7 +609,7 @@ spec:
                       description: |-
                         Priority defines the router's priority.
                         More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/tcp/routing/rules-and-priority/#priority
-                      maximum: 9223372036854775000
+                      maximum: 9007199254740991
                       type: integer
                     services:
                       description: Services defines the list of TCP services.
@@ -617,6 +617,48 @@ spec:
                         description: ServiceTCP defines an upstream TCP service to
                           proxy traffic to.
                         properties:
+                          healthCheck:
+                            description: HealthCheck defines health checks for ExternalName
+                              services.
+                            properties:
+                              expect:
+                                description: Expect defines the expected response
+                                  from the server.
+                                type: string
+                              interval:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  Interval defines the frequency of the health check calls for healthy targets.
+                                  Default: 30s
+                                x-kubernetes-int-or-string: true
+                              port:
+                                description: Port defines the server URL port for
+                                  the health check endpoint.
+                                type: integer
+                              send:
+                                description: Send defines the expected request to
+                                  send to the server.
+                                type: string
+                              timeout:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  Timeout defines the maximum duration Traefik will wait for a health check request before considering the server unhealthy.
+                                  Default: 5s
+                                x-kubernetes-int-or-string: true
+                              unhealthyInterval:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  UnhealthyInterval defines the frequency of the health check calls for unhealthy targets.
+                                  When UnhealthyInterval is not defined, it defaults to the Interval value.
+                                  Default: 30s
+                                x-kubernetes-int-or-string: true
+                            type: object
                           name:
                             description: Name defines the name of the referenced Kubernetes
                               Service.
@@ -3477,6 +3519,10 @@ spec:
                 items:
                   type: string
                 type: array
+              disableCompression:
+                description: DisableCompression disables compression handling for
+                  connections with backend servers.
+                type: boolean
               disableHTTP2:
                 description: DisableHTTP2 disables HTTP/2 for connections with backend
                   servers.

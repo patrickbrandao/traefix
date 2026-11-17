@@ -509,6 +509,7 @@ http:
         readTimeout: 42s
         writeTimeout: 42s
       disableHTTP2: true
+      disableCompression: true
       peerCertURI: foobar
       spiffe:
         ids:
@@ -541,6 +542,7 @@ http:
         readTimeout: 42s
         writeTimeout: 42s
       disableHTTP2: true
+      disableCompression: true
       peerCertURI: foobar
       spiffe:
         ids:

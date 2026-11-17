@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/observability/logs"
 	traefikv1alpha1 "github.com/traefik/traefik/v3/pkg/provider/kubernetes/crd/traefikio/v1alpha1"
@@ -188,6 +189,48 @@ func (p *Provider) createLoadBalancerServerTCP(client Client, parentNamespace st
 		},
 	}
 
+	if service.HealthCheck != nil {
+		tcpService.LoadBalancer.HealthCheck = &dynamic.TCPServerHealthCheck{
+			Port: service.HealthCheck.Port,
+		}
+		tcpService.LoadBalancer.HealthCheck.SetDefaults()
+
+		if service.HealthCheck.Interval != nil {
+			err := tcpService.LoadBalancer.HealthCheck.Interval.Set(service.HealthCheck.Interval.String())
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		if service.HealthCheck.Timeout != nil {
+			err := tcpService.LoadBalancer.HealthCheck.Timeout.Set(service.HealthCheck.Timeout.String())
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		if service.HealthCheck.UnhealthyInterval == nil {
+			tcpService.LoadBalancer.HealthCheck.UnhealthyInterval = &tcpService.LoadBalancer.HealthCheck.Interval
+		} else {
+			var unhealthyInterval ptypes.Duration
+
+			err := unhealthyInterval.Set(service.HealthCheck.UnhealthyInterval.String())
+			if err != nil {
+				return nil, err
+			}
+
+			tcpService.LoadBalancer.HealthCheck.UnhealthyInterval = &unhealthyInterval
+		}
+
+		if service.HealthCheck.Send != "" {
+			tcpService.LoadBalancer.HealthCheck.Send = service.HealthCheck.Send
+		}
+
+		if service.HealthCheck.Expect != "" {
+			tcpService.LoadBalancer.HealthCheck.Expect = service.HealthCheck.Expect
+		}
+	}
+
 	if service.ProxyProtocol != nil {
 		tcpService.LoadBalancer.ProxyProtocol = &dynamic.ProxyProtocol{}
 		tcpService.LoadBalancer.ProxyProtocol.SetDefaults()
@@ -225,6 +268,10 @@ func (p *Provider) loadTCPServers(client Client, namespace string, svc traefikv1
 		return nil, fmt.Errorf("externalName services not allowed: %s/%s", namespace, svc.Name)
 	}
 
+	if service.Spec.Type != corev1.ServiceTypeExternalName && svc.HealthCheck != nil {
+		return nil, fmt.Errorf("healthCheck allowed only for ExternalName services: %s/%s", namespace, svc.Name)
+	}
+
 	svcPort, err := getServicePort(service, svc.Port)
 	if err != nil {
 		return nil, err
@@ -243,6 +290,11 @@ func (p *Provider) loadTCPServers(client Client, namespace string, svc traefikv1
 
 		if !nodesExists || len(nodes) == 0 {
 			return nil, fmt.Errorf("nodes not found for NodePort service %s/%s", svc.Namespace, svc.Name)
+		}
+
+		nodes, err = nodePortLBNodes(client, service, nodes)
+		if err != nil {
+			return nil, err
 		}
 
 		for _, node := range nodes {
@@ -301,7 +353,7 @@ func (p *Provider) loadTCPServers(client Client, namespace string, svc traefikv1
 			}
 
 			for _, endpoint := range endpointSlice.Endpoints {
-				if endpoint.Conditions.Ready == nil || !*endpoint.Conditions.Ready {
+				if !ptr.Deref(endpoint.Conditions.Ready, true) {
 					continue
 				}
 

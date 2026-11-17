@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +820/-47 em 17 arquivos |
 | Labels | status/1-needs-design-review, size/L, area/provider/k8s/gatewayapi |
-| Status | pendente |
+| Status | adiado |
 
 ## O que faz
 
@@ -39,3 +39,17 @@ Muda RBAC do Gateway API e a documentação de migração (17 arquivos, +820/-47
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: adiado.**
+
+Achados:
+- O informer de Nodes é criado por padrão (`disableNodeResources` false). Instalações do provider Gateway API que hoje não têm permissão `list/watch nodes` (o RBAC atual não pede, é recurso cluster-scope) passariam a travar em `WaitForCacheSync` na inicialização: regressão de disponibilidade em upgrade. O correto seria opt-in, ou criar o informer só quando algum Service usar a annotation `nodePortLB`.
+- Amplia o RBAC padrão do Gateway API com leitura de todos os Nodes do cluster, o que o próprio autor pediu para revisarem.
+- Status `needs-design-review` no upstream, sem decisão; diff grande (17 arquivos, docs de migração).
+- Conflita com o código atual do fork.
+
+Motivo: risco de regressão por RBAC e decisão de design pendente no upstream. Reavaliar quando o upstream decidir, de preferência com informer de Nodes opt-in.
+
+Testes: nenhum (não importado).
