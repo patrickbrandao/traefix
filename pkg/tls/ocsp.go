@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/patrickmn/go-cache"
@@ -21,6 +22,10 @@ type ocspEntry struct {
 	leaf       *x509.Certificate
 	issuer     *x509.Certificate
 	responders []string
+
+	// mu guards staple and nextUpdate, written by the staple update routine
+	// while TLS handshakes read the staple.
+	mu         sync.RWMutex
 	nextUpdate time.Time
 	staple     []byte
 }
@@ -75,6 +80,9 @@ func (o *ocspStapler) ForceStapleUpdates() {
 func (o *ocspStapler) GetStaple(key string) ([]byte, bool) {
 	if item, ok := o.cache.Get(key); ok && item != nil {
 		if entry, ok := item.(*ocspEntry); ok {
+			entry.mu.RLock()
+			defer entry.mu.RUnlock()
+
 			return entry.staple, true
 		}
 	}
@@ -89,6 +97,16 @@ func (o *ocspStapler) Upsert(key string, leaf, issuer *x509.Certificate) error {
 	}
 
 	if item, ok := o.cache.Get(key); ok {
+		// The issuer is read by the staple update routine without locking,
+		// so a changed issuer replaces the entry instead of mutating it.
+		// The staple obtained with the previous issuer is dropped, as the new issuer is the one to trust.
+		if entry, ok := item.(*ocspEntry); ok && issuer != nil && !issuer.Equal(entry.issuer) {
+			item = &ocspEntry{
+				leaf:       entry.leaf,
+				issuer:     issuer,
+				responders: entry.responders,
+			}
+		}
 		o.cache.Set(key, item, cache.NoExpiration)
 		return nil
 	}
@@ -136,7 +154,11 @@ func (o *ocspStapler) updateStaples(ctx context.Context) {
 
 		entry := item.Object.(*ocspEntry)
 
-		if entry.staple != nil && time.Now().Before(entry.nextUpdate) {
+		entry.mu.RLock()
+		upToDate := entry.staple != nil && time.Now().Before(entry.nextUpdate)
+		entry.mu.RUnlock()
+
+		if upToDate {
 			continue
 		}
 
@@ -191,6 +213,7 @@ func (o *ocspStapler) updateStaple(ctx context.Context, entry *ocspEntry) error 
 			continue
 		}
 
+		entry.mu.Lock()
 		entry.staple = ocspResBytes
 
 		// As per RFC 6960, the nextUpdate field is optional.
@@ -200,9 +223,52 @@ func (o *ocspStapler) updateStaple(ctx context.Context, entry *ocspEntry) error 
 		} else {
 			entry.nextUpdate = ocspRes.ThisUpdate.Add(ocspRes.NextUpdate.Sub(ocspRes.ThisUpdate) / 2)
 		}
+		entry.mu.Unlock()
 
 		return nil
 	}
 
 	return errors.New("no OCSP staple obtained from any responders")
+}
+
+// findIssuer returns the certificate of the chain that signed leaf.
+// Bundles are not always ordered (e.g. leaf, root, intermediate), so the issuer is the certificate
+// whose subject matches the leaf issuer and whose key verifies the leaf signature.
+// When none is found, it falls back on the previous behavior: the second certificate of the chain, or the leaf itself.
+func findIssuer(leaf *x509.Certificate, certChain [][]byte) (*x509.Certificate, error) {
+	if leaf == nil {
+		return nil, errors.New("leaf certificate is nil")
+	}
+
+	for _, rawCert := range certChain {
+		cand, err := x509.ParseCertificate(rawCert)
+		if err != nil {
+			continue
+		}
+
+		if bytes.Equal(cand.Raw, leaf.Raw) || !bytes.Equal(leaf.RawIssuer, cand.RawSubject) {
+			continue
+		}
+
+		if len(leaf.AuthorityKeyId) > 0 && len(cand.SubjectKeyId) > 0 && !bytes.Equal(leaf.AuthorityKeyId, cand.SubjectKeyId) {
+			continue
+		}
+
+		if err := leaf.CheckSignatureFrom(cand); err != nil {
+			continue
+		}
+
+		return cand, nil
+	}
+
+	if len(certChain) > 1 {
+		cand, err := x509.ParseCertificate(certChain[1])
+		if err != nil {
+			return nil, fmt.Errorf("parsing issuer certificate: %w", err)
+		}
+
+		return cand, nil
+	}
+
+	return leaf, nil
 }
