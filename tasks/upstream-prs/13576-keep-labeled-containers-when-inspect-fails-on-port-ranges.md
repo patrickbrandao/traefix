@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +77/-1 em 2 arquivos |
 | Labels | status/2-needs-review, area/provider/docker, kind/bug/fix, size/M |
-| Status | pendente |
+| Status | adiado |
 
 ## O que faz
 
@@ -37,3 +37,16 @@ Reconstrução a partir de dados resumidos, então alguns campos ficam ausentes 
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- O issue de origem (upstream 13146) foi reportado no Traefik 2.11, que usa o cliente Docker antigo. O PR não mostra que a falha de decode do `inspect` com `expose` em faixa (`12000-13000`) ainda acontece com o cliente `moby/moby/client` e a `moby/moby/api` v1.56 usados hoje, e o teste simula um erro genérico (`assert.AnError`), não o erro real de decode.
+- **A correção é ineficaz:** o `dockerData` de fallback leva só ID, nome e labels, sem `NetworkSettings`. Assim `getIPAddress` não acha IP, `addServer` falha e o container é descartado do mesmo jeito, só que um passo depois e com outra mensagem de erro.
+- **Contorna o filtro de estado:** o fallback não copia `State`/`Status` do summary. Com `Status == ""`, `keepContainer` trata o container como "em execução". Um container parado (ou removido entre o `list` e o `inspect`, caso NotFound, também coberto pelo fallback) entraria no pipeline como se estivesse ativo.
+- O fallback vale para qualquer erro de `inspect`, inclusive timeouts e erros de permissão, não só para o erro de decode que se queria tratar.
+
+**Veredito:** adiado. Para avançar é preciso primeiro reproduzir o erro com o cliente atual. Se ainda ocorrer, o fallback deve se limitar ao erro de decode e montar o `dockerData` a partir do summary completo (`State`, `NetworkSettings.Networks`, `Ports`, `HostConfig.NetworkMode`), ou o decode da faixa deve ser corrigido na origem.
+
+**Testes:** não aplicável (nada importado).
