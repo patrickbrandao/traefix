@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +168/-1 em 3 arquivos |
 | Labels | status/2-needs-review, area/acme, kind/bug/fix, size/M |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -38,3 +38,38 @@ Escopo pequeno (3 arquivos de pkg/provider/acme). Fallback in-place reintroduz o
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados:
+- Hoje o `acme.json` é gravado com `os.WriteFile`, que trunca o arquivo antes de escrever. Se o processo morre ou
+  o disco enche no meio da escrita, o arquivo fica truncado ou vazio, e as contas e chaves privadas ACME se
+  perdem. O PR passa a gravar num arquivo temporário no mesmo diretório (`CreateTemp`, 0600), faz `fsync`,
+  `rename` e `fsync` do diretório. Também corrige um bug real: um erro de `json.MarshalIndent` seguia em
+  frente e gravava dados nil.
+- Os fallbacks são seguros. Se o temporário não puder ser criado ou o rename falhar (por exemplo, arquivo com
+  bind mount em container), o PR grava no lugar, como antes. Symlinks são resolvidos para substituir o alvo,
+  e não o link, o mesmo comportamento do `os.WriteFile`.
+- **Permissões.** O PR copia o modo do arquivo existente para o novo. Se o arquivo tivesse bits de grupo ou outros
+  (por exemplo, `chmod` manual após o boot), eles seriam propagados para um arquivo que contém chaves
+  privadas.
+- Com o rename, a posse (owner/group) de um `acme.json` provisionado externamente passa a ser a do processo.
+  Isso é aceitável e foi documentado aqui.
+- O teste `failedWriteKeepsPreviousFile` reexecuta o próprio binário de teste com `RLIMIT_FSIZE` para simular o
+  disco cheio. É o binário do próprio `go test`, nada externo.
+- As mensagens de assert ("temporary file left behind") contrariavam a convenção.
+- O review automatizado citou "file inclusion" no `ReadFile`, mas é falso positivo: o caminho vem da
+  configuração de instalação.
+
+Ajustes:
+- O modo copiado do arquivo existente é mascarado com `& 0o700`, para nunca conceder acesso a grupo ou outros, e o
+  porquê ficou em comentário.
+- Removi as mensagens dos asserts.
+
+Testes:
+- `go build ./...`: ok.
+- `go test ./pkg/provider/acme/`: ok, incluindo os testes novos de escrita atômica, de falha de escrita
+  preservando o arquivo anterior e de preservação de modo.
+- `golangci-lint run ./pkg/provider/acme/...`: 0 issues.
