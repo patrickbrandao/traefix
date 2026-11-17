@@ -378,7 +378,14 @@ func createRootCACertPool(rootCAs []types.FileOrContent) *x509.CertPool {
 			log.Error().Err(err).Msg("Error while read RootCAs")
 			continue
 		}
-		roots.AppendCertsFromPEM(certContent)
+		if !roots.AppendCertsFromPEM(certContent) {
+			// Without this log, an invalid root CA only shows up later as an unknown authority error on every request.
+			if cert.IsPath() {
+				log.Error().Str("file", cert.String()).Msg("No valid certificate found in RootCAs file")
+			} else {
+				log.Error().Msg("No valid certificate found in RootCAs content")
+			}
+		}
 	}
 
 	return roots
