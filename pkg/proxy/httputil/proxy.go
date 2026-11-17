@@ -62,7 +62,7 @@ func buildSingleHostProxy(target *url.URL, passHostHeader bool, preservePath boo
 		ErrorHandler:  ErrorHandler,
 	}
 
-	return newH2CUpgradeHandler(proxy)
+	return newH2CUpgradeHandler(newTLSUpgradeHandler(proxy))
 }
 
 func rewriteRequestBuilder(target *url.URL, passHostHeader bool, preservePath bool) func(*httputil.ProxyRequest) {
