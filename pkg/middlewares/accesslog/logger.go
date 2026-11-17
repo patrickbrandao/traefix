@@ -2,6 +2,7 @@ package accesslog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -26,6 +27,7 @@ import (
 	traefiktls "github.com/traefik/traefik/v3/pkg/tls"
 	"github.com/traefik/traefik/v3/pkg/types"
 	"go.opentelemetry.io/contrib/bridges/otellogrus"
+	otelsdk "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
@@ -73,6 +75,8 @@ type Handler struct {
 	httpCodeRanges types.HTTPCodeRanges
 	logHandlerChan chan handlerParams
 	wg             sync.WaitGroup
+
+	otelLoggerProvider *otelsdk.LoggerProvider
 
 	// done is closed by Close to signal shutdown. logHandlerChan itself is never
 	// closed: a hijacked connection can outlive Shutdown, so its handler may still
@@ -152,8 +156,10 @@ func NewHandler(ctx context.Context, config *otypes.AccessLog, hooks ...logrus.H
 		logger.Hooks.Add(hook)
 	}
 
+	var otelLoggerProvider *otelsdk.LoggerProvider
 	if config.OTLP != nil {
-		otelLoggerProvider, err := config.OTLP.NewLoggerProvider(ctx, config.SampleRate)
+		var err error
+		otelLoggerProvider, err = config.OTLP.NewLoggerProvider(ctx, config.SampleRate)
 		if err != nil {
 			return nil, fmt.Errorf("setting up OpenTelemetry logger provider: %w", err)
 		}
@@ -194,6 +200,8 @@ func NewHandler(ctx context.Context, config *otypes.AccessLog, hooks ...logrus.H
 		file:           file,
 		logHandlerChan: logHandlerChan,
 		done:           make(chan struct{}),
+
+		otelLoggerProvider: otelLoggerProvider,
 	}
 
 	if config.Filters != nil {
@@ -396,7 +404,20 @@ func (h *Handler) Close() error {
 	h.closeOnce.Do(func() {
 		close(h.done)
 		h.wg.Wait()
-		h.closeErr = h.file.Close()
+
+		// The batch processor keeps unexported records in memory: without a shutdown,
+		// every stop loses what was logged since the last periodic export.
+		var otelErr error
+		if h.otelLoggerProvider != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := h.otelLoggerProvider.Shutdown(ctx); err != nil {
+				otelErr = fmt.Errorf("shutting down OpenTelemetry logger provider: %w", err)
+			}
+		}
+
+		h.closeErr = errors.Join(otelErr, h.file.Close())
 	})
 	return h.closeErr
 }
