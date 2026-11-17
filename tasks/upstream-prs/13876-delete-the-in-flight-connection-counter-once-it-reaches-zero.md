@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +41/-6 em 2 arquivos |
 | Labels | status/2-needs-review, contributor/waiting-for-corrections, kind/bug/fix, size/S, area/middleware |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,19 @@ Pequeno, com correção de race no teste existente. Review do maintainer pediu r
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados: o mapa `connections` do middleware TCP `inFlightConn` guardava uma entrada zerada por IP de
+origem para sempre (crescimento sem limite, DoS lento de memória num entrypoint exposto). O `delete`
+quando o contador chega a zero é seguro: `increment` lê chave ausente como zero, e tudo ocorre sob o mesmo
+mutex. Mesmo padrão do `connlimit` do oxy usado no HTTP. Nada suspeito no diff.
+
+Ajustes: o código local já tinha a correção de sincronização de `TestInFlightConn_ServeTCP` (fecha
+`finishCh` depois que `ServeTCP` retorna); a versão do PR desse teste conflitou e foi descartada em favor
+da local. Mantidos o teste novo `TestInFlightConn_ReleasedConnectionsAreForgotten` e o `fakeConn.Close`
+tolerante a canal nil.
+
+Testes: `go test -count=50 ./pkg/middlewares/tcp/inflightconn/` ok, `golangci-lint` 0 issues.
