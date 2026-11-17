@@ -87,6 +87,8 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 	hostsWithUseRegex := make(map[string]bool)
 	hostsWithRootPath := make(map[string]bool)
 	claimedAliases := make(map[string]string)
+	// ingress-nginx attaches server-alias to the whole server, using the first ingress declaring one for the host.
+	serverAliasOwners := make(map[string]ingressEntry)
 
 	// Provider-level default backend.
 	if p.defaultBackendServiceNamespace != "" && p.defaultBackendServiceName != "" {
@@ -172,6 +174,16 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 		for _, rule := range ingress.Spec.Rules {
 			allHosts[rule.Host] = true
 
+			if len(ptr.Deref(cfg.ServerAlias, nil)) > 0 {
+				if owner, ok := serverAliasOwners[rule.Host]; ok && (owner.Namespace != entry.Namespace || owner.Name != entry.Name) {
+					logger.Warn().
+						Str("host", rule.Host).
+						Msgf("Skipping server-alias because it is already configured for this host by %s/%s", owner.Namespace, owner.Name)
+				} else {
+					serverAliasOwners[rule.Host] = entry
+				}
+			}
+
 			// The ingress default backend becomes a host-only catch-all location, which matches "/" as well.
 			if ingress.Spec.DefaultBackend != nil && ingress.Spec.DefaultBackend.Service != nil {
 				hostsWithRootPath[rule.Host] = true
@@ -209,6 +221,11 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 		}
 
 		orderedIngresses = append(orderedIngresses, entry)
+	}
+
+	serverAliases := make(map[string][]string)
+	for host, owner := range serverAliasOwners {
+		serverAliases[host] = resolveAliases(ctx, owner, allHosts, claimedAliases)
 	}
 
 	// Second pass: resolve canary backends.
@@ -503,7 +520,7 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 					}
 				}
 
-				loc.Aliases = resolveAliases(ctx, loc, allHosts, claimedAliases)
+				loc.Aliases = hostAliases(serverAliasOwners, serverAliases, rule.Host, ing.Namespace)
 				loc.UseRegex = hostsWithUseRegex[rule.Host]
 
 				// Build all middleware configurations so the translator only registers them.
@@ -626,7 +643,7 @@ func (p *Provider) build(ctx context.Context, ingressClasses []*netv1.IngressCla
 					SSLPassthrough:          sslPassthrough,
 				}
 
-				loc.Aliases = resolveAliases(ctx, loc, allHosts, claimedAliases)
+				loc.Aliases = hostAliases(serverAliasOwners, serverAliases, rule.Host, ing.Namespace)
 				loc.UseRegex = hostsWithUseRegex[rule.Host]
 
 				// Inherit basic/digest auth and custom headers like the rule paths
@@ -1390,17 +1407,25 @@ func basicAuthUsers(secret *corev1.Secret, authSecretType string) ([]secretUser,
 	return users, nil
 }
 
-// resolveAliases returns the server-alias hostnames that are valid additions
-// to the location's host rule. Aliases that collide with another host or were
-// claimed by a different ingress are dropped (with a debug log).
-func resolveAliases(ctx context.Context, loc *location, allHosts map[string]bool, claimedAliases map[string]string) []string {
-	if loc.Config.ServerAlias == nil {
+// hostAliases returns the server-alias hostnames to apply to a location of the given host and namespace.
+// Unlike ingress-nginx, the aliases of an Ingress never extend the Ingresses of another namespace sharing the host:
+// otherwise an Ingress author could expose the routes of another namespace under a hostname they control.
+func hostAliases(owners map[string]ingressEntry, aliases map[string][]string, host, namespace string) []string {
+	owner, ok := owners[host]
+	if !ok || owner.Namespace != namespace {
 		return nil
 	}
 
-	ingressKey := loc.Namespace + "/" + loc.IngressName
+	return aliases[host]
+}
+
+// resolveAliases returns the server-alias hostnames of the given ingress that are
+// valid additions to its hosts' rules. Aliases that collide with another host or
+// were claimed by a different ingress are dropped (with a debug log).
+func resolveAliases(ctx context.Context, ing ingressEntry, allHosts map[string]bool, claimedAliases map[string]string) []string {
+	ingressKey := ing.Namespace + "/" + ing.Name
 	var aliases []string
-	for _, alias := range *loc.Config.ServerAlias {
+	for _, alias := range ptr.Deref(ing.config.ServerAlias, nil) {
 		a := strings.ToLower(alias)
 		if _, ok := allHosts[a]; ok {
 			log.Ctx(ctx).Debug().Str("alias", alias).Msg("Skipping server-alias already defined as a host")

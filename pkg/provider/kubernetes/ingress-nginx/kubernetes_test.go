@@ -28838,6 +28838,72 @@ func TestCanaryRouterPriority(t *testing.T) {
 	}
 }
 
+func TestLoadIngresses_serverAliasScope(t *testing.T) {
+	testCases := []struct {
+		desc            string
+		paths           []string
+		expectedAliased map[string]bool
+	}{
+		{
+			desc:  "alias applies to every Ingress of the host in the same namespace",
+			paths: []string{"services.yml", "ingressclasses.yml", "ingresses/ingress-with-server-alias-shared-host.yml"},
+			expectedAliased: map[string]bool{
+				"alias-ingress":      true,
+				"plain-ingress":      true,
+				"late-alias-ingress": true,
+			},
+		},
+		{
+			desc:  "alias never applies to an Ingress of another namespace",
+			paths: []string{"services.yml", "ingressclasses.yml", "ingresses/ingress-with-server-alias-cross-namespace.yml"},
+			expectedAliased: map[string]bool{
+				"alias-ingress":  true,
+				"victim-ingress": false,
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			k8sObjects := readResources(t, test.paths)
+			kubeClient := kubefake.NewClientset(k8sObjects...)
+			client := newClient(kubeClient)
+
+			eventCh, err := client.WatchAll(t.Context(), "", "")
+			require.NoError(t, err)
+			<-eventCh
+
+			p := Provider{
+				k8sClient:         client,
+				NonTLSEntryPoints: []string{"http"},
+				TLSEntryPoints:    []string{"https"},
+			}
+			p.SetDefaults()
+
+			conf := p.loadConfiguration(t.Context())
+			require.NotNil(t, conf.HTTP)
+
+			seen := make(map[string]bool)
+			for _, router := range conf.HTTP.Routers {
+				if router.Observability == nil || router.Observability.Metadata == nil || router.Observability.Metadata.Ingress == nil {
+					continue
+				}
+
+				name := router.Observability.Metadata.Ingress.Name
+				seen[name] = seen[name] || strings.Contains(router.Rule, `Host("alias.localhost")`)
+			}
+
+			for name, expected := range test.expectedAliased {
+				aliased, ok := seen[name]
+				require.True(t, ok, name)
+				assert.Equal(t, expected, aliased, name)
+			}
+		})
+	}
+}
+
 func TestNginxSizeToBytes(t *testing.T) {
 	testCases := []struct {
 		desc     string
