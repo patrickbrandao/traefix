@@ -221,6 +221,10 @@ type Compress struct {
 	Encodings []string `json:"encodings,omitempty" toml:"encodings,omitempty" yaml:"encodings,omitempty" export:"true"`
 	// DefaultEncoding specifies the default encoding if the `Accept-Encoding` header is not in the request or contains a wildcard (`*`).
 	DefaultEncoding string `json:"defaultEncoding,omitempty" toml:"defaultEncoding,omitempty" yaml:"defaultEncoding,omitempty" export:"true"`
+	// ExcludeRequestContentType defines whether the request Content-Type header is also compared to the excluded content types.
+	// Requests with a matching Content-Type are passed through without compression.
+	// Default: true.
+	ExcludeRequestContentType *bool `json:"excludeRequestContentType,omitempty" toml:"excludeRequestContentType,omitempty" yaml:"excludeRequestContentType,omitempty" export:"true"`
 }
 
 func (c *Compress) SetDefaults() {

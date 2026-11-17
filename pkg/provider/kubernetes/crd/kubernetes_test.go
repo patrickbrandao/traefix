@@ -15644,3 +15644,38 @@ func TestGlobalNativeLB(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateCompressMiddleware(t *testing.T) {
+	disabled := false
+
+	testCases := []struct {
+		desc     string
+		compress *traefikv1alpha1.Compress
+		expected *dynamic.Compress
+	}{
+		{
+			desc: "nil",
+		},
+		{
+			desc:     "defaults",
+			compress: &traefikv1alpha1.Compress{},
+			expected: &dynamic.Compress{Encodings: []string{"gzip", "br", "zstd"}},
+		},
+		{
+			desc:     "request content type exclusion disabled",
+			compress: &traefikv1alpha1.Compress{ExcludeRequestContentType: &disabled},
+			expected: &dynamic.Compress{
+				Encodings:                 []string{"gzip", "br", "zstd"},
+				ExcludeRequestContentType: &disabled,
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, test.expected, createCompressMiddleware(test.compress))
+		})
+	}
+}

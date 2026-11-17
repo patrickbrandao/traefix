@@ -352,6 +352,10 @@ type Compress struct {
 	Encodings []string `json:"encodings,omitempty"`
 	// DefaultEncoding specifies the default encoding if the `Accept-Encoding` header is not in the request or contains a wildcard (`*`).
 	DefaultEncoding *string `json:"defaultEncoding,omitempty"`
+	// ExcludeRequestContentType defines whether the request Content-Type header is also compared to the excluded content types.
+	// Requests with a matching Content-Type are passed through without compression.
+	// Default: true.
+	ExcludeRequestContentType *bool `json:"excludeRequestContentType,omitempty"`
 }
 
 // +k8s:deepcopy-gen=true

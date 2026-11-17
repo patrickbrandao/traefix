@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +106/-42 em 8 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/S, area/middleware |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,32 @@ Comentário positivo de maintainer, sem aprovação formal. Toca o redactor (tes
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.** Escolhido no lugar do traefik/traefik#12066 e aplicado sobre o #14235.
+
+Análise:
+- O PR cria a opção `excludeRequestContentType` (padrão `true`). Com `false`, o `Content-Type` da *requisição* deixa de ser comparado a `excludedContentTypes`, e só o da resposta conta (issues #12014 e #12070). O comportamento padrão não muda, ao contrário do #12066.
+- O maintainer (nmengin) elogiou a abordagem.
+- Achados:
+  - **Regressão silenciosa de default.** O campo era `bool` com `SetDefaults() = true`. Providers que não aplicam defaults (o REST provider decodifica JSON direto, com `json.NewDecoder`) passariam a ter `false`, ou seja, mudança de comportamento sem ninguém pedir.
+  - Sem `omitempty`, o campo aparecia em toda exportação JSON/TOML/YAML. Por isso o PR teve de alterar os testdata do redactor e os testes de labels e de KV.
+  - **Sem suporte no CRD Kubernetes**: `v1alpha1.Compress` não ganhou o campo, então a opção não podia ser desligada via CRD.
+  - O comentário de porquê ("Notably for text/event-stream ... #2576") foi removido.
+  - Nenhum problema de segurança: `application/grpc` continua excluído pelo `Content-Type` da resposta.
+
+Ajustes:
+- O campo virou `*bool` com `omitempty`. `nil` equivale a `true` (`ptr.Deref(..., true)`), no mesmo padrão de `mirrorBody`. Assim nenhum provider muda de comportamento, e o `SetDefaults` e os testes de labels, KV e redactor ficam como estavam.
+- Campo adicionado ao CRD (`v1alpha1.Compress.ExcludeRequestContentType`) e à conversão em `createCompressMiddleware`. Deepcopy, applyconfiguration e CRDs foram regenerados com `script/code-gen.sh`.
+- Restaurado o comentário de porquê sobre `text/event-stream`.
+- Exemplos de referência `file.{toml,yaml}` atualizados.
+- Testes:
+  - os casos existentes voltaram a usar o padrão (`nil`);
+  - os casos novos usam `new(false)`;
+  - novo `TestCreateCompressMiddleware` no provider CRD (nil, defaults, opção desligada).
+
+Testes:
+- `go build ./...` ok.
+- `go test ./pkg/middlewares/compress/ ./pkg/provider/kubernetes/crd/ ./pkg/config/... ./pkg/redactor/ ./pkg/provider/kv/` ok.
+- `golangci-lint run ./pkg/middlewares/compress/... ./pkg/provider/kubernetes/crd/... ./pkg/config/dynamic/...`: 0 issues.

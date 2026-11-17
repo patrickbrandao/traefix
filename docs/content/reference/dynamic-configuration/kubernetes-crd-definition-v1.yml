@@ -1117,6 +1117,12 @@ spec:
                     items:
                       type: string
                     type: array
+                  excludeRequestContentType:
+                    description: |-
+                      ExcludeRequestContentType defines whether the request Content-Type header is also compared to the excluded content types.
+                      Requests with a matching Content-Type are passed through without compression.
+                      Default: true.
+                    type: boolean
                   excludedContentTypes:
                     description: |-
                       ExcludedContentTypes defines the list of content types to compare the Content-Type header of the incoming requests and responses before compressing.

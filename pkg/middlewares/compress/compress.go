@@ -13,6 +13,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/middlewares"
+	"k8s.io/utils/ptr"
 )
 
 const typeName = "Compress"
@@ -33,7 +34,8 @@ type compress struct {
 	encodings       []string
 	defaultEncoding string
 	// supportedEncodings is a map of supported encodings and their priority.
-	supportedEncodings map[string]int
+	supportedEncodings        map[string]int
+	excludeRequestContentType bool
 
 	brotliHandler http.Handler
 	gzipHandler   http.Handler
@@ -85,15 +87,18 @@ func New(ctx context.Context, next http.Handler, conf dynamic.Compress, name str
 		return nil, fmt.Errorf("unsupported default encoding: %s", conf.DefaultEncoding)
 	}
 
+	// ExcludeRequestContentType is a pointer rather than a bool set by SetDefaults,
+	// so that the providers not applying the defaults (e.g. REST) keep the legacy behavior.
 	c := &compress{
-		next:               next,
-		name:               name,
-		excludes:           excludes,
-		includes:           includes,
-		minSize:            minSize,
-		encodings:          conf.Encodings,
-		defaultEncoding:    conf.DefaultEncoding,
-		supportedEncodings: buildSupportedEncodings(conf.Encodings),
+		next:                      next,
+		name:                      name,
+		excludes:                  excludes,
+		includes:                  includes,
+		minSize:                   minSize,
+		encodings:                 conf.Encodings,
+		defaultEncoding:           conf.DefaultEncoding,
+		supportedEncodings:        buildSupportedEncodings(conf.Encodings),
+		excludeRequestContentType: ptr.Deref(conf.ExcludeRequestContentType, true),
 	}
 
 	var err error
@@ -137,16 +142,18 @@ func (c *compress) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	mediaType, _, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
-	if err != nil {
-		logger.Debug().Err(err).Msg("Unable to parse MIME type")
-	}
+	if c.excludeRequestContentType {
+		mediaType, _, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
+		if err != nil {
+			logger.Debug().Err(err).Msg("Unable to parse MIME type")
+		}
 
-	// Notably for text/event-stream requests the response should not be compressed.
-	// See https://github.com/traefik/traefik/issues/2576
-	if slices.Contains(c.excludes, mediaType) {
-		c.next.ServeHTTP(rw, req)
-		return
+		// Notably for text/event-stream requests the response should not be compressed.
+		// See https://github.com/traefik/traefik/issues/2576
+		if slices.Contains(c.excludes, mediaType) {
+			c.next.ServeHTTP(rw, req)
+			return
+		}
 	}
 
 	acceptEncoding, ok := req.Header[acceptEncodingHeader]

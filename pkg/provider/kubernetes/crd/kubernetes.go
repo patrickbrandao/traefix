@@ -1093,6 +1093,8 @@ func createCompressMiddleware(compress *traefikv1alpha1.Compress) *dynamic.Compr
 		c.DefaultEncoding = *compress.DefaultEncoding
 	}
 
+	c.ExcludeRequestContentType = compress.ExcludeRequestContentType
+
 	return c
 }
 

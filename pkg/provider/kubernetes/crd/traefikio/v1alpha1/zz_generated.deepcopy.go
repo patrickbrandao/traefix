@@ -225,6 +225,11 @@ func (in *Compress) DeepCopyInto(out *Compress) {
 		*out = new(string)
 		**out = **in
 	}
+	if in.ExcludeRequestContentType != nil {
+		in, out := &in.ExcludeRequestContentType, &out.ExcludeRequestContentType
+		*out = new(bool)
+		**out = **in
+	}
 	return
 }
 
