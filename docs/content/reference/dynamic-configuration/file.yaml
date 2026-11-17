@@ -409,6 +409,7 @@ http:
           masterName: foobar
           sentinelUsername: foobar
           sentinelPassword: foobar
+          denyOnError: true
     Middleware19:
       redirectRegex:
         regex: foobar

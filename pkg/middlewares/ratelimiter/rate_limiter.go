@@ -37,6 +37,7 @@ type rateLimiter struct {
 	sourceMatcher utils.SourceExtractor
 	next          http.Handler
 	logger        *zerolog.Logger
+	denyOnError   bool
 
 	limiter limiter
 }
@@ -112,6 +113,12 @@ func New(ctx context.Context, next http.Handler, config dynamic.RateLimit, name 
 		}
 	}
 
+	// The in-memory limiter keeps failing closed, as it did before this option existed.
+	denyOnError := dynamic.RedisDefaultDenyOnError
+	if config.Redis != nil && config.Redis.DenyOnError != nil {
+		denyOnError = *config.Redis.DenyOnError
+	}
+
 	return &rateLimiter{
 		logger:        logger,
 		name:          name,
@@ -120,6 +127,7 @@ func New(ctx context.Context, next http.Handler, config dynamic.RateLimit, name 
 		next:          next,
 		sourceMatcher: sourceMatcher,
 		limiter:       limiter,
+		denyOnError:   denyOnError,
 	}, nil
 }
 
@@ -149,6 +157,12 @@ func (rl *rateLimiter) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	rlSource := fmt.Sprintf("%s:%s", rl.name, source)
 	delay, err := rl.limiter.Allow(ctx, rlSource)
 	if err != nil {
+		if !rl.denyOnError {
+			rl.logger.Error().Err(err).Msg("Could not insert/update bucket, forwarding the request without rate limiting")
+			rl.next.ServeHTTP(rw, req)
+			return
+		}
+
 		rl.logger.Error().Err(err).Msg("Could not insert/update bucket")
 		observability.SetStatusErrorf(ctx, "Could not insert/update bucket")
 		http.Error(rw, "Could not insert/update bucket", http.StatusInternalServerError)

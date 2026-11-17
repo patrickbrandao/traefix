@@ -43,6 +43,7 @@ http:
           masterName: "mymaster"
           sentinelUsername: "sentinel-user"
           sentinelPassword: "sentinel-password"
+          denyOnError: true
           tls:
             ca: "/etc/ssl/redis-ca.crt"
             cert: "/etc/ssl/redis-client.crt"
@@ -73,6 +74,7 @@ http:
       masterName = "mymaster"
       sentinelUsername = "sentinel-user"
       sentinelPassword = "sentinel-password"
+      denyOnError = true
       [http.middlewares.test-ratelimit.rateLimit.redis.tls]
         ca = "/etc/ssl/redis-ca.crt"
         cert = "/etc/ssl/redis-client.crt"
@@ -101,6 +103,7 @@ labels:
   - "traefik.http.middlewares.test-ratelimit.ratelimit.redis.masterName=mymaster"
   - "traefik.http.middlewares.test-ratelimit.ratelimit.redis.sentinelUsername=sentinel-user"
   - "traefik.http.middlewares.test-ratelimit.ratelimit.redis.sentinelPassword=sentinel-password"
+  - "traefik.http.middlewares.test-ratelimit.ratelimit.redis.denyOnError=true"
   - "traefik.http.middlewares.test-ratelimit.ratelimit.redis.tls.ca=/etc/ssl/redis-ca.crt"
   - "traefik.http.middlewares.test-ratelimit.ratelimit.redis.tls.cert=/etc/ssl/redis-client.crt"
   - "traefik.http.middlewares.test-ratelimit.ratelimit.redis.tls.key=/etc/ssl/redis-client.key"
@@ -129,6 +132,7 @@ labels:
     "traefik.http.middlewares.test-ratelimit.ratelimit.redis.masterName=mymaster",
     "traefik.http.middlewares.test-ratelimit.ratelimit.redis.sentinelUsername=sentinel-user",
     "traefik.http.middlewares.test-ratelimit.ratelimit.redis.sentinelPassword=sentinel-password",
+    "traefik.http.middlewares.test-ratelimit.ratelimit.redis.denyOnError=true",
     "traefik.http.middlewares.test-ratelimit.ratelimit.redis.tls.ca=/etc/ssl/redis-ca.crt",
     "traefik.http.middlewares.test-ratelimit.ratelimit.redis.tls.cert=/etc/ssl/redis-client.crt",
     "traefik.http.middlewares.test-ratelimit.ratelimit.redis.tls.key=/etc/ssl/redis-client.key",
@@ -162,6 +166,7 @@ spec:
       readTimeout: 3s
       writeTimeout: 3s
       dialTimeout: 5s
+      denyOnError: true
       tls:
         caSecret: redis-ca
         certSecret: redis-client-cert
@@ -223,6 +228,7 @@ data:
 | <a id="opt-redis-masterName" href="#opt-redis-masterName" title="#opt-redis-masterName">`redis.masterName`</a> | Name of the Redis master set. Setting it enables [Redis Sentinel](https://redis.io/docs/management/sentinel/) mode, where `redis.endpoints` lists the Sentinel addresses. Not available with the Kubernetes CRD provider. | "" | Yes (when using Sentinel) |
 | <a id="opt-redis-sentinelUsername" href="#opt-redis-sentinelUsername" title="#opt-redis-sentinelUsername">`redis.sentinelUsername`</a> | Username for Redis Sentinel authentication. Can be different from `redis.username`. | "" | No |
 | <a id="opt-redis-sentinelPassword" href="#opt-redis-sentinelPassword" title="#opt-redis-sentinelPassword">`redis.sentinelPassword`</a> | Password for Redis Sentinel authentication. Can be different from `redis.password`. | "" | No |
+| <a id="opt-redis-denyOnError" href="#opt-redis-denyOnError" title="#opt-redis-denyOnError">`redis.denyOnError`</a> | What to do when Redis cannot be reached or returns an error. When `true`, the request is rejected with a 500 status code. When `false`, the error is logged and the request is passed to the next handler without rate limiting, so anyone able to make Redis unavailable also disables the rate limit. | true | No |
 | <a id="opt-redis-tls-ca" href="#opt-redis-tls-ca" title="#opt-redis-tls-ca">`redis.tls.ca`</a> | Path to the certificate authority used for the secure connection to Redis, it defaults to the system bundle. | "" | No |
 | <a id="opt-redis-tls-cert" href="#opt-redis-tls-cert" title="#opt-redis-tls-cert">`redis.tls.cert`</a> | Path to the public certificate used for the secure connection to Redis. When this option is set, the `key` option is required. | "" | No |
 | <a id="opt-redis-tls-key" href="#opt-redis-tls-key" title="#opt-redis-tls-key">`redis.tls.key`</a> | Path to the private key used for the secure connection to Redis. When this option is set, the `cert` option is required. | "" | No |

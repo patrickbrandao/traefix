@@ -354,6 +354,7 @@
           masterName = "foobar"
           sentinelUsername = "foobar"
           sentinelPassword = "foobar"
+          denyOnError = true
           [http.middlewares.Middleware18.rateLimit.redis.tls]
             ca = "foobar"
             cert = "foobar"
