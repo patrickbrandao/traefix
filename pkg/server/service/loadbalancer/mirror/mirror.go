@@ -126,9 +126,24 @@ func (m *Mirroring) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 				r.Header.Del("Content-Length")
 			}
 
-			handler.ServeHTTP(m.rw, r.WithContext(mirrorContext(r.Context())))
+			serveMirror(handler, m.rw, r.WithContext(mirrorContext(r.Context())))
 		}
 	})
+}
+
+// serveMirror isolates each mirror, so that a proxy aborting a mirrored response
+// with http.ErrAbortHandler neither skips the next mirrors nor logs a stack trace.
+func serveMirror(handler http.Handler, rw http.ResponseWriter, req *http.Request) {
+	defer func() {
+		if err := recover(); err != nil {
+			if err == http.ErrAbortHandler { //nolint:errorlint // recover returns the panic value as is.
+				return
+			}
+			panic(err)
+		}
+	}()
+
+	handler.ServeHTTP(rw, req)
 }
 
 // mirrorContext returns the context of a mirrored request.

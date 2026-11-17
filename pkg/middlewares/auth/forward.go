@@ -130,8 +130,11 @@ func NewForward(ctx context.Context, next http.Handler, config dynamic.ForwardAu
 	if config.Timeout < 0 {
 		return nil, fmt.Errorf("forward authentication timeout must not be negative: %s", time.Duration(config.Timeout))
 	}
-	if config.Timeout == 0 {
-		logger.Warn().Msg("timeout is disabled: an authentication server that does not answer holds the client requests indefinitely, which can lead to DoS attacks. Please set an appropriate limit.")
+	timeout := config.Timeout
+	if timeout == 0 {
+		// Providers that skip SetDefaults (e.g. REST) leave the timeout unset, and an authentication server
+		// that never answers would then hold every client request: the timeout cannot be disabled.
+		timeout = dynamic.ForwardAuthDefaultTimeout
 	}
 
 	// Ensure our request client does not follow redirects
@@ -139,7 +142,7 @@ func NewForward(ctx context.Context, next http.Handler, config dynamic.ForwardAu
 		CheckRedirect: func(r *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
-		Timeout: time.Duration(config.Timeout),
+		Timeout: time.Duration(timeout),
 	}
 
 	if config.Service != "" {

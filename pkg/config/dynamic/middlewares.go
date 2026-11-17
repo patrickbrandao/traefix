@@ -366,7 +366,7 @@ type ForwardAuth struct {
 	// AuthSigninURL specifies the URL to redirect to when the authentication server returns 401 Unauthorized.
 	AuthSigninURL string `json:"authSigninURL,omitempty" toml:"authSigninURL,omitempty" yaml:"authSigninURL,omitempty" export:"true"`
 	// Timeout defines the maximum duration of the request to the authentication server, including connection time and reading the response body.
-	// Zero means no timeout.
+	// Zero means the default value (30s).
 	Timeout ptypes.Duration `json:"timeout,omitempty" toml:"timeout,omitempty" yaml:"timeout,omitempty" export:"true"`
 }
 

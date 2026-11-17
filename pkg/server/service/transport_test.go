@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -19,8 +20,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"compress/gzip"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"

@@ -1611,7 +1611,7 @@ func TestForwardAuthTimeout(t *testing.T) {
 			expectedBody:   "traefik\n",
 		},
 		{
-			desc:           "timeout disabled",
+			desc:           "zero timeout uses the default",
 			timeout:        0,
 			expectedStatus: http.StatusOK,
 			expectedBody:   "traefik\n",

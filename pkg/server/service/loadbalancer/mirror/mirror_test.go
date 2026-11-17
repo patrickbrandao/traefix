@@ -412,3 +412,29 @@ func TestCloneRequest(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+func TestMirroringAbortedMirrorDoesNotSkipNextMirrors(t *testing.T) {
+	var countMirror2 atomic.Int32
+	handler := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+	})
+	pool := safe.NewPool(t.Context())
+	mirror := New(handler, pool, true, defaultMaxBodySize, false, nil)
+	err := mirror.AddMirror(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		panic(http.ErrAbortHandler)
+	}), 100, 100)
+	assert.NoError(t, err)
+
+	err = mirror.AddMirror(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		countMirror2.Add(1)
+	}), 100, 100)
+	assert.NoError(t, err)
+
+	for range 10 {
+		mirror.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	}
+
+	pool.Stop()
+
+	assert.Equal(t, 10, int(countMirror2.Load()))
+}
