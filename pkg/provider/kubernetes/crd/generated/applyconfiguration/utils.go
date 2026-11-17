@@ -148,6 +148,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &traefikiov1alpha1.TapRequestApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("TapResponse"):
 		return &traefikiov1alpha1.TapResponseApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("TCPServerHealthCheck"):
+		return &traefikiov1alpha1.TCPServerHealthCheckApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("TLS"):
 		return &traefikiov1alpha1.TLSApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("TLSClientConfig"):

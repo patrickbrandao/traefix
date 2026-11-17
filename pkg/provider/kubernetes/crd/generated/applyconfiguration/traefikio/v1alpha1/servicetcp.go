@@ -74,6 +74,8 @@ type ServiceTCPApplyConfiguration struct {
 	// It allows services to be reachable when Traefik runs externally from the Kubernetes cluster but within the same network of the nodes.
 	// By default, NodePortLB is false.
 	NodePortLB *bool `json:"nodePortLB,omitempty"`
+	// HealthCheck defines health checks for ExternalName services.
+	HealthCheck *TCPServerHealthCheckApplyConfiguration `json:"healthCheck,omitempty"`
 }
 
 // ServiceTCPApplyConfiguration constructs a declarative configuration of the ServiceTCP type for use with
@@ -159,5 +161,13 @@ func (b *ServiceTCPApplyConfiguration) WithNativeLB(value bool) *ServiceTCPApply
 // If called multiple times, the NodePortLB field is set to the value of the last call.
 func (b *ServiceTCPApplyConfiguration) WithNodePortLB(value bool) *ServiceTCPApplyConfiguration {
 	b.NodePortLB = &value
+	return b
+}
+
+// WithHealthCheck sets the HealthCheck field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the HealthCheck field is set to the value of the last call.
+func (b *ServiceTCPApplyConfiguration) WithHealthCheck(value *TCPServerHealthCheckApplyConfiguration) *ServiceTCPApplyConfiguration {
+	b.HealthCheck = value
 	return b
 }
