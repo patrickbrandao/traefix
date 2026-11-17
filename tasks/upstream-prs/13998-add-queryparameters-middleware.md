@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +561/-0 em 15 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/L, area/middleware |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -40,3 +40,30 @@ Toca CRD (tipos, deepcopy gerado, applyconfiguration) e docs. Nome da opcao (del
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Análise:
+- Middleware novo `queryParameters` com `set`, `add` e `delete`, aplicados nessa ordem.
+- Trabalha sobre a query crua, e não sobre `url.Values`, para preservar a ordem e a codificação dos parâmetros não tocados, o que é importante para URLs assinadas. Os nomes são comparados depois do decode. Também atualiza `RequestURI`.
+- Implementação completa: CRD, conversão, docs e testes. Sem dependências novas, sem chamadas de rede, e todos os valores escritos passam por `url.QueryEscape`.
+- Upstream: em "review". A review automática levantou só pontos menores.
+- **Riscos de segurança (de uso, não do código):**
+  - `delete` compara nomes com distinção de maiúsculas e só separa por `&`;
+  - um backend que trata nomes sem distinção de maiúsculas, ou que também separa por `;`, recebe o parâmetro "removido" (ex.: `Admin=1` ou `x=1;admin=1`);
+  - quem usar o `delete` como filtro de segurança pode ser contornado.
+- Conflitou com a importação do #13179 em `crd/kubernetes.go`, porque o PR não conhecia `RedirectTrailingSlash` nem `Tap`. Resolvido mantendo os dois.
+
+Ajustes:
+- O conflito em `crd/kubernetes.go` foi resolvido sem perder os campos locais (`RedirectTrailingSlash`, `Tap`, `URNRefs`).
+- Deepcopy, applyconfiguration e CRDs regenerados com `script/code-gen.sh`, com o `sed` do macOS aplicado à mão.
+- Doc: novo aviso "Not an access control" sobre a distinção de maiúsculas e o `;`.
+- Exemplo de referência em `docs/content/reference/dynamic-configuration/file.{toml,yaml}` (`Middleware22a`, sem renumerar).
+- Testes novos: parâmetro sem valor (`admin`, `admin=`), nome com `+`, e escape inválido mantido como está.
+
+Testes:
+- `go build ./...` ok.
+- `go test ./pkg/middlewares/queryparameters/ ./pkg/provider/kubernetes/crd/ ./pkg/server/middleware/ ./pkg/config/dynamic/` ok.
+- `golangci-lint run` nesses pacotes: 0 issues.

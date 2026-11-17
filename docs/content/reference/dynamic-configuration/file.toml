@@ -393,6 +393,15 @@
       [http.middlewares.Middleware22.replacePathRegex]
         regex = "foobar"
         replacement = "foobar"
+    [http.middlewares.Middleware22a]
+      [http.middlewares.Middleware22a.queryParameters]
+        delete = ["foobar", "foobar"]
+        [http.middlewares.Middleware22a.queryParameters.set]
+          name0 = "foobar"
+          name1 = "foobar"
+        [http.middlewares.Middleware22a.queryParameters.add]
+          name0 = "foobar"
+          name1 = "foobar"
     [http.middlewares.Middleware23]
       [http.middlewares.Middleware23.retry]
         attempts = 42

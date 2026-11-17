@@ -445,6 +445,17 @@ http:
       replacePathRegex:
         regex: foobar
         replacement: foobar
+    Middleware22a:
+      queryParameters:
+        set:
+          name0: foobar
+          name1: foobar
+        add:
+          name0: foobar
+          name1: foobar
+        delete:
+          - foobar
+          - foobar
     Middleware23:
       retry:
         attempts: 42
