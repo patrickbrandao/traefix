@@ -27,6 +27,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/types"
 	"go.opentelemetry.io/contrib/bridges/otellogrus"
 	"go.opentelemetry.io/otel/trace"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 type key string
@@ -78,11 +79,31 @@ type Handler struct {
 func NewHandler(ctx context.Context, config *otypes.AccessLog, hooks ...logrus.Hook) (*Handler, error) {
 	var file io.WriteCloser = noopCloser{os.Stdout}
 	if len(config.FilePath) > 0 {
-		f, err := openAccessLogFile(config.FilePath)
-		if err != nil {
-			return nil, fmt.Errorf("error opening access log file: %w", err)
+		if config.MaxSize > 0 || config.MaxAge > 0 || config.MaxBackups > 0 || config.Compress {
+			// Lumberjack opens the file lazily on the first write, so an unwritable path is
+			// reported here instead of silently dropping every access log line.
+			f, err := openAccessLogFile(config.FilePath)
+			if err != nil {
+				return nil, fmt.Errorf("error opening access log file: %w", err)
+			}
+			if err := f.Close(); err != nil {
+				return nil, fmt.Errorf("error closing access log file: %w", err)
+			}
+
+			file = &lumberjack.Logger{
+				Filename:   config.FilePath,
+				MaxSize:    config.MaxSize,
+				MaxBackups: config.MaxBackups,
+				MaxAge:     config.MaxAge,
+				Compress:   config.Compress,
+			}
+		} else {
+			f, err := openAccessLogFile(config.FilePath)
+			if err != nil {
+				return nil, fmt.Errorf("error opening access log file: %w", err)
+			}
+			file = f
 		}
-		file = f
 	}
 	logHandlerChan := make(chan handlerParams, config.BufferingSize)
 
@@ -331,9 +352,17 @@ func (h *Handler) Close() error {
 }
 
 // Rotate closes and reopens the log file to allow for rotation by an external source.
+// When lumberjack is used for automatic rotation, this triggers an immediate rotation.
 func (h *Handler) Rotate() error {
 	if h.config.FilePath == "" {
 		return nil
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if lj, ok := h.file.(*lumberjack.Logger); ok {
+		return lj.Rotate()
 	}
 
 	if h.file != nil {
@@ -345,8 +374,6 @@ func (h *Handler) Rotate() error {
 	if err != nil {
 		return err
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.logger.Out = h.file
 	return nil
 }

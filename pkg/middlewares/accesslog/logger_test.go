@@ -324,6 +324,47 @@ func TestLogRotation(t *testing.T) {
 	close(writeDone)
 }
 
+func TestLogRotation_builtin(t *testing.T) {
+	dir := t.TempDir()
+	fileName := filepath.Join(dir, "access.log")
+
+	config := &otypes.AccessLog{FilePath: fileName, Format: CommonFormat, MaxBackups: 2}
+	logHandler, err := NewHandler(t.Context(), config)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, logHandler.Close())
+	})
+
+	assert.FileExists(t, fileName)
+
+	handler, err := alice.New(capture.Wrap).
+		Append(func(next http.Handler) (http.Handler, error) {
+			return observability.WithObservabilityHandler(next, observability.Observability{AccessLogsEnabled: true}), nil
+		}).
+		Append(logHandler.AliceConstructor()).
+		Then(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			rw.WriteHeader(http.StatusOK)
+		}))
+	require.NoError(t, err)
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://localhost", nil))
+	require.NoError(t, logHandler.Rotate())
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://localhost", nil))
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 2)
+	assert.Equal(t, 1, lineCount(t, fileName))
+}
+
+func TestNewHandler_builtinRotationUnwritablePath(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
+
+	_, err := NewHandler(t.Context(), &otypes.AccessLog{FilePath: filepath.Join(blocker, "access.log"), MaxSize: 1})
+	require.Error(t, err)
+}
+
 func lineCount(t *testing.T, fileName string) int {
 	t.Helper()
 	fileContents, err := os.ReadFile(fileName)

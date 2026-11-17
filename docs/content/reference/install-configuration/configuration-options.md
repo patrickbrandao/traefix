@@ -10,6 +10,7 @@ THIS FILE MUST NOT BE EDITED BY HAND
 | <a id="opt-accesslog" href="#opt-accesslog" title="#opt-accesslog">accesslog</a> | Access log settings. | false |
 | <a id="opt-accesslog-addinternals" href="#opt-accesslog-addinternals" title="#opt-accesslog-addinternals">accesslog.addinternals</a> | Enables access log for internal services (ping, dashboard, etc...). | false |
 | <a id="opt-accesslog-bufferingsize" href="#opt-accesslog-bufferingsize" title="#opt-accesslog-bufferingsize">accesslog.bufferingsize</a> | Number of access log lines to process in a buffered way. | 0 |
+| <a id="opt-accesslog-compress" href="#opt-accesslog-compress" title="#opt-accesslog-compress">accesslog.compress</a> | Determines if the rotated access log files should be compressed using gzip. | false |
 | <a id="opt-accesslog-dualoutput" href="#opt-accesslog-dualoutput" title="#opt-accesslog-dualoutput">accesslog.dualoutput</a> | Enables access log output alongside OTLP. By default, this output is disabled when OTLP is configured. | false |
 | <a id="opt-accesslog-fields-defaultmode" href="#opt-accesslog-fields-defaultmode" title="#opt-accesslog-fields-defaultmode">accesslog.fields.defaultmode</a> | Default mode for fields: keep | drop | keep |
 | <a id="opt-accesslog-fields-headers-defaultmode" href="#opt-accesslog-fields-headers-defaultmode" title="#opt-accesslog-fields-headers-defaultmode">accesslog.fields.headers.defaultmode</a> | Default mode for fields: keep | drop | redact | drop |
@@ -21,6 +22,9 @@ THIS FILE MUST NOT BE EDITED BY HAND
 | <a id="opt-accesslog-filters-retryattempts" href="#opt-accesslog-filters-retryattempts" title="#opt-accesslog-filters-retryattempts">accesslog.filters.retryattempts</a> | Keep access logs when at least one retry happened. | false |
 | <a id="opt-accesslog-filters-statuscodes" href="#opt-accesslog-filters-statuscodes" title="#opt-accesslog-filters-statuscodes">accesslog.filters.statuscodes</a> | Keep access logs with status codes in the specified range. | |
 | <a id="opt-accesslog-format" href="#opt-accesslog-format" title="#opt-accesslog-format">accesslog.format</a> | Access log format: json, common, or genericCLF | common |
+| <a id="opt-accesslog-maxage" href="#opt-accesslog-maxage" title="#opt-accesslog-maxage">accesslog.maxage</a> | Maximum number of days to retain old access log files based on the timestamp encoded in their filename. | 0 |
+| <a id="opt-accesslog-maxbackups" href="#opt-accesslog-maxbackups" title="#opt-accesslog-maxbackups">accesslog.maxbackups</a> | Maximum number of old access log files to retain. | 0 |
+| <a id="opt-accesslog-maxsize" href="#opt-accesslog-maxsize" title="#opt-accesslog-maxsize">accesslog.maxsize</a> | Maximum size in megabytes of the access log file before it gets rotated. | 0 |
 | <a id="opt-accesslog-otlp" href="#opt-accesslog-otlp" title="#opt-accesslog-otlp">accesslog.otlp</a> | Settings for OpenTelemetry. | false |
 | <a id="opt-accesslog-otlp-grpc" href="#opt-accesslog-otlp-grpc" title="#opt-accesslog-otlp-grpc">accesslog.otlp.grpc</a> | gRPC configuration for the OpenTelemetry collector. | false |
 | <a id="opt-accesslog-otlp-grpc-endpoint" href="#opt-accesslog-otlp-grpc-endpoint" title="#opt-accesslog-otlp-grpc-endpoint">accesslog.otlp.grpc.endpoint</a> | Sets the gRPC endpoint (host:port) of the collector. | localhost:4317 |
@@ -168,7 +172,7 @@ THIS FILE MUST NOT BE EDITED BY HAND
 | <a id="opt-hostresolver-resolvconfig" href="#opt-hostresolver-resolvconfig" title="#opt-hostresolver-resolvconfig">hostresolver.resolvconfig</a> | resolv.conf used for DNS resolving | /etc/resolv.conf |
 | <a id="opt-hostresolver-resolvdepth" href="#opt-hostresolver-resolvdepth" title="#opt-hostresolver-resolvdepth">hostresolver.resolvdepth</a> | The maximal depth of DNS recursive resolving | 5 |
 | <a id="opt-log" href="#opt-log" title="#opt-log">log</a> | Traefik log settings. | false |
-| <a id="opt-log-compress" href="#opt-log-compress" title="#opt-log-compress">log.compress</a> | Determines if the rotated log files should be compressed using gzip. | false |
+| <a id="opt-log-compress" href="#opt-log-compress" title="#opt-log-compress">log.compress</a> | Determines if the rotated log files should be compressed using gzip. | true |
 | <a id="opt-log-filepath" href="#opt-log-filepath" title="#opt-log-filepath">log.filepath</a> | Traefik log file path. Stdout is used when omitted or empty. | |
 | <a id="opt-log-format" href="#opt-log-format" title="#opt-log-format">log.format</a> | Traefik log format: json | common | common |
 | <a id="opt-log-level" href="#opt-log-level" title="#opt-log-level">log.level</a> | Log level set to traefik logs. | ERROR |
