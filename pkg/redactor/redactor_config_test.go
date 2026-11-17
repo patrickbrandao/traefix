@@ -509,7 +509,7 @@ func TestSecure_dynamicConfiguration(t *testing.T) {
 	assert.JSONEq(t, expected, cleanJSON)
 }
 
-func TestDo_staticConfiguration(t *testing.T) {
+func fullStaticConfiguration() *static.Configuration {
 	config := &static.Configuration{}
 
 	config.Global = &static.Global{
@@ -775,6 +775,12 @@ func TestDo_staticConfiguration(t *testing.T) {
 		},
 	}
 
+	config.Providers.Plugin = map[string]static.PluginConf{
+		"foo": {
+			"foo": "bar",
+		},
+	}
+
 	config.API = &static.API{
 		Insecure:  true,
 		Dashboard: true,
@@ -979,6 +985,12 @@ func TestDo_staticConfiguration(t *testing.T) {
 		},
 	}
 
+	return config
+}
+
+func TestDo_staticConfiguration(t *testing.T) {
+	config := fullStaticConfiguration()
+
 	expectedConfiguration, err := os.ReadFile("./testdata/anonymized-static-config.json")
 	require.NoError(t, err)
 
@@ -987,6 +999,23 @@ func TestDo_staticConfiguration(t *testing.T) {
 
 	if *updateExpected {
 		require.NoError(t, os.WriteFile("testdata/anonymized-static-config.json", []byte(cleanJSON), 0o666))
+	}
+
+	expected := strings.TrimSuffix(string(expectedConfiguration), "\n")
+	assert.JSONEq(t, expected, cleanJSON)
+}
+
+func TestRemoveCredentials_staticConfiguration(t *testing.T) {
+	config := fullStaticConfiguration()
+
+	expectedConfiguration, err := os.ReadFile("./testdata/secured-static-config.json")
+	require.NoError(t, err)
+
+	cleanJSON, err := removeCredentials(config, true)
+	require.NoError(t, err)
+
+	if *updateExpected {
+		require.NoError(t, os.WriteFile("testdata/secured-static-config.json", []byte(cleanJSON), 0o666))
 	}
 
 	expected := strings.TrimSuffix(string(expectedConfiguration), "\n")
