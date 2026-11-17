@@ -100,7 +100,8 @@ type HTTPConfig struct {
 	TLS                   *TLSConfig         `description:"Default TLS configuration for the routers linked to the entry point." json:"tls,omitempty" toml:"tls,omitempty" yaml:"tls,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 	EncodedCharacters     *EncodedCharacters `description:"Defines which encoded characters are allowed in the request path." json:"encodedCharacters,omitempty" toml:"encodedCharacters,omitempty" yaml:"encodedCharacters,omitempty" export:"true"`
 	EncodeQuerySemicolons bool               `description:"Defines whether request query semicolons should be URLEncoded." json:"encodeQuerySemicolons,omitempty" toml:"encodeQuerySemicolons,omitempty" yaml:"encodeQuerySemicolons,omitempty" export:"true"`
-	SanitizePath          *bool              `description:"Defines whether to enable request path sanitization (removal of /./, /../ and multiple slash sequences)." json:"sanitizePath,omitempty" toml:"sanitizePath,omitempty" yaml:"sanitizePath,omitempty" export:"true"`
+	SanitizePath          *bool              `description:"Defines whether to enable request path sanitization (removal of /./, /../ and, unless mergeSlashes is false, multiple slash sequences)." json:"sanitizePath,omitempty" toml:"sanitizePath,omitempty" yaml:"sanitizePath,omitempty" export:"true"`
+	MergeSlashes          *bool              `description:"Defines whether to merge consecutive slashes in request paths (e.g. // to /). Only applies when sanitizePath is enabled." json:"mergeSlashes,omitempty" toml:"mergeSlashes,omitempty" yaml:"mergeSlashes,omitempty" export:"true"`
 	MaxHeaderBytes        int                `description:"Maximum size of request headers in bytes." json:"maxHeaderBytes,omitempty" toml:"maxHeaderBytes,omitempty" yaml:"maxHeaderBytes,omitempty" export:"true"`
 	MaxHeaderValueCount   int                `description:"Maximum number of request header values." json:"maxHeaderValueCount,omitempty" toml:"maxHeaderValueCount,omitempty" yaml:"maxHeaderValueCount,omitempty" export:"true"`
 	AliasHeadersStrategy  string             `description:"Defines the strategy to handle the requests carrying a header whose name aliases another header name (keep, delete, and reject)." json:"aliasHeadersStrategy,omitempty" toml:"aliasHeadersStrategy,omitempty" yaml:"aliasHeadersStrategy,omitempty" export:"true"`
@@ -114,6 +115,7 @@ type HTTPConfig struct {
 // SetDefaults sets the default values.
 func (h *HTTPConfig) SetDefaults() {
 	h.SanitizePath = new(true)
+	h.MergeSlashes = new(true)
 	h.MaxHeaderBytes = http.DefaultMaxHeaderBytes
 	h.MaxHeaderValueCount = http.DefaultMaxHeaderValueCount
 }

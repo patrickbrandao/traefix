@@ -60,6 +60,7 @@
       middlewares = ["foobar", "foobar"]
       encodeQuerySemicolons = true
       sanitizePath = true
+      mergeSlashes = true
       maxHeaderBytes = 42
       maxHeaderValueCount = 42
       aliasHeadersStrategy = "foobar"

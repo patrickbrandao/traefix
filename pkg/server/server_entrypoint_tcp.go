@@ -693,7 +693,13 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 	// Note that the Path sanitization has to be done after the path normalization,
 	// hence the wrapping has to be done before the normalize path wrapping.
 	if configuration.HTTP.SanitizePath != nil && *configuration.HTTP.SanitizePath {
-		handler = sanitizePath(handler)
+		// MergeSlashes is gated behind SanitizePath because merging slashes without resolving the dot-segments
+		// would give a false sense of protection.
+		if configuration.HTTP.MergeSlashes == nil || *configuration.HTTP.MergeSlashes {
+			handler = sanitizePath(handler)
+		} else {
+			handler = sanitizeDotSegments(handler)
+		}
 	}
 
 	handler = normalizePath(handler)
@@ -1001,6 +1007,140 @@ func encodeQuerySemicolons(h http.Handler) http.Handler {
 	})
 }
 
+// removeDotSegments resolves "." and ".." segments in a path per RFC 3986 Section 5.2.4.
+// Unlike path.Clean or URL.JoinPath, it preserves empty path segments (consecutive slashes).
+func removeDotSegments(p string) string {
+	if p == "" || p == "*" {
+		return p
+	}
+
+	var out []byte
+	i := 0
+	n := len(p)
+
+	for i < n {
+		// A: If the input starts with "../" or "./" remove that prefix.
+		if i+3 <= n && p[i:i+3] == "../" {
+			i += 3
+			continue
+		}
+		if i+2 <= n && p[i:i+2] == "./" {
+			i += 2
+			continue
+		}
+
+		// B: If the input starts with "/./" or "/." (end), replace with "/".
+		if i+3 <= n && p[i:i+3] == "/./" {
+			i += 2
+			continue
+		}
+		if p[i:] == "/." {
+			out = append(out, '/')
+			i += 2
+			continue
+		}
+
+		// C: If the input starts with "/../" or "/.." (end),
+		// replace with "/" and remove the last output segment.
+		if i+4 <= n && p[i:i+4] == "/../" {
+			i += 3
+			out = removeDotLastSegment(out)
+			continue
+		}
+		if p[i:] == "/.." {
+			out = removeDotLastSegment(out)
+			out = append(out, '/')
+			i += 3
+			continue
+		}
+
+		// D: If the input is just "." or "..", consume it.
+		if p[i:] == "." || p[i:] == ".." {
+			break
+		}
+
+		// E: Move the first path segment (including initial "/" if any) to output.
+		if p[i] == '/' {
+			out = append(out, '/')
+			i++
+		}
+		for i < n && p[i] != '/' {
+			out = append(out, p[i])
+			i++
+		}
+	}
+
+	return string(out)
+}
+
+// removeDotLastSegment removes the last segment from the output buffer,
+// including its preceding "/" if present.
+func removeDotLastSegment(out []byte) []byte {
+	j := len(out) - 1
+	for j >= 0 && out[j] != '/' {
+		j--
+	}
+	if j >= 0 {
+		out = out[:j]
+	}
+	return out
+}
+
+// sanitizeDotSegments removes ".." and "." segments from the URL path per RFC 3986 Section 5.2.4,
+// preserving empty path segments (consecutive slashes).
+// It updates the request URL Path, RawPath, and RequestURI.
+func sanitizeDotSegments(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		// The dot-segments are resolved on the escaped path, and the decoded path is derived from it,
+		// so that an encoded slash is never taken as a segment separator and Path and RawPath cannot diverge.
+		escapedPath := req.URL.EscapedPath()
+		if strings.Contains(escapedPath, ";") {
+			escapedPath = removeDotSegmentParameters(escapedPath)
+		}
+
+		rawPath := removeDotSegments(escapedPath)
+
+		decodedPath, err := url.PathUnescape(rawPath)
+		if err != nil {
+			http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		r2 := new(http.Request)
+		*r2 = *req
+		r2.URL = new(url.URL)
+		*r2.URL = *req.URL
+		r2.URL.Path = decodedPath
+		r2.URL.RawPath = ""
+		if r2.URL.EscapedPath() != rawPath {
+			r2.URL.RawPath = rawPath
+		}
+
+		// Because the reverse proxy director is building query params from requestURI it needs to be updated as well.
+		r2.RequestURI = r2.URL.RequestURI()
+
+		h.ServeHTTP(rw, r2)
+	})
+}
+
+// removeDotSegmentParameters removes the path parameters of the "..;", ".;" and ";" segments,
+// as backends stripping path parameters (Servlet containers, Spring, ...) resolve them as dot-segments or empty segments.
+func removeDotSegmentParameters(escapedPath string) string {
+	segments := strings.Split(escapedPath, "/")
+	for i, segment := range segments {
+		switch {
+		case strings.HasPrefix(segment, "..;"):
+			segments[i] = ".."
+		case strings.HasPrefix(segment, ".;"):
+			segments[i] = "."
+		case strings.HasPrefix(segment, ";"):
+			segments[i] = ""
+		}
+	}
+
+	return strings.Join(segments, "/")
+}
+
 // sanitizePath removes the "..", "." and duplicate slash segments from the URL according to https://datatracker.ietf.org/doc/html/rfc3986#section-6.2.2.3.
 // The path parameters of the "..;", ".;" and ";" segments are removed first, as backends stripping path parameters (Servlet containers, Spring, ...) resolve them as dot-segments or duplicate slashes.
 // It cleans the request URL Path and RawPath, and updates the request URI.
@@ -1011,21 +1151,9 @@ func sanitizePath(h http.Handler) http.Handler {
 
 		// Removes the path parameters of the dot-segments and empty segments, so that JoinPath collapses them.
 		if escapedPath := req.URL.EscapedPath(); strings.Contains(escapedPath, ";") {
-			segments := strings.Split(escapedPath, "/")
-			for i, segment := range segments {
-				switch {
-				case strings.HasPrefix(segment, "..;"):
-					segments[i] = ".."
-				case strings.HasPrefix(segment, ".;"):
-					segments[i] = "."
-				case strings.HasPrefix(segment, ";"):
-					segments[i] = ""
-				}
-			}
-
 			r2.URL = new(url.URL)
 			*r2.URL = *req.URL
-			r2.URL.RawPath = strings.Join(segments, "/")
+			r2.URL.RawPath = removeDotSegmentParameters(escapedPath)
 			r2.URL.Path, _ = url.PathUnescape(r2.URL.RawPath)
 		}
 
@@ -1078,7 +1206,7 @@ func normalizePath(h http.Handler) http.Handler {
 		var normalizedRawPathBuilder strings.Builder
 		for i := 0; i < len(rawPath); i++ {
 			if rawPath[i] != '%' {
-				normalizedRawPathBuilder.WriteString(string(rawPath[i]))
+				normalizedRawPathBuilder.WriteByte(rawPath[i])
 				continue
 			}
 
