@@ -2,7 +2,6 @@ package plugins
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -99,17 +98,26 @@ func (d *RegistryDownloader) Download(ctx context.Context, pName, pVersion strin
 			return "", fmt.Errorf("failed to create directory: %w", err)
 		}
 
+		// The archive is written to a temporary file first,
+		// so that an interrupted download never replaces the previously downloaded archive.
 		var file *os.File
-		file, err = os.Create(filename)
+		file, err = os.CreateTemp(filepath.Dir(filename), ".download-*")
 		if err != nil {
-			return "", fmt.Errorf("failed to create file %q: %w", filename, err)
+			return "", fmt.Errorf("failed to create file for %q: %w", filename, err)
 		}
 
-		defer func() { _ = file.Close() }()
+		defer func() { _ = os.Remove(file.Name()) }()
 
 		_, err = io.Copy(file, resp.Body)
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
 		if err != nil {
 			return "", fmt.Errorf("failed to write response: %w", err)
+		}
+
+		if err = os.Rename(file.Name(), filename); err != nil {
+			return "", fmt.Errorf("failed to create file %q: %w", filename, err)
 		}
 
 		hash, err = computeHash(filename)
@@ -117,8 +125,8 @@ func (d *RegistryDownloader) Download(ctx context.Context, pName, pVersion strin
 			return "", fmt.Errorf("failed to compute hash: %w", err)
 		}
 	default:
-		data, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("error: %d: %s", resp.StatusCode, string(data))
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", &registryStatusError{StatusCode: resp.StatusCode, msg: fmt.Sprintf("error: %d: %s", resp.StatusCode, string(data))}
 	}
 
 	return hash, nil
@@ -151,7 +159,17 @@ func (d *RegistryDownloader) Check(ctx context.Context, pName, pVersion, hash st
 		return nil
 	}
 
-	return errors.New("plugin integrity check failed")
+	return &registryStatusError{StatusCode: resp.StatusCode, msg: "plugin integrity check failed"}
+}
+
+// registryStatusError is returned when the registry answers with an unexpected status code.
+type registryStatusError struct {
+	StatusCode int
+	msg        string
+}
+
+func (e *registryStatusError) Error() string {
+	return e.msg
 }
 
 // buildArchivePath builds the path to a plugin archive file.

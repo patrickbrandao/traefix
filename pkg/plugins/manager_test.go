@@ -4,6 +4,7 @@ import (
 	zipa "archive/zip"
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,6 +32,54 @@ func (m *mockDownloader) Check(ctx context.Context, pName, pVersion, hash string
 		return m.checkFunc(ctx, pName, pVersion, hash)
 	}
 	return nil
+}
+
+// writeValidPluginArchive writes a minimal but structurally valid zip archive at
+// archivePath, suitable for InstallPlugin's unzip step in tests.
+func writeValidPluginArchive(t *testing.T, archivePath string) {
+	t.Helper()
+
+	err := os.MkdirAll(filepath.Dir(archivePath), 0o755)
+	require.NoError(t, err)
+
+	file, err := os.Create(archivePath)
+	require.NoError(t, err)
+	defer file.Close()
+
+	writer := zipa.NewWriter(file)
+	defer writer.Close()
+
+	fileWriter, err := writer.Create("test-module-v1.0.0/main.go")
+	require.NoError(t, err)
+	_, err = fileWriter.Write([]byte("package main\n\nfunc main() {}\n"))
+	require.NoError(t, err)
+}
+
+func writeVerifiedPluginArchive(t *testing.T, archivePath string) {
+	t.Helper()
+
+	writeValidPluginArchive(t, archivePath)
+
+	hash, err := computeHash(archivePath)
+	require.NoError(t, err)
+
+	err = os.WriteFile(archivePath+verifiedHashSuffix, []byte(hash), 0o600)
+	require.NoError(t, err)
+}
+
+func TestPluginManager_InstallPlugin_recordsVerifiedHash(t *testing.T) {
+	manager, err := NewManager(&mockDownloader{}, ManagerOptions{Output: t.TempDir()})
+	require.NoError(t, err)
+
+	plugin := Descriptor{ModuleName: "github.com/test/plugin", Version: "v1.0.0"}
+	writeValidPluginArchive(t, manager.buildArchivePath(plugin.ModuleName, plugin.Version))
+
+	err = manager.InstallPlugin(t.Context(), plugin)
+	require.NoError(t, err)
+
+	verifiedHash, err := os.ReadFile(manager.buildVerifiedHashPath(plugin.ModuleName, plugin.Version))
+	require.NoError(t, err)
+	assert.Equal(t, "mockhash", string(verifiedHash))
 }
 
 func TestPluginManager_ReadManifest(t *testing.T) {
@@ -297,6 +346,143 @@ func TestPluginManager_InstallPlugin(t *testing.T) {
 			},
 			expectError: true,
 			errorMsg:    "unable to unzip plugin",
+		},
+		{
+			name: "download fails, verified cached archive is reused",
+			plugin: Descriptor{
+				ModuleName: "github.com/test/plugin",
+				Version:    "v1.0.0",
+			},
+			downloadFunc: func(ctx context.Context, pName, pVersion string) (string, error) {
+				return "", assert.AnError
+			},
+			checkFunc: func(ctx context.Context, pName, pVersion, hash string) error {
+				return assert.AnError
+			},
+			setupArchive: writeVerifiedPluginArchive,
+			expectError:  false,
+		},
+		{
+			name: "download fails, registry unavailable for validation, verified cached archive is reused",
+			plugin: Descriptor{
+				ModuleName: "github.com/test/plugin",
+				Version:    "v1.0.0",
+			},
+			downloadFunc: func(ctx context.Context, pName, pVersion string) (string, error) {
+				return "", &registryStatusError{StatusCode: http.StatusBadGateway, msg: "error: 502"}
+			},
+			checkFunc: func(ctx context.Context, pName, pVersion, hash string) error {
+				return &registryStatusError{StatusCode: http.StatusServiceUnavailable, msg: "plugin integrity check failed"}
+			},
+			setupArchive: writeVerifiedPluginArchive,
+			expectError:  false,
+		},
+		{
+			name: "download fails, cached archive was never verified",
+			plugin: Descriptor{
+				ModuleName: "github.com/test/plugin",
+				Version:    "v1.0.0",
+			},
+			downloadFunc: func(ctx context.Context, pName, pVersion string) (string, error) {
+				return "", assert.AnError
+			},
+			setupArchive: writeValidPluginArchive,
+			expectError:  true,
+			errorMsg:     "cached archive was never verified",
+		},
+		{
+			name: "download fails, cached archive changed since its verification",
+			plugin: Descriptor{
+				ModuleName: "github.com/test/plugin",
+				Version:    "v1.0.0",
+			},
+			downloadFunc: func(ctx context.Context, pName, pVersion string) (string, error) {
+				return "", assert.AnError
+			},
+			setupArchive: func(t *testing.T, archivePath string) {
+				t.Helper()
+
+				writeVerifiedPluginArchive(t, archivePath)
+
+				file, err := os.OpenFile(archivePath, os.O_APPEND|os.O_WRONLY, 0o644)
+				require.NoError(t, err)
+				_, err = file.WriteString("tampered")
+				require.NoError(t, err)
+				require.NoError(t, file.Close())
+			},
+			expectError: true,
+			errorMsg:    "cached archive does not match its verified hash",
+		},
+		{
+			name: "download fails, no cached archive",
+			plugin: Descriptor{
+				ModuleName: "github.com/test/plugin",
+				Version:    "v1.0.0",
+			},
+			downloadFunc: func(ctx context.Context, pName, pVersion string) (string, error) {
+				return "", assert.AnError
+			},
+			expectError: true,
+			errorMsg:    "no usable cached archive",
+		},
+		{
+			name: "download rejected by the registry, cached archive is not reused",
+			plugin: Descriptor{
+				ModuleName: "github.com/test/plugin",
+				Version:    "v1.0.0",
+			},
+			downloadFunc: func(ctx context.Context, pName, pVersion string) (string, error) {
+				return "", &registryStatusError{StatusCode: http.StatusNotFound, msg: "error: 404"}
+			},
+			setupArchive: writeVerifiedPluginArchive,
+			expectError:  true,
+			errorMsg:     "unable to download plugin github.com/test/plugin: error: 404",
+		},
+		{
+			name: "download fails, registry rejects the cached archive",
+			plugin: Descriptor{
+				ModuleName: "github.com/test/plugin",
+				Version:    "v1.0.0",
+			},
+			downloadFunc: func(ctx context.Context, pName, pVersion string) (string, error) {
+				return "", assert.AnError
+			},
+			checkFunc: func(ctx context.Context, pName, pVersion, hash string) error {
+				return &registryStatusError{StatusCode: http.StatusBadRequest, msg: "plugin integrity check failed"}
+			},
+			setupArchive: writeVerifiedPluginArchive,
+			expectError:  true,
+			errorMsg:     "unable to check archive integrity",
+		},
+		{
+			name: "integrity check failure after a successful download stays fatal",
+			plugin: Descriptor{
+				ModuleName: "github.com/test/plugin",
+				Version:    "v1.0.0",
+			},
+			downloadFunc: func(ctx context.Context, pName, pVersion string) (string, error) {
+				return "test-hash", nil
+			},
+			checkFunc: func(ctx context.Context, pName, pVersion, hash string) error {
+				return assert.AnError
+			},
+			setupArchive: writeVerifiedPluginArchive,
+			expectError:  true,
+			errorMsg:     "unable to check archive integrity",
+		},
+		{
+			name: "pinned hash still enforced when falling back to cached archive",
+			plugin: Descriptor{
+				ModuleName: "github.com/test/plugin",
+				Version:    "v1.0.0",
+				Hash:       "a-hash-that-will-not-match-the-archive-contents",
+			},
+			downloadFunc: func(ctx context.Context, pName, pVersion string) (string, error) {
+				return "", assert.AnError
+			},
+			setupArchive: writeVerifiedPluginArchive,
+			expectError:  true,
+			errorMsg:     "invalid hash for plugin",
 		},
 	}
 

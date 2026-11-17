@@ -54,6 +54,16 @@ To learn more about how to add a new plugin to a Traefik instance, please refer 
 | <a id="opt-settings-mounts" href="#opt-settings-mounts" title="#opt-settings-mounts">`settings.mounts`</a> | Directory to mount to the wasm guest. | []string | No |
 | <a id="opt-settings-useUnsafe" href="#opt-settings-useUnsafe" title="#opt-settings-useUnsafe">`settings.useUnsafe`</a> | Allow the plugin to use unsafe and syscall packages. | bool | No |
 
+### Registry Unavailability
+
+When the plugin registry is unreachable or fails (network error, `5xx` or `429` response) at startup,
+Traefik reuses the plugin archive downloaded during a previous start, if one is available in the plugins storage.
+
+The cached archive is only reused when its integrity can be verified:
+its hash must match the configured `hash` option, or, when `hash` is not set,
+the hash recorded the last time the registry validated the archive.
+Any other answer of the registry (for example, an unknown or revoked version) keeps the installation failing.
+
 ## Local Plugins
 
 Local plugins allow you to use plugins from a local directory, without publishing them to the Traefik plugin catalog.
