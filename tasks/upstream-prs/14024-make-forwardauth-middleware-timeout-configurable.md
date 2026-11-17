@@ -61,3 +61,7 @@ Testes:
 - `go build ./...`: ok.
 - `go test ./pkg/middlewares/auth/ ./pkg/provider/kubernetes/crd/ ./pkg/config/... ./pkg/provider/kv/`: ok.
 - `golangci-lint run ./pkg/middlewares/auth/... ./pkg/provider/kubernetes/crd/... ./pkg/config/... ./pkg/provider/kv/...`: 0 issues.
+
+## Integração (2026-11-17)
+
+Revisão independente: o provider REST não chama `SetDefaults`, então um ForwardAuth enviado sem `timeout` ficaria sem limite nenhum. Agora `0` usa o padrão de 30s e o timeout não pode mais ser desligado; a doc e os comentários dos campos foram ajustados no commit "Harden ForwardAuth timeout and mirror aborts after independent review".

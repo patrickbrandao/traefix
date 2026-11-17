@@ -55,3 +55,7 @@ Testes:
 - `go test -race ./pkg/server/service/loadbalancer/...`: ok. Os dois testes novos travam sem a correção e passam com ela.
 - `golangci-lint run ./pkg/server/service/loadbalancer/...`: 0 issues.
 - `go build ./...`: ok.
+
+## Integração (2026-11-17)
+
+Na integração com o #12419 (g09), prevaleceu a semântica do #12419: servidores em fencing viram fallback quando não sobra nenhum outro saudável. Por isso `TestBalancerAllHealthyServersFenced` agora espera 200 em vez de 503. A garantia de que o loop termina continua.

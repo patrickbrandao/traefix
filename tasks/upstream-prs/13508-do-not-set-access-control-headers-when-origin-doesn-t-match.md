@@ -57,3 +57,7 @@ Testes:
 - `go test ./pkg/middlewares/headers/` ok.
 - `golangci-lint run ./pkg/middlewares/headers/...`: 0 issues.
 - `go build ./...` ok.
+
+## Integração (2026-11-17)
+
+Na integração com o #14133 (g08), o modo `CORSStrict` foi combinado com esta correção (detalhes na task 14133).

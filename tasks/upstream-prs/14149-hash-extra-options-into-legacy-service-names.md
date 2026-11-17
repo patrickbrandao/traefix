@@ -57,3 +57,7 @@ Ajustes:
 - Testes no estilo do fork (`new(...)` no lugar de `ptr.To`).
 
 Testes: `go test ./pkg/provider/kubernetes/crd/` ok; `golangci-lint run ./pkg/provider/kubernetes/crd/...` 0 issues.
+
+## Integração (2026-11-17)
+
+Na integração, os hashes esperados nos testes mudaram porque `LoadBalancerSpec` ganhou campos de outros PRs. O nome do service com opções muda quando a struct muda, o que é aceitável: os nomes são regenerados a cada reload.

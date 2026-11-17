@@ -58,3 +58,7 @@ Flag interno, sem impacto nos demais providers. Status: needs-design-review, ent
 - `go build ./...` ok.
 - `go test ./pkg/middlewares/headers/ ./pkg/provider/kubernetes/ingress-nginx/` ok.
 - `golangci-lint` nos pacotes tocados: 0 issues.
+
+## Integração (2026-11-17)
+
+Na integração com o #13508 (g03), a resposta passou a nunca enviar `Access-Control-Allow-Credentials` nem `Expose-Headers` para origens não permitidas, com ou sem `CORSStrict`. No preflight, `CORSStrict` decide se uma origem não permitida é repassada ao backend (strict) ou respondida sem headers CORS. Os casos de teste "sem strict mode" foram atualizados.

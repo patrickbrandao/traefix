@@ -58,3 +58,7 @@ Ajustes:
 - Nota em `docs/content/reference/routing-configuration/http/load-balancing/service.md`.
 
 Testes: `go test ./pkg/server/service/loadbalancer/...` ok (o `-race` não rodou até o fim por falta de espaço em disco na máquina, compartilhada com outros builds); `golangci-lint run ./pkg/server/service/loadbalancer/...` 0 issues.
+
+## Integração (2026-11-17)
+
+Na integração com o #13511 (g05), esta versão de `nextServer` foi mantida, porque já garante o término do loop. O teste do #13511 foi ajustado para a semântica de fallback.

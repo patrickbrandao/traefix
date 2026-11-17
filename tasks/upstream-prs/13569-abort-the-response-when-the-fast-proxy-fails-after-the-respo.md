@@ -70,3 +70,7 @@ PR aberto, sem review de maintainer.
 - Numa das execuções sob carga, `TestNoContentLength` (teste antigo, que não mudou) travou uma vez. Rodou de novo sozinho e
   5 vezes com o pacote inteiro sem falhar: flakiness preexistente, não relacionada ao PR.
 - `go vet ./cmd/traefik/` ok.
+
+## Integração (2026-11-17)
+
+Revisão independente: quando o backend aborta a resposta, o `panic(http.ErrAbortHandler)` do fast proxy subia até a goroutine do mirror. Agora cada mirror roda isolado, o que evita stack trace no log e garante que os mirrors seguintes rodem. Há teste de regressão.
