@@ -61,6 +61,11 @@ type conn struct {
 	readLoopDone chan struct{}
 	readLoopErr  error
 
+	// responseStarted is set once the status line has been committed downstream,
+	// after which a forwarding error can no longer be turned into an error status
+	// (see ReverseProxy.ServeHTTP).
+	responseStarted atomic.Bool
+
 	closeMu  sync.Mutex
 	closed   bool
 	closeErr error
@@ -285,6 +290,7 @@ func (c *conn) handleResponse(r rwWithUpgrade) error {
 		r.RW.Header().Add(string(key), string(value))
 	})
 
+	c.responseStarted.Store(true)
 	r.RW.WriteHeader(res.StatusCode())
 
 	if noResponseBodyExpected(r.ReqMethod) {
@@ -395,6 +401,7 @@ type connPool struct {
 	bufferPool            pool[[]byte]
 	limitedReaderPool     pool[*io.LimitedReader]
 	doneCh                chan struct{}
+	closed                atomic.Bool
 
 	// dedicated pools are bound to a single frontend connection to isolate a connection-bound
 	// NTLM/Negotiate authentication (see stickyConnPools). They run no background janitor so they can be
@@ -432,12 +439,21 @@ func newConnPool(maxIdleConn int, idleConnTimeout, responseHeaderTimeout, readTi
 	return c
 }
 
-// Close closes stop the cleanIdleConn goroutine.
+// Close stops the cleanIdleConn goroutine and closes the pooled connections.
+// The pool is dropped by the ProxyBuilder right after this call, so connections
+// left in idleConns would otherwise stay open (along with their readLoop
+// goroutine) until the backend decides to close them.
 func (c *connPool) Close() {
+	if !c.closed.CompareAndSwap(false, true) {
+		return
+	}
+
 	if c.idleConnTimeout > 0 {
 		close(c.doneCh)
 		c.ticker.Stop()
 	}
+
+	c.closeIdleConns()
 }
 
 // AcquireConn returns an idle net.Conn from the pool.
@@ -474,8 +490,24 @@ func (c *connPool) ReleaseConn(co *conn) {
 		return
 	}
 
+	// The pool is not reachable anymore once closed,
+	// so the connections in flight at that time would never be closed if they were put back.
+	if c.closed.Load() {
+		if err := co.Close(); err != nil {
+			log.Debug().
+				Err(err).
+				Msg("Unexpected error while closing the connection")
+		}
+		return
+	}
+
 	co.idleAt = time.Now()
 	c.releaseConn(co)
+
+	// The pool may have been closed between the check above and the release.
+	if c.closed.Load() {
+		c.closeIdleConns()
+	}
 }
 
 // clone returns a dedicated pool sharing this pool's dialer and timeouts but isolated from it, used to pin a
@@ -493,7 +525,7 @@ func (c *connPool) clone() *connPool {
 	}
 }
 
-// closeIdleConns closes the idle connections of a dedicated pool once its frontend connection is gone.
+// closeIdleConns closes the idle connections of a closed pool, or of a dedicated pool once its frontend connection is gone.
 // A closed connection is put back in the pool rather than dropped, as a concurrent AcquireConn may be waiting on the
 // pool for the connection it has just dialed: it then gets the closed connection, sees it is stale, and dials again.
 func (c *connPool) closeIdleConns() {

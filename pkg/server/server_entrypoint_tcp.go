@@ -36,6 +36,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/server/service/kerberos"
 	"github.com/traefik/traefik/v3/pkg/tcp"
 	"github.com/traefik/traefik/v3/pkg/types"
+	"golang.org/x/time/rate"
 )
 
 type key string
@@ -439,26 +440,77 @@ func writeCloser(conn net.Conn) (tcp.WriteCloser, error) {
 // connections.
 type tcpKeepAliveListener struct {
 	*net.TCPListener
+
+	failures *keepAliveFailures
+}
+
+func newTCPKeepAliveListener(ctx context.Context, listener *net.TCPListener) tcpKeepAliveListener {
+	return tcpKeepAliveListener{
+		TCPListener: listener,
+		failures: &keepAliveFailures{
+			logger:   log.Ctx(ctx),
+			warnings: rate.Sometimes{First: 1, Interval: time.Minute},
+		},
+	}
 }
 
 func (ln tcpKeepAliveListener) Accept() (net.Conn, error) {
-	tc, err := ln.AcceptTCP()
-	if err != nil {
-		return nil, err
-	}
+	return acceptTCPWithKeepAlive(ln.AcceptTCP, configureTCPKeepAlive, ln.failures)
+}
 
+func configureTCPKeepAlive(tc *net.TCPConn) error {
 	if err := tc.SetKeepAlive(true); err != nil {
-		return nil, err
+		return err
 	}
 
 	if err := tc.SetKeepAlivePeriod(3 * time.Minute); err != nil {
 		// Some systems, such as OpenBSD, have no user-settable per-socket TCP keepalive options.
 		if !errors.Is(err, syscall.ENOPROTOOPT) {
-			return nil, err
+			return err
 		}
 	}
 
-	return tc, nil
+	return nil
+}
+
+func acceptTCPWithKeepAlive(accept func() (*net.TCPConn, error), configure func(*net.TCPConn) error, failures *keepAliveFailures) (net.Conn, error) {
+	for {
+		tc, err := accept()
+		if err != nil {
+			return nil, err
+		}
+
+		// A peer resetting the connection right after it was accepted makes the keep-alive options fail on some systems
+		// (ECONNRESET on FreeBSD, EINVAL on illumos and macOS). Returning the error would stop the entry point for good,
+		// so only this connection is dropped.
+		if err := configure(tc); err != nil {
+			_ = tc.Close()
+			failures.record(err)
+			continue
+		}
+
+		return tc, nil
+	}
+}
+
+// keepAliveFailures reports the connections closed because their TCP keep-alive could not be set.
+type keepAliveFailures struct {
+	logger *zerolog.Logger
+	// dropped counts the connections closed since the last warning.
+	dropped  atomic.Int64
+	warnings rate.Sometimes
+}
+
+func (f *keepAliveFailures) record(err error) {
+	f.dropped.Add(1)
+	f.logger.Debug().Err(err).Msg("Closed an accepted connection whose TCP keep-alive could not be set")
+
+	// A failure on every connection would leave the entry point serving nothing, so it is also reported as a warning,
+	// rate limited as scanners resetting connections trigger it routinely.
+	f.warnings.Do(func() {
+		f.logger.Warn().Err(err).Int64("connections", f.dropped.Swap(0)).
+			Msg("Closed accepted connections whose TCP keep-alive could not be set")
+	})
 }
 
 func buildProxyProtocolListener(ctx context.Context, entryPoint *static.EntryPoint, listener net.Listener) (net.Listener, error) {
@@ -536,7 +588,11 @@ func buildListener(ctx context.Context, name string, config *static.EntryPoint) 
 		}
 	}
 
-	listener = tcpKeepAliveListener{listener.(*net.TCPListener)}
+	tcpListener, ok := listener.(*net.TCPListener)
+	if !ok {
+		return nil, fmt.Errorf("listener type %T is not supported for TCP entrypoints", listener)
+	}
+	listener = newTCPKeepAliveListener(ctx, tcpListener)
 
 	if config.ProxyProtocol != nil {
 		listener, err = buildProxyProtocolListener(ctx, config, listener)
@@ -650,6 +706,12 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 	if configuration.HTTP2.MaxEncoderHeaderTableSize < 0 {
 		return nil, errors.New("max encoder header table size value must be greater than or equal to zero")
 	}
+	if configuration.HTTP2.MaxReceiveBufferPerConnection != 0 && configuration.HTTP2.MaxReceiveBufferPerConnection < 65535 {
+		return nil, errors.New("max receive buffer per connection value must be zero or at least 65535 bytes")
+	}
+	if configuration.HTTP2.MaxReceiveBufferPerStream < 0 {
+		return nil, errors.New("max receive buffer per stream value must be greater than or equal to zero")
+	}
 
 	httpSwitcher := middlewares.NewHandlerSwitcher(http.NotFoundHandler())
 
@@ -693,7 +755,13 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 	// Note that the Path sanitization has to be done after the path normalization,
 	// hence the wrapping has to be done before the normalize path wrapping.
 	if configuration.HTTP.SanitizePath != nil && *configuration.HTTP.SanitizePath {
-		handler = sanitizePath(handler)
+		// MergeSlashes is gated behind SanitizePath because merging slashes without resolving the dot-segments
+		// would give a false sense of protection.
+		if configuration.HTTP.MergeSlashes == nil || *configuration.HTTP.MergeSlashes {
+			handler = sanitizePath(handler)
+		} else {
+			handler = sanitizeDotSegments(handler)
+		}
 	}
 
 	handler = normalizePath(handler)
@@ -795,9 +863,11 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 		MaxHeaderBytes:      configuration.HTTP.MaxHeaderBytes,
 		MaxHeaderValueCount: configuration.HTTP.MaxHeaderValueCount,
 		HTTP2: &http.HTTP2Config{
-			MaxConcurrentStreams:      int(configuration.HTTP2.MaxConcurrentStreams),
-			MaxDecoderHeaderTableSize: int(configuration.HTTP2.MaxDecoderHeaderTableSize),
-			MaxEncoderHeaderTableSize: int(configuration.HTTP2.MaxEncoderHeaderTableSize),
+			MaxConcurrentStreams:          int(configuration.HTTP2.MaxConcurrentStreams),
+			MaxDecoderHeaderTableSize:     int(configuration.HTTP2.MaxDecoderHeaderTableSize),
+			MaxEncoderHeaderTableSize:     int(configuration.HTTP2.MaxEncoderHeaderTableSize),
+			MaxReceiveBufferPerConnection: int(configuration.HTTP2.MaxReceiveBufferPerConnection),
+			MaxReceiveBufferPerStream:     int(configuration.HTTP2.MaxReceiveBufferPerStream),
 		},
 		ConnContext: connContext.Build(),
 		ConnState:   connState,
@@ -1001,6 +1071,140 @@ func encodeQuerySemicolons(h http.Handler) http.Handler {
 	})
 }
 
+// removeDotSegments resolves "." and ".." segments in a path per RFC 3986 Section 5.2.4.
+// Unlike path.Clean or URL.JoinPath, it preserves empty path segments (consecutive slashes).
+func removeDotSegments(p string) string {
+	if p == "" || p == "*" {
+		return p
+	}
+
+	var out []byte
+	i := 0
+	n := len(p)
+
+	for i < n {
+		// A: If the input starts with "../" or "./" remove that prefix.
+		if i+3 <= n && p[i:i+3] == "../" {
+			i += 3
+			continue
+		}
+		if i+2 <= n && p[i:i+2] == "./" {
+			i += 2
+			continue
+		}
+
+		// B: If the input starts with "/./" or "/." (end), replace with "/".
+		if i+3 <= n && p[i:i+3] == "/./" {
+			i += 2
+			continue
+		}
+		if p[i:] == "/." {
+			out = append(out, '/')
+			i += 2
+			continue
+		}
+
+		// C: If the input starts with "/../" or "/.." (end),
+		// replace with "/" and remove the last output segment.
+		if i+4 <= n && p[i:i+4] == "/../" {
+			i += 3
+			out = removeDotLastSegment(out)
+			continue
+		}
+		if p[i:] == "/.." {
+			out = removeDotLastSegment(out)
+			out = append(out, '/')
+			i += 3
+			continue
+		}
+
+		// D: If the input is just "." or "..", consume it.
+		if p[i:] == "." || p[i:] == ".." {
+			break
+		}
+
+		// E: Move the first path segment (including initial "/" if any) to output.
+		if p[i] == '/' {
+			out = append(out, '/')
+			i++
+		}
+		for i < n && p[i] != '/' {
+			out = append(out, p[i])
+			i++
+		}
+	}
+
+	return string(out)
+}
+
+// removeDotLastSegment removes the last segment from the output buffer,
+// including its preceding "/" if present.
+func removeDotLastSegment(out []byte) []byte {
+	j := len(out) - 1
+	for j >= 0 && out[j] != '/' {
+		j--
+	}
+	if j >= 0 {
+		out = out[:j]
+	}
+	return out
+}
+
+// sanitizeDotSegments removes ".." and "." segments from the URL path per RFC 3986 Section 5.2.4,
+// preserving empty path segments (consecutive slashes).
+// It updates the request URL Path, RawPath, and RequestURI.
+func sanitizeDotSegments(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		// The dot-segments are resolved on the escaped path, and the decoded path is derived from it,
+		// so that an encoded slash is never taken as a segment separator and Path and RawPath cannot diverge.
+		escapedPath := req.URL.EscapedPath()
+		if strings.Contains(escapedPath, ";") {
+			escapedPath = removeDotSegmentParameters(escapedPath)
+		}
+
+		rawPath := removeDotSegments(escapedPath)
+
+		decodedPath, err := url.PathUnescape(rawPath)
+		if err != nil {
+			http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		r2 := new(http.Request)
+		*r2 = *req
+		r2.URL = new(url.URL)
+		*r2.URL = *req.URL
+		r2.URL.Path = decodedPath
+		r2.URL.RawPath = ""
+		if r2.URL.EscapedPath() != rawPath {
+			r2.URL.RawPath = rawPath
+		}
+
+		// Because the reverse proxy director is building query params from requestURI it needs to be updated as well.
+		r2.RequestURI = r2.URL.RequestURI()
+
+		h.ServeHTTP(rw, r2)
+	})
+}
+
+// removeDotSegmentParameters removes the path parameters of the "..;", ".;" and ";" segments,
+// as backends stripping path parameters (Servlet containers, Spring, ...) resolve them as dot-segments or empty segments.
+func removeDotSegmentParameters(escapedPath string) string {
+	segments := strings.Split(escapedPath, "/")
+	for i, segment := range segments {
+		switch {
+		case strings.HasPrefix(segment, "..;"):
+			segments[i] = ".."
+		case strings.HasPrefix(segment, ".;"):
+			segments[i] = "."
+		case strings.HasPrefix(segment, ";"):
+			segments[i] = ""
+		}
+	}
+
+	return strings.Join(segments, "/")
+}
+
 // sanitizePath removes the "..", "." and duplicate slash segments from the URL according to https://datatracker.ietf.org/doc/html/rfc3986#section-6.2.2.3.
 // The path parameters of the "..;", ".;" and ";" segments are removed first, as backends stripping path parameters (Servlet containers, Spring, ...) resolve them as dot-segments or duplicate slashes.
 // It cleans the request URL Path and RawPath, and updates the request URI.
@@ -1011,21 +1215,9 @@ func sanitizePath(h http.Handler) http.Handler {
 
 		// Removes the path parameters of the dot-segments and empty segments, so that JoinPath collapses them.
 		if escapedPath := req.URL.EscapedPath(); strings.Contains(escapedPath, ";") {
-			segments := strings.Split(escapedPath, "/")
-			for i, segment := range segments {
-				switch {
-				case strings.HasPrefix(segment, "..;"):
-					segments[i] = ".."
-				case strings.HasPrefix(segment, ".;"):
-					segments[i] = "."
-				case strings.HasPrefix(segment, ";"):
-					segments[i] = ""
-				}
-			}
-
 			r2.URL = new(url.URL)
 			*r2.URL = *req.URL
-			r2.URL.RawPath = strings.Join(segments, "/")
+			r2.URL.RawPath = removeDotSegmentParameters(escapedPath)
 			r2.URL.Path, _ = url.PathUnescape(r2.URL.RawPath)
 		}
 
@@ -1078,7 +1270,7 @@ func normalizePath(h http.Handler) http.Handler {
 		var normalizedRawPathBuilder strings.Builder
 		for i := 0; i < len(rawPath); i++ {
 			if rawPath[i] != '%' {
-				normalizedRawPathBuilder.WriteString(string(rawPath[i]))
+				normalizedRawPathBuilder.WriteByte(rawPath[i])
 				continue
 			}
 

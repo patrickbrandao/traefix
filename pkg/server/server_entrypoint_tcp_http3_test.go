@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,6 +146,110 @@ func TestHTTP3AdvertisedPort(t *testing.T) {
 
 	assert.NotContains(t, r.Header.Get("Alt-Svc"), ":8090")
 	assert.Contains(t, r.Header.Get("Alt-Svc"), ":8080")
+}
+
+func TestHTTP3AltSvcHeader(t *testing.T) {
+	certContent, err := localhostCert.Read()
+	require.NoError(t, err)
+
+	keyContent, err := localhostKey.Read()
+	require.NoError(t, err)
+
+	tlsCert, err := tls.X509KeyPair(certContent, keyContent)
+	require.NoError(t, err)
+
+	// The handlers call WriteHeader explicitly, as the proxies do once the backend response headers are copied.
+	testCases := []struct {
+		desc     string
+		handler  http.HandlerFunc
+		expected []string
+	}{
+		{
+			desc: "advertised value only",
+			handler: func(rw http.ResponseWriter, req *http.Request) {
+				rw.WriteHeader(http.StatusOK)
+			},
+			expected: []string{`h3=":8443"; ma=2592000`},
+		},
+		{
+			desc: "backend value appended",
+			handler: func(rw http.ResponseWriter, req *http.Request) {
+				rw.Header().Add("Alt-Svc", `h3=":9443"; ma=86400`)
+				rw.WriteHeader(http.StatusOK)
+			},
+			expected: []string{`h3=":8443"; ma=2592000`},
+		},
+		{
+			desc: "advertised value replaced",
+			handler: func(rw http.ResponseWriter, req *http.Request) {
+				rw.Header().Set("Alt-Svc", `h3=":9443"; ma=86400`)
+				rw.WriteHeader(http.StatusOK)
+			},
+			expected: []string{`h3=":9443"; ma=86400`},
+		},
+		{
+			desc: "advertised value removed",
+			handler: func(rw http.ResponseWriter, req *http.Request) {
+				rw.Header().Del("Alt-Svc")
+				rw.WriteHeader(http.StatusOK)
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			epConfig := &static.EntryPointsTransport{}
+			epConfig.SetDefaults()
+
+			entryPoint, err := NewTCPEntryPoint(t.Context(), "foo", &static.EntryPoint{
+				Address:          "127.0.0.1:0",
+				Transport:        epConfig,
+				ForwardedHeaders: &static.ForwardedHeaders{},
+				HTTP2:            &static.HTTP2Config{},
+				HTTP3: &static.HTTP3Config{
+					AdvertisedPort: 8443,
+				},
+			}, nil, nil)
+			require.NoError(t, err)
+
+			router, err := tcprouter.NewRouter(nil)
+			require.NoError(t, err)
+
+			router.AddHTTPTLSConfig("*", &tls.Config{
+				Certificates: []tls.Certificate{tlsCert},
+			}, traefiktls.DefaultTLSConfigName)
+			router.SetHTTPSHandler(test.handler, nil)
+
+			ctx := t.Context()
+			go entryPoint.Start(ctx)
+			entryPoint.SwitchRouter(router)
+
+			t.Cleanup(func() { entryPoint.Shutdown(ctx) })
+
+			// The Alt-Svc value is only advertised once the HTTP/3 server is listening.
+			require.Eventually(t, func() bool {
+				return entryPoint.http3Server.SetQUICHeaders(http.Header{}) == nil
+			}, 5*time.Second, 10*time.Millisecond)
+
+			conn, err := tls.Dial("tcp", entryPoint.listener.Addr().String(), &tls.Config{
+				InsecureSkipVerify: true,
+			})
+			require.NoError(t, err)
+
+			t.Cleanup(func() { _ = conn.Close() })
+
+			request, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
+			require.NoError(t, err)
+
+			err = request.Write(conn)
+			require.NoError(t, err)
+
+			resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+			require.NoError(t, err)
+
+			assert.Equal(t, test.expected, resp.Header.Values("Alt-Svc"))
+		})
+	}
 }
 
 func TestHTTP30RTT(t *testing.T) {
@@ -498,6 +603,72 @@ func TestNewHTTP3ServerTimeouts(t *testing.T) {
 	assert.NotNil(t, entryPoint.http3Server.Server.Handler)
 }
 
+func TestNewHTTP3ServerInitialPacketSize(t *testing.T) {
+	testCases := []struct {
+		desc          string
+		size          int
+		expectedSize  uint16
+		expectedError string
+	}{
+		{
+			desc: "default",
+		},
+		{
+			desc:         "minimum",
+			size:         1200,
+			expectedSize: 1200,
+		},
+		{
+			desc:         "maximum",
+			size:         1452,
+			expectedSize: 1452,
+		},
+		{
+			desc:          "too small",
+			size:          1199,
+			expectedError: "initial packet size must be between 1200 and 1452, got 1199",
+		},
+		{
+			desc:          "too large",
+			size:          1453,
+			expectedError: "initial packet size must be between 1200 and 1452, got 1453",
+		},
+		{
+			desc:          "uint16 overflow",
+			size:          65536 + 1300,
+			expectedError: "initial packet size must be between 1200 and 1452, got 66836",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			epConfig := &static.EntryPointsTransport{}
+			epConfig.SetDefaults()
+
+			entryPoint, err := NewTCPEntryPoint(t.Context(), "foo", &static.EntryPoint{
+				Address:          "127.0.0.1:0",
+				Transport:        epConfig,
+				ForwardedHeaders: &static.ForwardedHeaders{},
+				HTTP2:            &static.HTTP2Config{},
+				HTTP3:            &static.HTTP3Config{InitialPacketSize: test.size},
+			}, nil, nil)
+			if test.expectedError != "" {
+				require.ErrorContains(t, err, test.expectedError)
+				return
+			}
+			require.NoError(t, err)
+
+			t.Cleanup(func() {
+				_ = entryPoint.listener.Close()
+				_ = entryPoint.http3Server.http3conn.Close()
+			})
+
+			assert.Equal(t, test.expectedSize, entryPoint.http3Server.Server.QUICConfig.InitialPacketSize)
+			assert.False(t, entryPoint.http3Server.Server.QUICConfig.Allow0RTT)
+		})
+	}
+}
+
 type clientSessionCache struct {
 	cache tls.ClientSessionCache
 
@@ -524,4 +695,194 @@ func (c *clientSessionCache) Get(sessionKey string) (*tls.ClientSessionState, bo
 func (c *clientSessionCache) Put(sessionKey string, cs *tls.ClientSessionState) {
 	c.cache.Put(sessionKey, cs)
 	c.puts <- sessionKey
+}
+
+func TestHTTP3ListenNetwork(t *testing.T) {
+	testCases := []struct {
+		desc    string
+		address string
+		want    string
+	}{
+		{
+			desc:    "IPv4 literal host",
+			address: "0.0.0.0:8443",
+			want:    "udp4",
+		},
+		{
+			desc:    "IPv4 loopback host",
+			address: "127.0.0.1:8443",
+			want:    "udp4",
+		},
+		{
+			desc:    "unspecified host keeps dual-stack",
+			address: ":8443",
+			want:    "udp",
+		},
+		{
+			desc:    "IPv6 wildcard host keeps dual-stack",
+			address: "[::]:8443",
+			want:    "udp",
+		},
+		{
+			desc:    "IPv6 literal host keeps dual-stack",
+			address: "[::1]:8443",
+			want:    "udp",
+		},
+		{
+			desc:    "hostname keeps dual-stack",
+			address: "example.com:8443",
+			want:    "udp",
+		},
+		{
+			desc:    "address without a port keeps dual-stack",
+			address: "0.0.0.0",
+			want:    "udp",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, test.want, http3ListenNetwork(test.address))
+		})
+	}
+}
+
+func TestHTTP3ShutdownHonorsGraceTimeOut(t *testing.T) {
+	certContent, err := localhostCert.Read()
+	require.NoError(t, err)
+
+	keyContent, err := localhostKey.Read()
+	require.NoError(t, err)
+
+	tlsCert, err := tls.X509KeyPair(certContent, keyContent)
+	require.NoError(t, err)
+
+	epConfig := &static.EntryPointsTransport{}
+	epConfig.SetDefaults()
+	epConfig.LifeCycle.RequestAcceptGraceTimeout = 0
+	epConfig.LifeCycle.GraceTimeOut = ptypes.Duration(5 * time.Second)
+
+	entryPoint, err := NewTCPEntryPoint(t.Context(), "foo", &static.EntryPoint{
+		Address:          "127.0.0.1:0",
+		Transport:        epConfig,
+		ForwardedHeaders: &static.ForwardedHeaders{},
+		HTTP2:            &static.HTTP2Config{},
+		HTTP3:            &static.HTTP3Config{},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	router, err := tcprouter.NewRouter(nil)
+	require.NoError(t, err)
+
+	// The handler is still writing its response when the shutdown starts.
+	handlerStarted := make(chan struct{})
+	var handlerOnce sync.Once
+	router.AddHTTPTLSConfig("example.com", &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	}, traefiktls.DefaultTLSConfigName)
+	router.SetHTTPSHandler(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		handlerOnce.Do(func() { close(handlerStarted) })
+		time.Sleep(800 * time.Millisecond)
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write([]byte("finished"))
+	}), nil)
+
+	ctx := t.Context()
+	go entryPoint.Start(ctx)
+	entryPoint.SwitchRouter(router)
+
+	// We are racing with the http3Server readiness happening in the goroutine starting the entrypoint.
+	time.Sleep(time.Second)
+
+	udpAddr := entryPoint.http3Server.http3conn.LocalAddr().String()
+
+	certPool := x509.NewCertPool()
+	certPool.AppendCertsFromPEM(certContent)
+
+	newTransport := func() *http3.Transport {
+		transport := &http3.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    certPool,
+				ServerName: "example.com",
+			},
+			Dial: func(ctx context.Context, _ string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+				return quic.DialAddr(ctx, udpAddr, tlsCfg, cfg)
+			},
+		}
+		t.Cleanup(func() { _ = transport.Close() })
+
+		return transport
+	}
+
+	type result struct {
+		body string
+		err  error
+	}
+	results := make(chan result, 1)
+
+	go func() {
+		req, reqErr := http.NewRequest(http.MethodGet, "https://example.com/", http.NoBody)
+		if reqErr != nil {
+			results <- result{err: reqErr}
+			return
+		}
+
+		resp, rtErr := newTransport().RoundTrip(req)
+		if rtErr != nil {
+			results <- result{err: rtErr}
+			return
+		}
+		defer resp.Body.Close()
+
+		body, readErr := io.ReadAll(resp.Body)
+		results <- result{body: string(body), err: readErr}
+	}()
+
+	// Only shut down once the request is actually in flight, otherwise the
+	// server has nothing to wait for and Close would look identical to Shutdown.
+	select {
+	case <-handlerStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the HTTP/3 request never reached the handler")
+	}
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		entryPoint.Shutdown(ctx)
+		close(shutdownDone)
+	}()
+
+	// Once the shutdown has started, new connections must be refused while the in-flight request completes.
+	time.Sleep(100 * time.Millisecond)
+
+	newReqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	newReq, err := http.NewRequestWithContext(newReqCtx, http.MethodGet, "https://example.com/", http.NoBody)
+	require.NoError(t, err)
+
+	newResp, err := newTransport().RoundTrip(newReq)
+	if err == nil {
+		_ = newResp.Body.Close()
+	}
+	require.Error(t, err)
+
+	// Elapsed time is deliberately not asserted: quic-go's Close also waits for
+	// connections to finish closing, so both paths take roughly as long. What
+	// separates them is whether the in-flight request completes or is torn down.
+	select {
+	case res := <-results:
+		require.NoError(t, res.err)
+		assert.Equal(t, "finished", res.body)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the HTTP/3 response never completed")
+	}
+
+	select {
+	case <-shutdownDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the entry point shutdown never returned")
+	}
 }

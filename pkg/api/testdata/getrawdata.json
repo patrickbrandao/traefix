@@ -47,7 +47,7 @@
 		"auth@myprovider": {
 			"basicAuth": {
 				"users": [
-					"admin:admin"
+					"xxxx"
 				]
 			},
 			"status": "enabled",

@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +72/-1 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/http3 |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,26 @@ Pequeno (72 linhas). Base master, status/2-needs-review. Uma tentativa anterior 
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto. Substitui o #13652, fechado por um maintainer (emilevauge), que pediu exatamente esta versão: só
+restringir o caso de IPv4 literal.
+
+### Achados no PR original
+
+- Correto e de escopo pequeno: usa `udp4` só quando o host do entrypoint é um IPv4 literal. `:8443`, `[::]`, IPv6 e
+  hostnames continuam em `udp` (dual-stack).
+- **Mudança de comportamento a registrar:** no Go, `udp` com `0.0.0.0:porta` abre um socket dual-stack (aceita IPv6
+  também), igual ao listener TCP. Com o PR, um entrypoint `0.0.0.0:443` passa a receber HTTP/3 só em IPv4, enquanto o
+  TCP continua dual-stack. Para HTTP/3 em IPv6, é preciso usar `:443`. É o que corrige o caso Cilium da issue #13633 e
+  segue a intenção literal do endereço, mas pode afetar quem usava `0.0.0.0` esperando IPv6.
+- IPv4 mapeado em IPv6 (`[::ffff:1.2.3.4]`) também vira `udp4`, o que é coerente.
+
+### Ajustes
+
+- Doc: nota na seção HTTP/3 do `entrypoints.md` sobre `0.0.0.0` restringir o UDP a IPv4.
+
+### Testes
+
+- `go test ./pkg/server/ -run 'TestHTTP3'` ok; `golangci-lint run ./pkg/server/...`: 0 issues.

@@ -14,6 +14,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"github.com/rs/zerolog/log"
 	"github.com/traefik/traefik/v3/pkg/config/static"
+	"github.com/traefik/traefik/v3/pkg/middlewares"
 	tcpmuxer "github.com/traefik/traefik/v3/pkg/muxer/tcp"
 	"github.com/traefik/traefik/v3/pkg/proxy/fast"
 	tcprouter "github.com/traefik/traefik/v3/pkg/server/router/tcp"
@@ -30,6 +31,27 @@ type http3server struct {
 	getter func(data tcpmuxer.ConnData) (*tls.Config, string, error)
 }
 
+// RFC 9000 section 14.1 requires at least 1200 bytes, quic-go does not support more than 1452 bytes.
+const (
+	minHTTP3InitialPacketSize = 1200
+	maxHTTP3InitialPacketSize = 1452
+)
+
+// http3ListenNetwork returns the network to use when listening for the HTTP/3 UDP
+// packet conn for the given entry point address. It only narrows down to "udp4"
+// when the address host is a literal IPv4 address (including 0.0.0.0), as some CNIs
+// do not deliver IPv4 packets to the dual-stack socket Go opens for "udp" (https://github.com/traefik/traefik/issues/13633).
+// Every other case (unspecified host, IPv6 literal, or hostname) keeps using the dual-stack "udp" network.
+func http3ListenNetwork(address string) string {
+	if host, _, err := net.SplitHostPort(address); err == nil {
+		if ip := net.ParseIP(host); ip != nil && ip.To4() != nil {
+			return "udp4"
+		}
+	}
+
+	return "udp"
+}
+
 func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint, httpsServer *httpServer) (*http3server, error) {
 	var conn net.PacketConn
 	var err error
@@ -42,6 +64,11 @@ func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint,
 		return nil, errors.New("advertised port must be greater than or equal to zero")
 	}
 
+	// The upper bound is the maximum packet size supported by quic-go, larger values would be silently capped.
+	if size := config.HTTP3.InitialPacketSize; size != 0 && (size < minHTTP3InitialPacketSize || size > maxHTTP3InitialPacketSize) {
+		return nil, fmt.Errorf("initial packet size must be between %d and %d, got %d", minHTTP3InitialPacketSize, maxHTTP3InitialPacketSize, size)
+	}
+
 	// if we have predefined connections from socket activation
 	if socketActivation.isEnabled() {
 		conn, err = socketActivation.getConn(name)
@@ -52,7 +79,7 @@ func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint,
 
 	if conn == nil {
 		listenConfig := newListenConfig(config)
-		conn, err = listenConfig.ListenPacket(ctx, "udp", config.GetAddress())
+		conn, err = listenConfig.ListenPacket(ctx, http3ListenNetwork(config.GetAddress()), config.GetAddress())
 		if err != nil {
 			return nil, fmt.Errorf("starting listener: %w", err)
 		}
@@ -78,7 +105,8 @@ func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint,
 		MaxHeaderBytes: config.HTTP.MaxHeaderBytes,
 		IdleTimeout:    time.Duration(config.Transport.RespondingTimeouts.IdleTimeout),
 		QUICConfig: &quic.Config{
-			Allow0RTT: false,
+			Allow0RTT:         false,
+			InitialPacketSize: uint16(config.HTTP3.InitialPacketSize),
 		},
 		ConnContext: func(ctx context.Context, c *quic.Conn) context.Context {
 			// This adds an empty struct in order to store a RoundTripper in the ConnContext in case of Kerberos or NTLM.
@@ -115,9 +143,22 @@ func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint,
 	httpsServer.Server.(*http.Server).Handler = http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		if err := h3.Server.SetQUICHeaders(rw.Header()); err != nil {
 			log.Ctx(ctx).Error().Err(err).Msg("Failed to set HTTP3 headers")
+
+			previousHandler.ServeHTTP(rw, req)
+			return
 		}
 
-		previousHandler.ServeHTTP(rw, req)
+		// Keep the advertised Alt-Svc value when additional values were appended after it,
+		// such as the ones copied from a proxied response, which advertise the alternatives of another server.
+		// A value replacing or removing it, as set by the headers middleware, is preserved.
+		altSvc := rw.Header().Get("Alt-Svc")
+		previousHandler.ServeHTTP(middlewares.NewResponseModifier(rw, req, func(resp *http.Response) error {
+			if values := resp.Header.Values("Alt-Svc"); len(values) > 1 && values[0] == altSvc {
+				resp.Header.Set("Alt-Svc", altSvc)
+			}
+
+			return nil
+		}), req)
 	})
 
 	return h3, nil
@@ -150,9 +191,12 @@ func (e *http3server) Switch(rt *tcprouter.Router) {
 	e.getter = rt.HTTP3TLSConfigMatcherFunc()
 }
 
-func (e *http3server) Shutdown(_ context.Context) error {
-	// TODO: use e.Server.CloseGracefully() when available.
-	return e.Server.Close()
+func (e *http3server) Shutdown(ctx context.Context) error {
+	// quic-go's Shutdown sends GOAWAY and waits for in-flight requests, honoring
+	// the grace-timeout context TCPEntryPoint.Shutdown builds. On expiry it closes
+	// the server itself and returns ctx.Err(), which shutdownServer maps onto its
+	// existing deadline branch. Close() would abort in-flight requests immediately.
+	return e.Server.Shutdown(ctx)
 }
 
 func (e *http3server) getTLSConfigForClient(info *tls.ClientHelloInfo) (*tls.Config, error) {

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	"github.com/rs/zerolog/log"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/config/runtime"
 	"github.com/traefik/traefik/v3/pkg/config/static"
@@ -167,11 +166,8 @@ func (h *Handler) getRuntimeConfiguration(rw http.ResponseWriter, request *http.
 
 	rw.Header().Set("Content-Type", "application/json")
 
-	err := json.NewEncoder(rw).Encode(result)
-	if err != nil {
-		log.Ctx(request.Context()).Error().Err(err).Send()
-		http.Error(rw, err.Error(), http.StatusInternalServerError)
-	}
+	// The raw data contains every middleware, so it must be redacted like the middleware endpoints.
+	h.writeRedactableJSON(rw, request, result)
 }
 
 func getProviderName(id string) string {

@@ -252,7 +252,20 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	if err := p.roundTrip(rw, req, outReq, reqUpType); err != nil {
+	responseStarted, err := p.roundTrip(rw, req, outReq, reqUpType)
+	if err != nil {
+		// Once the status line has been committed downstream, the error status
+		// cannot be sent anymore: ErrorHandler would append its body to the
+		// payload the client is already reading, and report a 500 to the access
+		// logs and the metrics for what is usually a client going away mid-stream.
+		// Abort the response instead, which is what both the recovery middleware
+		// and net/http/httputil.ReverseProxy do in the same situation.
+		if responseStarted {
+			log.Ctx(req.Context()).Debug().Err(err).Msg("Error after the response has started, aborting the request")
+
+			panic(http.ErrAbortHandler)
+		}
+
 		proxyhttputil.ErrorHandler(rw, req, err)
 	}
 }
@@ -262,7 +275,10 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 //   - we are not asking for compressed response automatically. That is because this will add an extra cost when the
 //     client is asking for an uncompressed response, as we will have to un-compress it, and nowadays most clients are
 //     already asking for compressed response (allowing "passthrough" compression).
-func (p *ReverseProxy) roundTrip(rw http.ResponseWriter, req *http.Request, outReq *fasthttp.Request, reqUpType string) error {
+//
+// The returned boolean reports whether the downstream response had already
+// started when the error occurred.
+func (p *ReverseProxy) roundTrip(rw http.ResponseWriter, req *http.Request, outReq *fasthttp.Request, reqUpType string) (bool, error) {
 	ctx := req.Context()
 	trace := httptrace.ContextClientTrace(ctx)
 
@@ -286,7 +302,7 @@ func (p *ReverseProxy) roundTrip(rw http.ResponseWriter, req *http.Request, outR
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 
 		default:
 		}
@@ -294,12 +310,15 @@ func (p *ReverseProxy) roundTrip(rw http.ResponseWriter, req *http.Request, outR
 		var err error
 		co, err = connPool.AcquireConn()
 		if err != nil {
-			return fmt.Errorf("acquire connection: %w", err)
+			return false, fmt.Errorf("acquire connection: %w", err)
 		}
 
 		// Before writing the request,
 		// we mark the conn as expecting to handle a response.
 		co.expectedResponse.Store(true)
+
+		// Connections are pooled and retried on, so the marker is per attempt.
+		co.responseStarted.Store(false)
 
 		wd := &writeDetector{Conn: co}
 
@@ -320,7 +339,7 @@ func (p *ReverseProxy) roundTrip(rw http.ResponseWriter, req *http.Request, outR
 		co.Close()
 
 		if wd.written && !isReplayable(req) {
-			return err
+			return false, err
 		}
 	}
 
@@ -343,15 +362,15 @@ func (p *ReverseProxy) roundTrip(rw http.ResponseWriter, req *http.Request, outR
 	// The readLoop can terminate without receiving the responseWriter:
 	// waiting on the RWCh send alone would hang forever.
 	case <-co.readLoopDone:
-		return fmt.Errorf("awaiting response: %w", co.readLoopErr)
+		return false, fmt.Errorf("awaiting response: %w", co.readLoopErr)
 	}
 
 	if err := <-co.ErrCh; err != nil {
-		return err
+		return co.responseStarted.Load(), err
 	}
 
 	connPool.ReleaseConn(co)
-	return nil
+	return false, nil
 }
 
 func (p *ReverseProxy) writeRequest(co net.Conn, outReq *fasthttp.Request) error {

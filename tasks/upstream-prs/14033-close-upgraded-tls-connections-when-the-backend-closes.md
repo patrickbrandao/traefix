@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +185/-1 em 3 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/server |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -38,3 +38,24 @@ Mexe no caminho de upgrade do ReverseProxy (proxy/httputil). Sem reviews ainda; 
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, status "review", sem review técnico.
+
+### Achados no PR original
+
+- Correto: desde o Go 1.25, ao receber EOF do backend numa conexão com upgrade, o `httputil.ReverseProxy` chama
+  `CloseWrite` na conexão do cliente. Num `*tls.Conn` isso só envia um `close_notify` e mantém o TCP aberto, então a maioria
+  dos clientes WebSocket fica com uma conexão meio aberta e nunca reconecta. O PR esconde o `CloseWrite` só para requests
+  TLS com `Connection: Upgrade`. Conexões sem TLS mantêm o half-close.
+- Segue as convenções do projeto: o wrapper implementa `Hijack` chamando `http.ResponseController` e expõe `Unwrap`.
+- Sem impacto de segurança; também reduz conexões penduradas (consumo de fds).
+
+### Ajustes
+
+Conflito em `buildSingleHostProxy` resolvido: o código local não tem o `newConnectHandler` do upstream, então o wrapper foi inserido na cadeia local (`newH2CUpgradeHandler(newTLSUpgradeHandler(proxy))`).
+
+### Testes
+
+- `go test ./pkg/proxy/httputil/` ok; `golangci-lint run ./pkg/proxy/httputil/...`: 0 issues.

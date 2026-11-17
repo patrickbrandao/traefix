@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +118/-15 em 4 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/M |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -39,3 +39,26 @@ Otimização de performance, não recurso novo. Toca o caminho quente de roteame
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, só com review automatizado, sem maintainer.
+
+### Achados no PR original
+
+- Otimização sem mudança de comportamento:
+  - `getRoutingPath` passa a devolver `(string, bool)` em vez de `*string`, eliminando uma alocação por rota por request;
+  - `withRoutingPath` devolve o `EscapedPath` como está quando não há `%`.
+- Conferi que o loop original, sem `%`, copia o caminho byte a byte sem alterar nada, então o atalho dá o mesmo resultado.
+  A normalização de path (`normalizePath`/`sanitizePath`) roda antes no entrypoint e não muda; não há impacto em
+  path traversal nem no casamento de rotas.
+- Diferença mínima: um valor não string na chave de contexto antes causava pânico e agora resulta em "não definido"
+  (`ok=false`). A chave é privada do muxer, então isso não acontece na prática.
+
+### Ajustes
+
+Nenhum.
+
+### Testes
+
+- `go test ./pkg/muxer/...` ok; benchmarks compilam; `golangci-lint run ./pkg/muxer/...`: 0 issues.

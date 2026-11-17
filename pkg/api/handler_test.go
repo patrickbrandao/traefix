@@ -207,7 +207,7 @@ func TestHandler_GetMiddleware(t *testing.T) {
 				MiddlewareInfo: &runtime.MiddlewareInfo{
 					Middleware: &dynamic.Middleware{
 						BasicAuth: &dynamic.BasicAuth{
-							Users: []string{"admin:admin"},
+							Users: []string{"xxxx"},
 						},
 					},
 				},
@@ -238,7 +238,7 @@ func TestHandler_GetMiddleware(t *testing.T) {
 					Middleware: &dynamic.Middleware{
 						Plugin: map[string]dynamic.PluginConf{
 							"mysuperplugin": {
-								"foo": "bar",
+								"foo": struct{}{},
 							},
 						},
 					},

@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +166/-3 em 4 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/server |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,24 @@ Base v3.7. Já tem duas aprovações. Muda comportamento para quem depende do fa
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, aprovado por um revisor externo (não maintainer); status "review" sem objeções.
+
+### Achados no PR original
+
+- Sem bugs encontrados. A mudança é benéfica para segurança: hoje um `--configfile` com caminho errado faz o Traefik
+  cair silenciosamente nos locais padrão (`/etc/traefik/traefik.toml`, `$HOME/.config/traefik`, `./traefik`) e subir
+  com uma configuração inesperada (ou com os defaults).
+- Mudança de comportamento: um `--configfile` inexistente ou vazio agora impede a inicialização (fail fast). Sem flag,
+  a busca nos locais padrão continua igual.
+- A verificação de deprecação também deixou de analisar o arquivo padrão quando um arquivo explícito foi informado.
+
+### Ajustes
+
+- Comentário de `loadConfigFiles` atualizado para refletir o novo comportamento.
+
+### Testes
+
+- `go test ./pkg/cli/` ok; `golangci-lint run ./pkg/cli/...`: 0 issues; `go vet ./cmd/traefik/` ok.

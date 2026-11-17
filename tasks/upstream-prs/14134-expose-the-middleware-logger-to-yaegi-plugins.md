@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +134/-0 em 5 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/M, area/plugins |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -39,3 +39,26 @@ Adiciona superfície de API para plugins Yaegi, então qualquer ajuste posterior
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, status "review"; review automatizado sem objeções. A checagem Aikido (dependências) passou depois de ajuste no fixture.
+
+### Achados no PR original
+
+- Expõe só `middlewares.GetLogger` ao interpretador Yaegi, pelo mesmo mecanismo `i.Use` usado para os símbolos de
+  provider. O logger devolvido é uma cópia derivada (com `middlewareName`/`middlewareType`), então o plugin não altera o
+  logger global. Ele já podia escrever em stdout/stderr, que vão para o log, então não há ganho de privilégio.
+- O zerolog escapa os campos no formato JSON. No formato texto, um plugin pode emitir linhas arbitrárias, como já podia
+  via stdout. Sem nova superfície de log injection.
+- Efeito colateral: o pacote `github.com/traefik/traefik/v3/pkg/middlewares` vira API pública para plugins, e mudar a
+  assinatura de `GetLogger` passa a quebrá-los.
+- O fixture é código-fonte Go simples, interpretado no teste. Não há binário.
+
+### Ajustes
+
+Nenhum.
+
+### Testes
+
+- `go test ./pkg/plugins/` ok; `golangci-lint run ./pkg/plugins/...`: 0 issues.

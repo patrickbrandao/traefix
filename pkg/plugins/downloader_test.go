@@ -131,6 +131,68 @@ func TestHTTPPluginDownloader_Check(t *testing.T) {
 	}
 }
 
+func TestHTTPPluginDownloader_Download_interruptedKeepsCachedArchive(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("partial"))
+	}))
+	defer server.Close()
+
+	archivesPath := filepath.Join(t.TempDir(), "archives")
+	createDummyZip(t, archivesPath)
+
+	baseURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	downloader := &RegistryDownloader{
+		httpClient: server.Client(),
+		baseURL:    baseURL,
+		archives:   archivesPath,
+	}
+
+	archivePath := downloader.buildArchivePath("test/plugin", "v1.0.0")
+	cachedHash, err := computeHash(archivePath)
+	require.NoError(t, err)
+
+	_, err = downloader.Download(t.Context(), "test/plugin", "v1.0.0")
+	require.Error(t, err)
+
+	hash, err := computeHash(archivePath)
+	require.NoError(t, err)
+	assert.Equal(t, cachedHash, hash)
+
+	entries, err := os.ReadDir(filepath.Dir(archivePath))
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+}
+
+func TestHTTPPluginDownloader_statusError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	baseURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	downloader := &RegistryDownloader{
+		httpClient: server.Client(),
+		baseURL:    baseURL,
+		archives:   filepath.Join(t.TempDir(), "archives"),
+	}
+
+	_, err = downloader.Download(t.Context(), "test/plugin", "v1.0.0")
+	var statusErr *registryStatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusNotFound, statusErr.StatusCode)
+	assert.False(t, isRegistryUnavailable(err))
+
+	err = downloader.Check(t.Context(), "test/plugin", "v1.0.0", "hash")
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusNotFound, statusErr.StatusCode)
+}
+
 func createDummyZip(t *testing.T, path string) {
 	t.Helper()
 
