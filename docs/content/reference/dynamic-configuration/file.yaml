@@ -110,6 +110,7 @@ http:
           hostname: foobar
           followRedirects: true
           body: foobar
+          maxConcurrency: 42
           headers:
             name0: foobar
             name1: foobar

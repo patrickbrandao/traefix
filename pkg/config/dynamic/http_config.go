@@ -555,6 +555,7 @@ type ServerHealthCheck struct {
 	FollowRedirects   *bool             `json:"followRedirects,omitempty" toml:"followRedirects,omitempty" yaml:"followRedirects,omitempty" export:"true"`
 	Headers           map[string]string `json:"headers,omitempty" toml:"headers,omitempty" yaml:"headers,omitempty" export:"true"`
 	Body              string            `json:"body,omitempty" toml:"body,omitempty" yaml:"body,omitempty"`
+	MaxConcurrency    int               `json:"maxConcurrency,omitempty" toml:"maxConcurrency,omitempty" yaml:"maxConcurrency,omitempty" export:"true"`
 }
 
 // SetDefaults Default values for a HealthCheck.

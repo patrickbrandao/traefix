@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,6 +74,151 @@ func TestNewServiceHealthChecker_durations(t *testing.T) {
 			assert.Equal(t, test.expTimeout, healthChecker.timeout)
 		})
 	}
+}
+
+func TestNewServiceHealthChecker_maxConcurrency(t *testing.T) {
+	testCases := []struct {
+		desc              string
+		maxConcurrency    int
+		expMaxConcurrency int
+	}{
+		{
+			desc:              "default value",
+			expMaxConcurrency: 1,
+		},
+		{
+			desc:              "out of range value",
+			maxConcurrency:    -1,
+			expMaxConcurrency: 1,
+		},
+		{
+			desc:              "custom value",
+			maxConcurrency:    20,
+			expMaxConcurrency: 20,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			config := &dynamic.ServerHealthCheck{MaxConcurrency: test.maxConcurrency}
+			healthChecker := NewServiceHealthChecker(t.Context(), nil, config, nil, nil, http.DefaultTransport, nil, "")
+			assert.Equal(t, test.expMaxConcurrency, healthChecker.maxConcurrency)
+		})
+	}
+}
+
+func TestServiceHealthChecker_checkTargets_maxConcurrency(t *testing.T) {
+	testCases := []struct {
+		desc           string
+		maxConcurrency int
+		expInFlight    int32
+	}{
+		{
+			desc:        "sequential by default",
+			expInFlight: 1,
+		},
+		{
+			desc:           "bounded concurrency",
+			maxConcurrency: 2,
+			expInFlight:    2,
+		},
+		{
+			desc:           "bounded by the number of targets",
+			maxConcurrency: 10,
+			expInFlight:    4,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			var inFlight, maxInFlight atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				current := inFlight.Add(1)
+				defer inFlight.Add(-1)
+
+				for {
+					seen := maxInFlight.Load()
+					if current <= seen || maxInFlight.CompareAndSwap(seen, current) {
+						break
+					}
+				}
+
+				time.Sleep(100 * time.Millisecond)
+
+				if req.URL.Path == "/down" {
+					rw.WriteHeader(http.StatusServiceUnavailable)
+				}
+			}))
+			t.Cleanup(server.Close)
+
+			var targets []target
+			targetURLs := make(map[string]*url.URL)
+			for i, path := range []string{"/up", "/up", "/down", "/down"} {
+				name := strconv.Itoa(i)
+				targetURL := testhelpers.MustParseURL(server.URL + path)
+				targets = append(targets, target{name: name, targetURL: targetURL})
+				targetURLs[name] = targetURL
+			}
+
+			config := &dynamic.ServerHealthCheck{
+				Interval:       dynamic.DefaultHealthCheckInterval,
+				Timeout:        dynamic.DefaultHealthCheckTimeout,
+				MaxConcurrency: test.maxConcurrency,
+			}
+			lb := &testLoadBalancer{RWMutex: &sync.RWMutex{}}
+			hc := NewServiceHealthChecker(t.Context(), &MetricsMock{&testhelpers.CollectingGauge{}}, config, lb, &runtime.ServiceInfo{}, http.DefaultTransport, targetURLs, "foobar")
+
+			// Drains the initial healthy targets, as checkTargets puts every checked target back.
+			for range targets {
+				<-hc.healthyTargets
+			}
+
+			hc.checkTargets(t.Context(), targets)
+
+			assert.Equal(t, test.expInFlight, maxInFlight.Load())
+			assert.Equal(t, 2, lb.numUpsertedServers)
+			assert.Equal(t, 2, lb.numRemovedServers)
+			assert.Len(t, hc.healthyTargets, 2)
+			assert.Len(t, hc.unhealthyTargets, 2)
+		})
+	}
+}
+
+func TestServiceHealthChecker_checkTargets_canceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if calls.Add(1) == 1 {
+			cancel()
+		}
+
+		<-req.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	var targets []target
+	for i := range 4 {
+		targets = append(targets, target{name: strconv.Itoa(i), targetURL: testhelpers.MustParseURL(server.URL)})
+	}
+
+	config := &dynamic.ServerHealthCheck{
+		Interval:       dynamic.DefaultHealthCheckInterval,
+		Timeout:        dynamic.DefaultHealthCheckTimeout,
+		MaxConcurrency: 1,
+	}
+	lb := &testLoadBalancer{RWMutex: &sync.RWMutex{}}
+	hc := NewServiceHealthChecker(ctx, &MetricsMock{&testhelpers.CollectingGauge{}}, config, lb, &runtime.ServiceInfo{}, http.DefaultTransport, nil, "foobar")
+
+	hc.checkTargets(ctx, targets)
+
+	// The checks are neither started nor reported once the configuration is reloaded.
+	assert.Equal(t, int32(1), calls.Load())
+	assert.Equal(t, 0, lb.numUpsertedServers+lb.numRemovedServers)
 }
 
 func TestServiceHealthChecker_newRequest(t *testing.T) {
