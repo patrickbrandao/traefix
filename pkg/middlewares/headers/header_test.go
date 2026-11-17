@@ -239,6 +239,24 @@ func TestNewHeader_CORSPreflights(t *testing.T) {
 				"Access-Control-Allow-Methods": {"GET,OPTIONS,PUT"},
 			},
 		},
+		{
+			desc: "Non-matching origin Preflight",
+			cfg: dynamic.Headers{
+				AccessControlAllowMethods:     []string{"GET", "OPTIONS", "PUT"},
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlAllowHeaders:     []string{"origin"},
+				AccessControlAllowCredentials: true,
+				AccessControlExposeHeaders:    []string{"X-Custom"},
+				AccessControlMaxAge:           new(int64(600)),
+			},
+			requestHeaders: map[string][]string{
+				"Access-Control-Request-Method": {"GET", "OPTIONS"},
+				"Origin":                        {"https://not-foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Content-Length": {"0"},
+			},
+		},
 	}
 
 	emptyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
@@ -388,6 +406,34 @@ func TestNewHeader_CORSResponses(t *testing.T) {
 			expected: map[string][]string{
 				"Access-Control-Allow-Origin":   {"*"},
 				"Access-Control-Expose-Headers": {"origin,X-Forwarded-For"},
+			},
+		},
+		{
+			desc: "Non-matching origin Request",
+			next: emptyHandler,
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlAllowCredentials: true,
+				AccessControlExposeHeaders:    []string{"X-Custom"},
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://not-foo.bar.org"},
+			},
+			expected: map[string][]string{},
+		},
+		{
+			desc: "Non-matching origin Request with Vary Headers",
+			next: emptyHandler,
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlAllowCredentials: true,
+				AddVaryHeader:                 true,
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://not-foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Vary": {"Origin"},
 			},
 		},
 		{

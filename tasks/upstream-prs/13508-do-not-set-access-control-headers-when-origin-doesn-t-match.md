@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +67/-15 em 3 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/middleware |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -38,3 +38,22 @@ Muda comportamento para origens não listadas (os headers deixam de ser enviados
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes** (ajustes pequenos).
+
+Análise:
+- Fix correto e alinhado ao Fetch Standard e à recomendação CORS do W3C. `Access-Control-Allow-Credentials` e `Access-Control-Expose-Headers` só são enviados quando o `Origin` casa com a lista permitida. No preflight, um `Origin` que não casa recebe só `200` com `Content-Length: 0`, sem nenhum `Access-Control-*`.
+- **Endurecimento de segurança**: antes, `Access-Control-Allow-Credentials: true` e a lista de headers expostos eram enviados para qualquer origem, inclusive em requisições sem `Origin`, o que revelava a política para terceiros. O navegador já bloqueava o acesso (falta `Allow-Origin`), então não havia bypass, só ruído e vazamento de configuração.
+- O `Vary: Origin` continua sendo adicionado mesmo quando a origem não casa, o que é necessário para caches. Verifiquei a interação com o #12222 (já importado).
+- Sem review de maintainer ainda. O PR é pré-requisito do #13499 (conformance Gateway API).
+
+Ajustes:
+- Não importada a mudança em `integration/gateway_api_conformance_test.go` (`TestIsolation` do conformance). Ela não tem relação com o middleware, só serve para expor o bug no upstream, e não pôde ser validada aqui (requer Docker/k3s).
+- Novo caso de teste: origem que não casa, com `addVaryHeader`, ainda recebe `Vary: Origin` e nenhum `Access-Control-*`.
+
+Testes:
+- `go test ./pkg/middlewares/headers/` ok.
+- `golangci-lint run ./pkg/middlewares/headers/...`: 0 issues.
+- `go build ./...` ok.
