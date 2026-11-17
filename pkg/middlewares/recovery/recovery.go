@@ -43,11 +43,13 @@ func recoverFunc(rw *responseWriterWrapper, req *http.Request) {
 			return
 		}
 
-		logger.Error().Msgf("Recovered from panic in HTTP handler [%s - %s]: %+v", req.RemoteAddr, req.URL, err)
 		const size = 64 << 10
 		buf := make([]byte, size)
 		buf = buf[:runtime.Stack(buf, false)]
-		logger.Error().Msgf("Stack: %s", buf)
+
+		// The message and the stack are a single event, so that a panic racing the process exit on shutdown
+		// cannot lose the stack between two writes.
+		logger.Error().Msgf("Recovered from panic in HTTP handler [%s - %s]: %+v\nStack:\n%s", req.RemoteAddr, req.URL, err, buf)
 	}
 }
 
