@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +130/-0 em 3 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/L, area/middleware, area/provider/k8s/ingress-nginx |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -38,3 +38,22 @@ PR base v3.7 (portar para master). Discussão ativa com maintainers sobre a abor
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- O bug foi confirmado no código atual. Com uma regra sem host e `spec.defaultBackend`, o provider ingress-nginx gerava os routers `...-rule-N-default-backend` e `-tls` com **regra vazia** (`Rule: ""`), além de um catch-all por Ingress concorrendo com o default backend global.
+- A versão final do PR (pular regras sem host no loop do default backend) segue a análise do maintainer e o comportamento do ingress-nginx, em que só um Ingress sem regras substitui o backend do servidor `_`.
+- O teste do PR esperava o formato antigo de chaves e metadata e não compilaria no código atual.
+
+**Ajustes**
+
+- Mudança aplicada manualmente em `build.go`.
+- No lugar do caso gigante em `TestLoadIngresses`, criei um teste focado (`TestLoadIngresses_hostlessRuleKeepsGlobalDefaultBackend`) com uma fixture que mistura uma regra sem host e outra com host. O teste verifica que nenhum router tem regra vazia e que o fallback do default backend continua existindo para o host. Confirmei que ele falha sem a correção.
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress-nginx/` ok.
+- `golangci-lint run ./pkg/provider/kubernetes/ingress-nginx/...`: 0 issues.

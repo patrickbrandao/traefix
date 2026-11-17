@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28688,6 +28689,37 @@ func TestBuildServersTransportMaxIdleConnsPerHost(t *testing.T) {
 	nst, err = p.buildServersTransport(t.Context(), "default", "whoami", IngressConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, -1, nst.ServersTransport.MaxIdleConnsPerHost)
+}
+
+func TestLoadIngresses_hostlessRuleKeepsGlobalDefaultBackend(t *testing.T) {
+	k8sObjects := readResources(t, []string{"services.yml", "ingressclasses.yml", "ingresses/ingress-with-hostless-rule-and-default-backend.yml"})
+	kubeClient := kubefake.NewClientset(k8sObjects...)
+	client := newClient(kubeClient)
+
+	eventCh, err := client.WatchAll(t.Context(), "", "")
+	require.NoError(t, err)
+	<-eventCh
+
+	p := Provider{
+		k8sClient:         client,
+		NonTLSEntryPoints: []string{"http"},
+		TLSEntryPoints:    []string{"https"},
+	}
+	p.SetDefaults()
+
+	conf := p.loadConfiguration(t.Context())
+	require.NotNil(t, conf.HTTP)
+
+	var defaultBackendRouters []string
+	for name, router := range conf.HTTP.Routers {
+		assert.NotEmpty(t, router.Rule, name)
+		if strings.HasSuffix(strings.TrimSuffix(name, "-tls"), "-default-backend") {
+			defaultBackendRouters = append(defaultBackendRouters, name)
+			assert.Contains(t, router.Rule, `Host("hostname.localhost")`, name)
+		}
+	}
+
+	assert.NotEmpty(t, defaultBackendRouters)
 }
 
 func TestNginxSizeToBytes(t *testing.T) {
