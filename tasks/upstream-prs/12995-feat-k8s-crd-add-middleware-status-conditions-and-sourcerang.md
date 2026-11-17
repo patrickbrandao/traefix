@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +185/-1 em 7 arquivos |
 | Labels | kind/enhancement, status/1-needs-design-review, size/M, area/provider/k8s/crd |
-| Status | pendente |
+| Status | rejeitado |
 
 ## O que faz
 
@@ -40,3 +40,20 @@ Label needs-design-review sem revisão de maintainer; autor relata que a falta d
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: rejeitado.**
+
+Achados:
+- Loop de escrita no API server: `writeMiddlewareStatus` roda a cada rebuild da configuração, para todos os Middlewares, sempre com `LastTransitionTime: metav1.Now()`. Cada patch muda o `resourceVersion`, o informer de Middlewares (cujo `objChanged` só compara `resourceVersion`) dispara um novo evento, que gera novo rebuild e novo patch. Resultado: rebuilds e escritas contínuas no API server (limitados só pelo `throttleDuration`), carga desnecessária no cluster e no Traefik.
+- Sem eleição de líder: todas as réplicas do Traefik escreveriam o status, brigando entre si.
+- Escrita síncrona no API server dentro do caminho de build da configuração, sem timeout; um API server lento atrasa toda a configuração.
+- Exige RBAC novo (`patch/update` em `middlewares/status`); sem ele, cada rebuild loga um erro por Middleware.
+- Status `needs-design-review` sem decisão de maintainer.
+
+A validação de CIDR do `ipAllowList` no provider tem valor, mas hoje um `sourceRange` inválido já falha na criação do middleware (o router que o usa fica em erro); o ganho isolado é pequeno.
+
+Motivo: o desenho de status gera um loop de escrita e reconstrução. Um desenho aceitável precisaria comparar o status antes de escrever, preservar `LastTransitionTime` quando a condição não muda, ignorar mudanças só de status no event handler e escrever apenas no líder.
+
+Testes: nenhum (não importado).
