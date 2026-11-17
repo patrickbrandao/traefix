@@ -319,6 +319,30 @@ func Test_New(t *testing.T) {
 	}
 }
 
+func TestTrimQuote(t *testing.T) {
+	testCases := []struct {
+		in   string
+		want string
+	}{
+		{in: `"value"`, want: "value"},
+		{in: `'value'`, want: "value"},
+		{in: `'X-Single-Quoted'`, want: "X-Single-Quoted"},
+		{in: `""`, want: ""},
+		{in: `''`, want: ""},
+		{in: `value`, want: "value"},
+		{in: `'foo"`, want: `'foo"`},
+		{in: `"foo'`, want: `"foo'`},
+		{in: `'`, want: `'`},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.in, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, test.want, trimQuote(test.in))
+		})
+	}
+}
+
 func Test_Directives(t *testing.T) {
 	testCases := []struct {
 		desc                       string
@@ -467,6 +491,17 @@ proxy_set_header "X-Custom-Header" "my-value";
 `,
 			expectedRequestHeaders: map[string]string{
 				"X-Custom-Header": "my-value",
+			},
+		},
+		{
+			desc: "proxy_set_header with single quoted name and value",
+			configurationSnippet: `
+proxy_set_header 'X-Single-Quoted' "value";
+proxy_set_header X-Quoted-Value 'single';
+`,
+			expectedRequestHeaders: map[string]string{
+				"X-Single-Quoted": "value",
+				"X-Quoted-Value":  "single",
 			},
 		},
 		{
