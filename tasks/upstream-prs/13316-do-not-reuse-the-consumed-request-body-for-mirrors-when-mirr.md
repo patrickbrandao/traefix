@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +77/-3 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/middleware |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,22 @@ PR base v3.7 (portar para master). Review APPROVED. Testes de regressão para bo
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes** (adaptação ao código atual).
+
+Análise:
+- O bug procede. Com `mirrorBody: false`, os clones espelhados compartilhavam o `Body` da requisição original e mantinham `Content-Length`/`TransferEncoding`. Depois que o handler principal consome e o servidor fecha o corpo, o espelho falha com `http: invalid Read on closed Body`, e isso gerava 502 nas métricas e nos traces do espelho. Também havia uma leitura concorrente do mesmo `Body` entre o handler principal e a goroutine do espelho.
+- O fix é mínimo e correto: `http.NoBody`, `ContentLength = 0`, `TransferEncoding = nil` e remoção do header `Content-Length`, só nos clones do espelho. A requisição principal não é alterada.
+- Aprovado por um maintainer (amazon7737). Nenhum problema de segurança. O fix também elimina uma leitura concorrente do corpo.
+
+Ajustes:
+- O patch não aplicava direto. O código local já extraiu `mirrorContext`, e `New`/`AddMirror` têm mais parâmetros. Fix e testes foram reaplicados à mão.
+- No teste chunked, a flag `mirrored` virou `atomic.Bool`: ela é escrita na goroutine do pool e lida no teste.
+- Comentário do fix reescrito para explicar o porquê (o corpo pode ter sido fechado pelo servidor).
+
+Testes:
+- `go test -race -count=1 ./pkg/server/service/loadbalancer/mirror/` ok.
+- `golangci-lint run ./pkg/server/service/loadbalancer/mirror/...`: 0 issues.
+- `go build ./...` ok.
