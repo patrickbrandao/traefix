@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
+	"github.com/traefik/traefik/v3/pkg/middlewares/requestdecorator"
+	httpmuxer "github.com/traefik/traefik/v3/pkg/muxer/http"
 	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/k8s"
 	"github.com/traefik/traefik/v3/pkg/tls"
 	"github.com/traefik/traefik/v3/pkg/types"
@@ -22824,6 +22827,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-29-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -22859,6 +22863,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-29-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23032,6 +23037,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "bar"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-value-35-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23067,6 +23073,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "bar"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-value-35-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23240,6 +23247,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Foo", "bar(.*)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-pattern-37-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23275,6 +23283,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Foo", "bar(.*)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-pattern-37-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23609,6 +23618,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-cookie-29-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23644,6 +23654,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-cookie-29-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -23876,6 +23887,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-and-limit-allowlist-39-whoami-6-80-2-canary",
 							Middlewares: []string{"default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-limit-rps", "default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-retry"},
 							Observability: &dynamic.RouterObservabilityConfig{
@@ -23892,6 +23904,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-and-limit-allowlist-39-whoami-6-80-2-canary",
 							Middlewares: []string{"default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-tls-limit-rps", "default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-tls-retry"},
 							TLS: &dynamic.RouterTLSConfig{
@@ -23911,7 +23924,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `((Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))) && ClientIP("10.0.0.0/24")`,
 							RuleSyntax:  "default",
-							Priority:    112,
+							Priority:    49,
 							Service:     "default-7-ingress-with-canary-and-limit-allowlist-39-whoami-6-80-2-canary",
 							Middlewares: []string{"default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-limit-allowlist-retry"},
 							Observability: &dynamic.RouterObservabilityConfig{
@@ -23928,7 +23941,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `((Host("production.localhost") && PathPrefix("/")) && (HeaderRegexp("Cookie", "(^|;\\s*)foo\\.bar=always(;|$)"))) && ClientIP("10.0.0.0/24")`,
 							RuleSyntax:  "default",
-							Priority:    112,
+							Priority:    49,
 							Service:     "default-7-ingress-with-canary-and-limit-allowlist-39-whoami-6-80-2-canary",
 							Middlewares: []string{"default-7-ingress-with-canary-and-limit-allowlist-39-rule-0-path-0-canary-tls-limit-allowlist-retry"},
 							TLS: &dynamic.RouterTLSConfig{
@@ -24106,6 +24119,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always") || (HeaderRegexp("Cookie", "(^|;\\s*)foo=always(;|$)") && !Header("Foo", "never")))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-and-cookie-and-weight-51-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24122,6 +24136,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "never") || HeaderRegexp("Cookie", "(^|;\\s*)foo=never(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-and-cookie-and-weight-51-whoami-6-80-2",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24157,6 +24172,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always") || (HeaderRegexp("Cookie", "(^|;\\s*)foo=always(;|$)") && !Header("Foo", "never")))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-and-cookie-and-weight-51-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24176,6 +24192,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "never") || HeaderRegexp("Cookie", "(^|;\\s*)foo=never(;|$)"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-and-cookie-and-weight-51-whoami-6-80-2",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24364,6 +24381,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-middlewares-31-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24405,6 +24423,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-middlewares-31-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24726,6 +24745,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"http"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-middlewares-and-tls-39-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -24768,6 +24788,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-middlewares-and-tls-39-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -28081,6 +28102,7 @@ func TestLoadIngresses(t *testing.T) {
 							EntryPoints: []string{"https"},
 							Rule:        `(Host("production.localhost") && PathPrefix("/")) && (Header("Foo", "always"))`,
 							RuleSyntax:  "default",
+							Priority:    48,
 							Service:     "default-7-ingress-with-canary-by-header-29-whoami-6-80-2-canary",
 							Observability: &dynamic.RouterObservabilityConfig{
 								Metadata: &dynamic.ObservabilityMetadata{
@@ -28720,6 +28742,96 @@ func TestLoadIngresses_hostlessRuleKeepsGlobalDefaultBackend(t *testing.T) {
 	}
 
 	assert.NotEmpty(t, defaultBackendRouters)
+}
+
+func TestCanaryRouterPriority(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		desc           string
+		path           string
+		cookie         string
+		expectedSuffix string
+	}{
+		{
+			desc:           "Longest path wins over the canary router of a shorter path",
+			path:           "/data/foo",
+			cookie:         "foo.bar=always",
+			expectedSuffix: "-rule-0-path-0",
+		},
+		{
+			desc:           "Canary router wins over the router of its own path",
+			path:           "/foo",
+			cookie:         "foo.bar=always",
+			expectedSuffix: "-rule-0-path-1-canary",
+		},
+		{
+			desc:           "Longest path wins without the canary cookie",
+			path:           "/data/foo",
+			expectedSuffix: "-rule-0-path-0",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			k8sObjects := readResources(t, []string{
+				"services.yml",
+				"ingressclasses.yml",
+				"ingresses/ingresses-with-canary-and-multiple-paths.yml",
+			})
+
+			kubeClient := kubefake.NewClientset(k8sObjects...)
+			client := newClient(kubeClient)
+
+			eventCh, err := client.WatchAll(t.Context(), "", "")
+			require.NoError(t, err)
+			<-eventCh
+
+			p := Provider{
+				k8sClient:         client,
+				NonTLSEntryPoints: []string{"http"},
+				TLSEntryPoints:    []string{"https"},
+			}
+			p.SetDefaults()
+
+			conf := p.loadConfiguration(t.Context())
+
+			parser, err := httpmuxer.NewSyntaxParser()
+			require.NoError(t, err)
+
+			muxer := httpmuxer.NewMuxer(parser, nil)
+			for name, router := range conf.HTTP.Routers {
+				if router.TLS != nil {
+					continue
+				}
+
+				priority := router.Priority
+				if priority == 0 {
+					priority = httpmuxer.GetRulePriority(router.Rule)
+				}
+
+				handler := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+					rw.Header().Set("X-Router", name)
+				})
+
+				err = muxer.AddRoute(router.Rule, router.RuleSyntax, priority, "", handler)
+				require.NoError(t, err)
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "http://production.localhost"+test.path, http.NoBody)
+			if test.cookie != "" {
+				req.Header.Set("Cookie", test.cookie)
+			}
+
+			recorder := httptest.NewRecorder()
+			requestdecorator.New(nil).ServeHTTP(recorder, req, muxer.ServeHTTP)
+
+			router := recorder.Header().Get("X-Router")
+			assert.True(t, strings.HasSuffix(router, test.expectedSuffix), router)
+		})
+	}
 }
 
 func TestNginxSizeToBytes(t *testing.T) {

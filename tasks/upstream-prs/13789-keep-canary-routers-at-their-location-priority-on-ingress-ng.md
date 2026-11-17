@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +176/-0 em 3 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/provider/k8s/ingress-nginx |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,24 @@ Base v3.7, precisa de adaptação. Pequeno. Corrige #13785. Status/2-needs-revie
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- **Roteamento incorreto (bug real):** os routers `-canary` e `-non-canary` usam a regra da location estendida com o critério do canary (cookie, header). Como a prioridade padrão é o tamanho da regra, eles passavam à frente dos routers de paths mais longos do mesmo host. Com um Ingress em `/data/` e `/` e um canary em `/`, o router `-non-canary` de `/` (que casa com tudo que não tem o cookie) capturava também as requisições para `/data/...`, que iam parar no backend errado, com ou sem o cookie. O ingress-nginx usa a regra do path mais longo.
+- A correção (prioridade da location + 1) segue o padrão já usado no código para o router de `limit-allowlist`.
+- Limitação conhecida, já apontada no PR e na revisão automática: o +1 pode empatar com outro router cuja regra tenha exatamente um caractere a mais (por exemplo, um `Exact` de 8 caracteres contra o canary de `/`). Nesse caso o desempate do muxer não é determinístico. O risco é bem menor que o do comportamento atual.
+
+**Ajustes**
+
+- Se o router base já tiver `Priority` explícita, ela é respeitada, como no `limit-allowlist`; o PR sempre recalculava pelo tamanho da regra.
+- Teste de ponta a ponta com o muxer real (`TestCanaryRouterPriority`), adaptado ao formato atual das chaves de router.
+- Interação com `limit-allowlist` conferida: o router de allowlist derivado do canary cai de 112 (tamanho da regra) para 49 (prioridade do canary + 1). A ordem dentro da location fica: base 47, base-allowlist 48, canary 48, canary-allowlist 49. O empate entre base-allowlist e canary só acontece quando os dois casam (cookie + IP permitido), e nesse caso o canary-allowlist (49) tem prioridade maior e também casa, então o resultado é determinístico.
+- As expectativas de `Priority` dos routers canary/non-canary em `TestLoadIngresses` foram atualizadas por script (tamanho da regra base + 1).
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress-nginx/` ok.
+- `golangci-lint run ./pkg/provider/kubernetes/ingress-nginx/...`: 0 issues.
