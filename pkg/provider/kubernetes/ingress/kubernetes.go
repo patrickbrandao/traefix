@@ -688,25 +688,6 @@ func (p *Provider) serviceIngressStatus(k8sClient Client, service *corev1.Servic
 			})
 		}
 
-		if len(ingressStatus) == 0 {
-			// Without externalIPs, publishing the ClusterIPs lets tools such as Argo CD see the Ingress as ready.
-			clusterIPs := service.Spec.ClusterIPs
-			if len(clusterIPs) == 0 {
-				clusterIPs = []string{service.Spec.ClusterIP}
-			}
-
-			for _, ip := range clusterIPs {
-				if ip == "" || ip == corev1.ClusterIPNone {
-					continue
-				}
-
-				ingressStatus = append(ingressStatus, netv1.IngressLoadBalancerIngress{
-					IP:    ip,
-					Ports: ports,
-				})
-			}
-		}
-
 		return ingressStatus, true, nil
 
 	case corev1.ServiceTypeNodePort:

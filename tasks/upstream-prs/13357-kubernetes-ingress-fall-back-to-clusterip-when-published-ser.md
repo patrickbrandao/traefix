@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +322/-1 em 8 arquivos |
 | Labels | status/2-needs-review, area/provider/k8s/ingress, kind/bug/fix, size/M |
-| Status | importado com ajustes |
+| Status | adiado (revertido após revisão independente) |
 
 ## O que faz
 
@@ -59,3 +59,9 @@ PR base v3.7 (portar para master). Há discussão com usuários e maintainers so
 - `go build ./...` ok.
 - `go test ./pkg/provider/kubernetes/ingress/` ok (casos No-ExternalIPs, IPv6, Dual Stack, Headless, Empty).
 - `golangci-lint run ./pkg/provider/kubernetes/ingress/...`: 0 issues.
+
+## Revisão independente pós-integração (2026-11-17)
+
+O import foi **revertido**. Antes, um `publishedService` do tipo ClusterIP sem `externalIPs` deixava o status do Ingress vazio. O fallback passa a publicar os ClusterIPs (endereços privados, como 10.x) nesse status. Com o external-dns lendo o status do Ingress, isso gera registros DNS públicos apontando para IPs internos. O efeito é vazar o endereçamento interno e mudar o comportamento de quem conta com o status vazio.
+
+Reimportar só como opção explícita, desligada por padrão (por exemplo `ingressEndpoint.publishClusterIPs`). O suporte dual-stack (`clusterIPs`) só faz sentido junto com essa opção.
