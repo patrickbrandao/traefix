@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"fmt"
 	"maps"
 	"net/http"
 	"net/url"
@@ -39,21 +38,26 @@ type basicAuth struct {
 
 // NewBasic creates a basicAuth middleware.
 func NewBasic(ctx context.Context, next http.Handler, authConfig dynamic.BasicAuth, name string) (http.Handler, error) {
-	middlewares.GetLogger(ctx, name, typeNameBasic).Debug().Msg("Creating middleware")
+	logger := middlewares.GetLogger(ctx, name, typeNameBasic)
+	logger.Debug().Msg("Creating middleware")
 
 	users, err := getUsers(authConfig.UsersFile, authConfig.Users, basicUserParser)
 	if err != nil {
 		return nil, err
 	}
 
+	// An empty user list denies every request, as ingress-nginx does with an empty auth secret
+	// and as DigestAuth does: it keeps the route protected instead of dropping it.
+	// There is no user whose existence could leak, so no hash has to be computed for unknown users.
+	var notFoundSecret string
 	if len(users) == 0 {
-		return nil, fmt.Errorf("no users found in %s", authConfig.UsersFile)
+		logger.Warn().Msg("No users configured: all requests are denied")
+	} else {
+		// To prevent timing attacks, we need to compute a hash even if the user is not found.
+		// We assume it to be safe only when the users hashes are all from the same algorithm,
+		// so we can pick the first one as a random hash to compute.
+		notFoundSecret = slices.Collect(maps.Values(users))[0]
 	}
-
-	// To prevent timing attacks, we need to compute a hash even if the user is not found.
-	// We assume it to be safe only when the users hashes are all from the same algorithm,
-	// so we can pick the first one as a random hash to compute.
-	notFoundSecret := slices.Collect(maps.Values(users))[0]
 
 	ba := &basicAuth{
 		next:              next,
@@ -125,7 +129,9 @@ func (b *basicAuth) checkPassword(user, password string) bool {
 
 	match, _, _ := b.singleflightGroup.Do(singleflightKey(user, password), func() (any, error) {
 		if secret == "" {
-			_ = b.checkSecret(password, b.notFoundSecret)
+			if b.notFoundSecret != "" {
+				_ = b.checkSecret(password, b.notFoundSecret)
+			}
 			return false, nil
 		}
 

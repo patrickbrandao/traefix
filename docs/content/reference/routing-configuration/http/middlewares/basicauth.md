@@ -79,6 +79,7 @@ Use `htpasswd` to generate the passwords.
 ### users & usersFile
 
 - If both `users` and `usersFile` are provided, they are merged. The values in `users` have precedence over the contents of `usersFile`.
+- If no user is configured (for example, an empty `usersFile`), the middleware rejects every request with a `401 Unauthorized` response.
 - Because referencing a file path isn’t feasible on Kubernetes, the `users` & `usersFile` field isn’t used in Kubernetes IngressRoute. Instead, use the `secret` field.
 
 #### Kubernetes Secrets

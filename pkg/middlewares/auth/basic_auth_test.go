@@ -21,12 +21,30 @@ import (
 )
 
 func TestNewBasicEmpty(t *testing.T) {
-	auth := dynamic.BasicAuth{
-		Users: []string{},
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	authMiddleware, err := NewBasic(t.Context(), next, dynamic.BasicAuth{Users: []string{}}, "authName")
+	require.NoError(t, err)
+
+	ba, ok := authMiddleware.(*basicAuth)
+	require.True(t, ok)
+	ba.checkSecret = func(password, secret string) bool {
+		t.Errorf("unexpected hash computation for %q", secret)
+		return true
 	}
 
-	_, err := NewBasic(t.Context(), nil, auth, "authName")
-	require.Error(t, err)
+	for _, user := range []string{"anyone", ""} {
+		req := httptest.NewRequest(http.MethodGet, "http://example.com", nil)
+		req.SetBasicAuth(user, "")
+
+		recorder := httptest.NewRecorder()
+		authMiddleware.ServeHTTP(recorder, req)
+
+		assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+		assert.NotEmpty(t, recorder.Header().Get("WWW-Authenticate"))
+	}
 }
 
 func TestNewBasicInvalidUser(t *testing.T) {

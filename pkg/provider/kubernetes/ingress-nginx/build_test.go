@@ -38,6 +38,16 @@ func Test_basicAuthUsers(t *testing.T) {
 				{key: "user3", value: "user3:hash3"},
 			},
 		},
+		{
+			desc:           "empty auth-map gives no users",
+			authSecretType: "auth-map",
+			data:           map[string][]byte{},
+		},
+		{
+			desc:           "auth-file without users gives no users",
+			authSecretType: "auth-file",
+			data:           map[string][]byte{"auth": []byte("# comment\n\n")},
+		},
 	}
 
 	for _, test := range testCases {
@@ -76,4 +86,28 @@ func TestProvider_resolveBasicAuth_authMap(t *testing.T) {
 	assert.Equal(t, &dynamic.BasicAuth{Users: dynamic.Users{"urn:k8s:secret:basic-auth:user1", "urn:k8s:secret:basic-auth:user2"}}, basic)
 	assert.Nil(t, digest)
 	assert.Equal(t, map[string]string{"/basicAuth/users/0": "user1:hash1", "/basicAuth/users/1": "user2:hash2"}, urnRefs)
+}
+
+func TestProvider_resolveBasicAuth_emptyAuthMap(t *testing.T) {
+	t.Parallel()
+
+	kubeClient := kubefake.NewClientset(&corev1.Secret{Name: "basic-auth", Namespace: "default"})
+	client := newClient(kubeClient)
+
+	_, err := client.WatchAll(t.Context(), "", "")
+	require.NoError(t, err)
+
+	p := Provider{k8sClient: client}
+
+	basic, digest, urnRefs, err := p.resolveBasicAuth("default", IngressConfig{
+		AuthType:       new("basic"),
+		AuthSecret:     new("basic-auth"),
+		AuthSecretType: new("auth-map"),
+		AuthRealm:      new("Authentication Required"),
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, &dynamic.BasicAuth{Users: dynamic.Users{}, Realm: "Authentication Required"}, basic)
+	assert.Nil(t, digest)
+	assert.Nil(t, urnRefs)
 }
