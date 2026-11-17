@@ -2,8 +2,13 @@ package ratelimiter
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -14,6 +19,64 @@ import (
 )
 
 const redisPrefix = "rate:"
+
+// sharedRedisClients holds one client per distinct Redis configuration.
+// A middleware is built once per router and again on every configuration reload, and since go-redis v9.12
+// each client starts a goroutine at construction that keeps it reachable, so a client per instance leaks.
+// Sharing changes no semantics, as the buckets live in Redis.
+var sharedRedisClients = struct {
+	mu      sync.Mutex
+	clients map[string]redis.UniversalClient
+}{clients: make(map[string]redis.UniversalClient)}
+
+// sharedRedisClient returns the client cached for the Redis configuration, creating it on first use.
+func sharedRedisClient(config *dynamic.Redis, options *redis.UniversalOptions) (redis.UniversalClient, error) {
+	key, err := redisClientKey(config)
+	if err != nil {
+		return nil, err
+	}
+
+	sharedRedisClients.mu.Lock()
+	defer sharedRedisClients.mu.Unlock()
+
+	if client, ok := sharedRedisClients.clients[key]; ok {
+		return client, nil
+	}
+
+	client := redis.NewUniversalClient(options)
+	sharedRedisClients.clients[key] = client
+
+	return client, nil
+}
+
+// redisClientKey derives the cache key from the configuration values, and not from redis.UniversalOptions,
+// whose TLS config and function pointers differ on every construction.
+// The key is a hash so that the cache does not keep another copy of the credentials.
+func redisClientKey(config *dynamic.Redis) (string, error) {
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return "", fmt.Errorf("marshaling redis config for client cache key: %w", err)
+	}
+
+	h := sha256.New()
+	h.Write(raw)
+
+	// A certificate rotated at an unchanged path must give a new client,
+	// otherwise the cache would keep using the previous one.
+	if config.TLS != nil {
+		for _, v := range []string{config.TLS.CA, config.TLS.Cert, config.TLS.Key} {
+			h.Write([]byte{0})
+			if v == "" {
+				continue
+			}
+			if content, err := os.ReadFile(v); err == nil {
+				h.Write(content)
+			}
+		}
+	}
+
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
 
 type redisLimiter struct {
 	rate     rate.Limit // reqs/s
@@ -73,6 +136,11 @@ func newRedisLimiter(ctx context.Context, rate rate.Limit, burst int64, maxDelay
 		return nil, fmt.Errorf("loading bucket script: %w", err)
 	}
 
+	client, err := sharedRedisClient(config.Redis, options)
+	if err != nil {
+		return nil, fmt.Errorf("obtaining redis client: %w", err)
+	}
+
 	return &redisLimiter{
 		rate:     rate,
 		burst:    burst,
@@ -80,7 +148,7 @@ func newRedisLimiter(ctx context.Context, rate rate.Limit, burst int64, maxDelay
 		maxDelay: maxDelay,
 		logger:   logger,
 		ttl:      ttl,
-		client:   redis.NewUniversalClient(options),
+		client:   client,
 		script:   script,
 	}, nil
 }
