@@ -120,7 +120,7 @@ func TestAppendCertMetric(t *testing.T) {
 func TestSetupLoggerReturnsErrorWhenLogFileCannotBeOpened(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "missing", "traefik.log")
 
-	_, err := setupLogger(t.Context(), &static.Configuration{
+	_, _, err := setupLogger(t.Context(), &static.Configuration{
 		Log: &otypes.TraefikLog{
 			FilePath: logFile,
 		},

@@ -23,19 +23,22 @@ func init() {
 	zerolog.SetGlobalLevel(zerolog.ErrorLevel)
 }
 
-func setupLogger(ctx context.Context, staticConfiguration *static.Configuration) (func() error, error) {
+// setupLogger configures the global logger.
+// It returns the function rotating the Traefik log file (nil without a log file),
+// and the io.Closer flushing the OTLP logs (nil without OTLP logging).
+func setupLogger(ctx context.Context, staticConfiguration *static.Configuration) (func() error, io.Closer, error) {
 	// Validate that the experimental flag is set up at this point,
 	// rather than validating the static configuration before the setupLogger call.
 	// This ensures that validation messages are not logged using an un-configured logger.
 	if staticConfiguration.Log != nil && staticConfiguration.Log.OTLP != nil &&
 		(staticConfiguration.Experimental == nil || !staticConfiguration.Experimental.OTLPLogs) {
-		return nil, errors.New("the experimental OTLPLogs feature must be enabled to use OTLP logging")
+		return nil, nil, errors.New("the experimental OTLPLogs feature must be enabled to use OTLP logging")
 	}
 
 	// configure log format
 	w, rotateFn, err := getLogWriter(staticConfiguration)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// configure log level
@@ -50,11 +53,12 @@ func setupLogger(ctx context.Context, staticConfiguration *static.Configuration)
 
 	log.Logger = logger.Logger().Level(logLevel)
 
+	var logCloser io.Closer
 	if staticConfiguration.Log != nil && staticConfiguration.Log.OTLP != nil {
 		var err error
-		log.Logger, err = logs.SetupOTelLogger(ctx, log.Logger, staticConfiguration.Log.OTLP)
+		log.Logger, logCloser, err = logs.SetupOTelLogger(ctx, log.Logger, staticConfiguration.Log.OTLP)
 		if err != nil {
-			return nil, fmt.Errorf("setting up OpenTelemetry logger: %w", err)
+			return nil, nil, fmt.Errorf("setting up OpenTelemetry logger: %w", err)
 		}
 	}
 
@@ -67,7 +71,7 @@ func setupLogger(ctx context.Context, staticConfiguration *static.Configuration)
 	stdlog.SetFlags(stdlog.Lshortfile | stdlog.LstdFlags)
 	stdlog.SetOutput(logs.NoLevel(log.Logger, zerolog.DebugLevel))
 
-	return rotateFn, nil
+	return rotateFn, logCloser, nil
 }
 
 func getLogWriter(staticConfiguration *static.Configuration) (io.Writer, func() error, error) {
