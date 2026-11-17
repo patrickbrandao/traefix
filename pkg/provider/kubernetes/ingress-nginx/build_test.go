@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	corev1 "k8s.io/api/core/v1"
+	netv1 "k8s.io/api/networking/v1"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 )
 
@@ -76,4 +77,35 @@ func TestProvider_resolveBasicAuth_authMap(t *testing.T) {
 	assert.Equal(t, &dynamic.BasicAuth{Users: dynamic.Users{"urn:k8s:secret:basic-auth:user1", "urn:k8s:secret:basic-auth:user2"}}, basic)
 	assert.Nil(t, digest)
 	assert.Equal(t, map[string]string{"/basicAuth/users/0": "user1:hash1", "/basicAuth/users/1": "user2:hash2"}, urnRefs)
+}
+
+func TestBackendEndpointsCacheKey(t *testing.T) {
+	backend := netv1.IngressBackend{
+		Service: &netv1.IngressServiceBackend{
+			Name: "whoami",
+			Port: netv1.ServiceBackendPort{Name: "http"},
+		},
+	}
+
+	base := backendEndpointsCacheKey("testing", backend, IngressConfig{})
+
+	// The same service and config must reuse the same cache entry.
+	assert.Equal(t, base, backendEndpointsCacheKey("testing", backend, IngressConfig{}))
+
+	// getBackendEndpoints branches on ServiceUpstream and DefaultBackend, so those must not
+	// collide with the base entry for the same service.
+	assert.NotEqual(t, base, backendEndpointsCacheKey("testing", backend, IngressConfig{ServiceUpstream: new(true)}))
+	assert.NotEqual(t, base, backendEndpointsCacheKey("testing", backend, IngressConfig{DefaultBackend: new("fallback")}))
+
+	// A different port of the same service is a distinct backend.
+	otherPort := netv1.IngressBackend{
+		Service: &netv1.IngressServiceBackend{
+			Name: "whoami",
+			Port: netv1.ServiceBackendPort{Name: "https"},
+		},
+	}
+	assert.NotEqual(t, base, backendEndpointsCacheKey("testing", otherPort, IngressConfig{}))
+
+	// A backend without a Service cannot be keyed and must bypass the cache.
+	assert.Empty(t, backendEndpointsCacheKey("testing", netv1.IngressBackend{}, IngressConfig{}))
 }

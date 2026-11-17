@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +194/-10 em 4 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, area/provider/k8s/ingress, size/M, area/provider/k8s/ingress-nginx |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,22 @@ Sobrepõe em parte o #13255 (não analisado aqui). Toca dois providers. Autor su
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- ingress-nginx: o cache por rebuild de `getBackendEndpoints` é correto. A chave inclui tudo o que a função lê do `IngressConfig` (`service-upstream` e `default-backend`); `DisableSvcExternalName` é do provider e não muda durante o rebuild. Os `endpoint` são valores, então o `slices.Clone` basta. A chave não colide: só o último campo pode conter `/`.
+- Kubernetes Ingress: a parte do PR foi escrita sobre uma base antiga, em que `loadService` rodava para todo path. No código atual o loop já evita recarregar (`if _, exists := conf.HTTP.Services[serviceName]`), então o cache adicional só duplicaria a lógica, com um `DeepCopy` de `dynamic.Service` por acerto.
+- Sem risco de segurança: o cache vive só durante um rebuild.
+
+**Ajustes**
+
+- Importada só a parte do ingress-nginx; a parte do provider Kubernetes Ingress foi descartada (já está coberta).
+- Teste `TestBackendEndpointsCacheKey` mesclado ao `build_test.go` existente, usando `new(...)`.
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress-nginx/` ok.
+- `golangci-lint run ./pkg/provider/kubernetes/ingress-nginx/...`: 0 issues.
