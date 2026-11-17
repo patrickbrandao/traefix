@@ -160,6 +160,11 @@ func (s *Snippet) GetTracingInformation() (string, string) {
 }
 
 func (s *Snippet) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	// A rewrite directive changes the request in place, while NGINX keeps sending the client URI to the auth service.
+	if ingressnginx.OriginalURI(req) == "" {
+		req = ingressnginx.WithOriginalURI(req, req.URL.RequestURI())
+	}
+
 	ctx := &actionContext{
 		vars: make(map[string]string),
 		req:  req,
@@ -611,7 +616,7 @@ func writeHeader(req, forwardReq *http.Request) {
 	}
 
 	forwardReq.Header.Del(xForwardedURI)
-	if req.URL.RequestURI() != "" {
-		forwardReq.Header.Set(xForwardedURI, req.URL.RequestURI())
+	if uri := ingressnginx.OriginalRequestURI(req); uri != "" {
+		forwardReq.Header.Set(xForwardedURI, uri)
 	}
 }

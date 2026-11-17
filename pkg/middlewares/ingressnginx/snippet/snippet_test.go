@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
+	"github.com/traefik/traefik/v3/pkg/middlewares/ingressnginx"
 	"github.com/traefik/traefik/v3/pkg/server/service/kerberos"
 	"github.com/traefik/traefik/v3/pkg/testhelpers"
 )
@@ -278,6 +279,7 @@ func Test_Directives(t *testing.T) {
 		unexpectedResponseHeaders  []string
 		expectedRequestHeaders     map[string]string
 		expectedAuthRequestHeaders map[string]string
+		originalURI                string
 		expectedStatusCode         int
 		expectedBody               string
 		expectedPath               string
@@ -1587,6 +1589,28 @@ proxy_method $request_method;
 			expectNextCalled:   new(true),
 		},
 		{
+			desc:                 "forward auth receives the client URI after a configuration-snippet rewrite",
+			configurationSnippet: `rewrite ^/admin/(.*)$ /public/$1 break;`,
+			path:                 "/admin/secret?x=1",
+			expectedAuthRequestHeaders: map[string]string{
+				"X-Forwarded-Uri": "/admin/secret?x=1",
+			},
+			expectedPath:     "/public/secret",
+			expectedQuery:    "x=1",
+			expectNextCalled: new(true),
+		},
+		{
+			desc:        "forward auth preserves original forwarded URI",
+			originalURI: "/application/query?tenant=acme",
+			expectedAuthRequestHeaders: map[string]string{
+				"X-Forwarded-Uri": "/application/query?tenant=acme",
+			},
+			expectedRequestHeaders: map[string]string{
+				"X-Forwarded-Uri": "",
+			},
+			expectNextCalled: new(true),
+		},
+		{
 			desc: "auth-snippet set directive creates variable for proxy_set_header",
 			authSnippet: `
 set $auth_token "bearer-token-123";
@@ -1875,6 +1899,9 @@ if ($http_x_block_auth = "yes") {
 			}
 			for k, v := range test.requestHeaders {
 				req.Header.Set(k, v)
+			}
+			if test.originalURI != "" {
+				req = ingressnginx.WithOriginalURI(req, test.originalURI)
 			}
 			rw := httptest.NewRecorder()
 
