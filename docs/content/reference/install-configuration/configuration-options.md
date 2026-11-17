@@ -266,6 +266,7 @@ THIS FILE MUST NOT BE EDITED BY HAND
 | <a id="opt-providers-consul-tls-key" href="#opt-providers-consul-tls-key" title="#opt-providers-consul-tls-key">providers.consul.tls.key</a> | TLS key | |
 | <a id="opt-providers-consul-token" href="#opt-providers-consul-token" title="#opt-providers-consul-token">providers.consul.token</a> | Per-request ACL token. | |
 | <a id="opt-providers-consulcatalog" href="#opt-providers-consulcatalog" title="#opt-providers-consulcatalog">providers.consulcatalog</a> | Enables Consul Catalog provider. | false |
+| <a id="opt-providers-consulcatalog-allowemptyservices" href="#opt-providers-consulcatalog-allowemptyservices" title="#opt-providers-consulcatalog-allowemptyservices">providers.consulcatalog.allowemptyservices</a> | Allow the creation of services without healthy instances. | false |
 | <a id="opt-providers-consulcatalog-cache" href="#opt-providers-consulcatalog-cache" title="#opt-providers-consulcatalog-cache">providers.consulcatalog.cache</a> | Use local agent caching for catalog reads. | false |
 | <a id="opt-providers-consulcatalog-connectaware" href="#opt-providers-consulcatalog-connectaware" title="#opt-providers-consulcatalog-connectaware">providers.consulcatalog.connectaware</a> | Enable Consul Connect support. | false |
 | <a id="opt-providers-consulcatalog-connectbydefault" href="#opt-providers-consulcatalog-connectbydefault" title="#opt-providers-consulcatalog-connectbydefault">providers.consulcatalog.connectbydefault</a> | Consider every service as Connect capable by default. | false |
