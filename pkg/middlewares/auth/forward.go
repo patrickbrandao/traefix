@@ -461,7 +461,9 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	req.RequestURI = req.URL.RequestURI()
 
 	authCookies := forwardResponse.Header.Values("Set-Cookie")
-	if len(authCookies) == 0 && fa.addAuthCookiesToResponseRegex == nil {
+	// Without a cookie to copy, the backend response is left untouched: wrapping the writer is not free,
+	// and the regex removes the matching backend cookies even when the auth server sets none.
+	if fa.addAuthCookiesToResponseRegex == nil && (len(authCookies) == 0 || len(fa.addAuthCookiesToResponse) == 0) {
 		fa.next.ServeHTTP(rw, req)
 		return
 	}

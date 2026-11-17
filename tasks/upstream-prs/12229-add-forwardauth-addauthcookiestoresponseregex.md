@@ -56,3 +56,5 @@ Testes:
 - `go build ./...`: ok.
 - `go test ./pkg/middlewares/auth/ ./pkg/provider/kubernetes/crd/... ./pkg/config/...`: ok.
 - `golangci-lint run ./pkg/middlewares/auth/... ./pkg/provider/kubernetes/crd/... ./pkg/config/dynamic/...`: 0 issues.
+
+Nota (#14277): o #14277 corrige o mesmo problema da reserialização dos `Set-Cookie`. A versão deste PR (linhas brutas, nome extraído cortando em `;` e depois em `=`) foi mantida. Do #14277 vieram os testes e a regra de não instalar o modifier quando não há cookie a substituir.
