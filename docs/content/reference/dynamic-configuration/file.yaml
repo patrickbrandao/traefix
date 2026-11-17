@@ -220,6 +220,9 @@ http:
         errorRequestHeaders:
           - foobar
           - foobar
+        errorResponseHeaders:
+          - foobar
+          - foobar
     Middleware10:
       forwardAuth:
         address: foobar

@@ -203,6 +203,7 @@
         service = "foobar"
         query = "foobar"
         errorRequestHeaders = ["foobar", "foobar"]
+        errorResponseHeaders = ["foobar", "foobar"]
         [http.middlewares.Middleware09.errors.statusRewrites]
           name0 = 42
           name1 = 42
