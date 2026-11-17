@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +1152/-23 em 13 arquivos |
 | Labels | kind/enhancement, status/1-needs-design-review, size/L, area/provider/k8s/crd, area/provider/k8s |
-| Status | pendente |
+| Status | rejeitado |
 
 ## O que faz
 
@@ -39,3 +39,18 @@ Novo pacote loadbalancer/ewma e mudança no CRD (13 arquivos, +1152/-23). Label 
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: rejeitado.**
+
+Achados no PR original:
+
+- O estado EWMA fica num `map` global de pacote (`ewmaRegistry`), indexado pela URL do servidor. Serviços diferentes que apontam para a mesma URL dividem a mesma medida de latência. O estado também sobrevive a reloads sem ligação com o ciclo de vida do balanceador. A limpeza (`cleanupRegistry`) só roda dentro de `AddServer`.
+- `SetStatus` nunca chama os `updaters` registrados em `RegisterStatusUpdater`. Com isso, um serviço pai (WRR/failover com healthcheck) nunca fica sabendo quando todos os filhos caem. É uma regressão em relação aos outros balanceadores.
+- `AddServer` reconstrói a lista inteira de handlers a cada servidor adicionado (O(n²)). Usa `http.NotFoundHandler()` como fallback silencioso e ignora `weight`.
+- A latência medida inclui o streaming do corpo inteiro: WebSocket, SSE e downloads grandes "envenenam" a média. Também não há contagem de requisições em andamento, então não é Peak-EWMA de verdade.
+- A estratégia `leasttime`, já presente no código, cobre o mesmo caso de uso (TTFB + inflight).
+- No upstream o PR está em `status/1-needs-design-review`, sem review técnico, e mexe nos CRDs.
+
+Nenhum código importado e nenhum teste rodado.
