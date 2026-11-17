@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
@@ -611,6 +613,9 @@ func TestForwardAuthClientClosedRequest(t *testing.T) {
 	requestStarted := make(chan struct{})
 	responseComplete := make(chan struct{})
 
+	var logs bytes.Buffer
+	logger := zerolog.New(&logs).Level(zerolog.DebugLevel)
+
 	authTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(requestStarted)
 		// Wait for the client to give up on the request, so the auth server never answers before the cancellation is observed.
@@ -628,8 +633,12 @@ func TestForwardAuthClientClosedRequest(t *testing.T) {
 	}
 	authMiddleware, err := NewForward(t.Context(), next, auth, "authTest")
 	require.NoError(t, err)
+	authMiddleware = observability.WithObservabilityHandler(authMiddleware, observability.Observability{TracingEnabled: true})
+	mockTracer := &mockTracer{}
 
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, initialSpan := tracing.NewTracer(mockTracer, nil, nil, nil).Start(logger.WithContext(t.Context()), "initial")
+	defer initialSpan.End()
+	ctx, cancel := context.WithCancel(ctx)
 	req := httptest.NewRequestWithContext(ctx, "GET", "http://foo", http.NoBody)
 
 	recorder := httptest.NewRecorder()
@@ -645,6 +654,15 @@ func TestForwardAuthClientClosedRequest(t *testing.T) {
 	<-responseComplete
 
 	assert.Equal(t, httputil.StatusClientClosedRequest, recorder.Result().StatusCode)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(logs.Bytes(), &logEntry))
+	assert.Equal(t, zerolog.DebugLevel.String(), logEntry[zerolog.LevelFieldName])
+	assert.Equal(t, "Error calling "+authTs.URL, logEntry[zerolog.MessageFieldName])
+	assert.Equal(t, "Get \""+authTs.URL+"\": context canceled", logEntry[zerolog.ErrorFieldName])
+	assert.InDelta(t, httputil.StatusClientClosedRequest, logEntry["statusCode"], 0)
+	require.Len(t, mockTracer.spans, 2)
+	assert.Equal(t, codes.Unset, mockTracer.spans[0].status)
 }
 
 func TestForwardAuthForwardError(t *testing.T) {
@@ -673,6 +691,40 @@ func TestForwardAuthForwardError(t *testing.T) {
 	<-responseComplete
 
 	assert.Equal(t, http.StatusInternalServerError, recorder.Result().StatusCode)
+}
+
+func TestForwardAuthForwardErrorTracing(t *testing.T) {
+	authTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	authURL := authTs.URL
+	authTs.Close()
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fail()
+	})
+
+	var logs bytes.Buffer
+	logger := zerolog.New(&logs).Level(zerolog.DebugLevel)
+
+	authMiddleware, err := NewForward(t.Context(), next, dynamic.ForwardAuth{Address: authURL}, "authTest")
+	require.NoError(t, err)
+	authMiddleware = observability.WithObservabilityHandler(authMiddleware, observability.Observability{TracingEnabled: true})
+	mockTracer := &mockTracer{}
+
+	ctx, initialSpan := tracing.NewTracer(mockTracer, nil, nil, nil).Start(logger.WithContext(t.Context()), "initial")
+	defer initialSpan.End()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "http://foo", http.NoBody)
+
+	recorder := httptest.NewRecorder()
+	authMiddleware.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusInternalServerError, recorder.Result().StatusCode)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(logs.Bytes(), &logEntry))
+	assert.Equal(t, zerolog.ErrorLevel.String(), logEntry[zerolog.LevelFieldName])
+	assert.InDelta(t, http.StatusInternalServerError, logEntry["statusCode"], 0)
+	require.Len(t, mockTracer.spans, 2)
+	assert.Equal(t, codes.Error, mockTracer.spans[0].status)
 }
 
 func TestForwardAuth_writeHeader(t *testing.T) {
@@ -1601,6 +1653,7 @@ type mockSpan struct {
 
 	name       string
 	attributes []attribute.KeyValue
+	status     codes.Code
 }
 
 var _ trace.Span = &mockSpan{}
@@ -1608,8 +1661,8 @@ var _ trace.Span = &mockSpan{}
 func (*mockSpan) SpanContext() trace.SpanContext {
 	return trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{1}, SpanID: trace.SpanID{1}})
 }
-func (*mockSpan) IsRecording() bool                  { return false }
-func (s *mockSpan) SetStatus(_ codes.Code, _ string) {}
+func (*mockSpan) IsRecording() bool                     { return false }
+func (s *mockSpan) SetStatus(code codes.Code, _ string) { s.status = code }
 func (s *mockSpan) SetAttributes(kv ...attribute.KeyValue) {
 	s.attributes = append(s.attributes, kv...)
 }

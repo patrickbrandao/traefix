@@ -251,12 +251,15 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	forwardResponse, forwardErr := fa.client.Do(forwardReq)
 	if forwardErr != nil {
-		logger.Error().Err(forwardErr).Msgf("Error calling %s", fa.address)
-		observability.SetStatusErrorf(req.Context(), "Error calling %s. Cause: %s", fa.address, forwardErr)
-
 		statusCode := http.StatusInternalServerError
+		// A canceled request means the client went away: it is not an error of the auth server,
+		// and reporting it as such hides the real failures in logs and traces.
 		if errors.Is(forwardErr, context.Canceled) {
 			statusCode = httputil.StatusClientClosedRequest
+			logger.Debug().Err(forwardErr).Int("statusCode", statusCode).Msgf("Error calling %s", fa.address)
+		} else {
+			logger.Error().Err(forwardErr).Int("statusCode", statusCode).Msgf("Error calling %s", fa.address)
+			observability.SetStatusErrorf(req.Context(), "Error calling %s. Cause: %s", fa.address, forwardErr)
 		}
 
 		rw.WriteHeader(statusCode)
