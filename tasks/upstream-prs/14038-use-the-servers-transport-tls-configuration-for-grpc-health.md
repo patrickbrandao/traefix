@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +113/-12 em 4 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/healthcheck |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -38,3 +38,26 @@ Pequeno (4 arquivos, +113/-12). Afeta apenas quem usa healthCheck gRPC com TLS. 
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados no PR original:
+
+- O bug é real. Em `mode: grpc`, servidores `https://` sem `scheme` recebiam HTTP/2 em texto puro numa porta TLS. Com `scheme: https`, nenhuma credencial era configurada (`grpc: no transport security set`). Nos dois casos o servidor ficava sempre DOWN.
+- A correção usa o scheme da URL do servidor quando `scheme` não está definido, como já acontece no modo HTTP. Para `https`, usa a mesma `*tls.Config` do ServersTransport usada pelo proxy (`GetTLSConfig`).
+- Segurança: a verificação não é enfraquecida. `credentials.NewTLS` clona a config (a instância compartilhada com o proxy não é alterada). Com config `nil`, ele verifica contra as raízes do sistema. `insecureSkipVerify` só vale se o operador já o configurou no ServersTransport. O `ServerName`, quando não definido, vem da autoridade discada.
+- Mudança de comportamento: um `scheme` desconhecido, que antes falhava por falta de credenciais, agora usa texto puro. Isso é consistente com `http`/`h2c`.
+
+Ajustes:
+
+- `TestServiceHealthChecker_checkHealthGRPC_TLS`: o caso "untrusted certificate" usava as raízes do sistema e falhava no macOS, cujo verificador de plataforma devolve outra mensagem (`certificate is not standards compliant`). Agora usa um pool vazio, então o resultado não depende da plataforma.
+- Chamadas de `NewServiceHealthChecker` nos testes adicionados pelo #12485 e pelo #13223 foram adaptadas à nova assinatura (parâmetro `tlsConfig`).
+
+Testes:
+
+- `go test -race -count=2 ./pkg/healthcheck/`: ok.
+- `go test ./pkg/server/service/`: ok.
+- `golangci-lint run ./pkg/healthcheck/... ./pkg/server/service/`: 0 issues.
+- `go build ./pkg/...`: ok.
