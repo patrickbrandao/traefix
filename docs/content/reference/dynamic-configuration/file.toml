@@ -162,6 +162,7 @@
         usersFile = "foobar"
         realm = "foobar"
         removeHeader = true
+        allowCORSPreflight = true
         headerField = "foobar"
     [http.middlewares.Middleware03]
       [http.middlewares.Middleware03.buffering]
@@ -211,17 +212,21 @@
     [http.middlewares.Middleware10]
       [http.middlewares.Middleware10.forwardAuth]
         address = "foobar"
+        service = "foobar"
+        path = "foobar"
         trustForwardHeader = true
         authResponseHeaders = ["foobar", "foobar"]
         authResponseHeadersRegex = "foobar"
         authRequestHeaders = ["foobar", "foobar"]
         addAuthCookiesToResponse = ["foobar", "foobar"]
+        addAuthCookiesToResponseRegex = "foobar"
         headerField = "foobar"
         forwardBody = true
         maxBodySize = 42
         maxResponseBodySize = 42
         preserveLocationHeader = true
         preserveRequestMethod = true
+        timeout = "42s"
         [http.middlewares.Middleware10.forwardAuth.tls]
           ca = "foobar"
           cert = "foobar"

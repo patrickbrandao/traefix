@@ -169,6 +169,9 @@ type BasicAuth struct {
 	// RemoveHeader sets the removeHeader option to true to remove the authorization header before forwarding the request to your service.
 	// Default: false.
 	RemoveHeader bool `json:"removeHeader,omitempty"`
+	// AllowCORSPreflight allows the CORS preflight requests (OPTIONS requests with non-empty Origin and Access-Control-Request-Method headers) to pass through without authentication.
+	// Default: false.
+	AllowCORSPreflight bool `json:"allowCORSPreflight,omitempty"`
 	// HeaderField defines a header field to store the authenticated user.
 	// More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/basicauth/#headerfield
 	HeaderField string `json:"headerField,omitempty"`
@@ -199,7 +202,15 @@ type DigestAuth struct {
 // More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/forwardauth/
 type ForwardAuth struct {
 	// Address defines the authentication server address.
+	// It is mutually exclusive with the Service option.
 	Address string `json:"address,omitempty"`
+	// Service defines the reference to a Kubernetes Service that will serve as the authentication server.
+	// It is mutually exclusive with the Address and TLS options: the connection to the service is handled by its ServersTransport.
+	// More info: https://doc.traefik.io/traefik/v3.7/reference/routing-configuration/http/middlewares/forwardauth/#service
+	Service *Service `json:"service,omitempty"`
+	// Path defines the path of the authentication request when using the Service option.
+	// It can also contain a query string. It defaults to the root path.
+	Path string `json:"path,omitempty"`
 	// TrustForwardHeader defines whether to trust (ie: forward) all X-Forwarded-* headers.
 	//
 	// Deprecated: Use forwardedHeaders.trustedIPs at the EntryPoint level instead, and set trustForwardHeader to true on this middleware.
@@ -218,6 +229,8 @@ type ForwardAuth struct {
 	MaxResponseBodySize *int64 `json:"maxResponseBodySize,omitempty"`
 	// AddAuthCookiesToResponse defines the list of cookies to copy from the authentication server response to the response.
 	AddAuthCookiesToResponse []string `json:"addAuthCookiesToResponse,omitempty"`
+	// AddAuthCookiesToResponseRegex defines a regex pattern used to match cookies to copy from the authentication server response to the response.
+	AddAuthCookiesToResponseRegex string `json:"addAuthCookiesToResponseRegex,omitempty"`
 	// HeaderField defines a header field to store the authenticated user.
 	// More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/forwardauth/#headerfield
 	HeaderField string `json:"headerField,omitempty"`
@@ -231,6 +244,13 @@ type ForwardAuth struct {
 	PreserveRequestMethod bool `json:"preserveRequestMethod,omitempty"`
 	// AuthSigninURL specifies the URL to redirect to when the authentication server returns 401 Unauthorized.
 	AuthSigninURL string `json:"authSigninURL,omitempty"`
+	// Timeout defines the maximum duration of the request to the authentication server, including connection time and reading the response body.
+	// The value of timeout should be provided in seconds or as a valid duration format,
+	// see https://pkg.go.dev/time#ParseDuration.
+	// Zero means no timeout. Default is 30s.
+	// +kubebuilder:validation:Pattern="^([0-9]+(ns|us|µs|ms|s|m|h)?)+$"
+	// +kubebuilder:validation:XIntOrString
+	Timeout *intstr.IntOrString `json:"timeout,omitempty"`
 }
 
 // +k8s:deepcopy-gen=true
@@ -239,6 +259,11 @@ type ForwardAuth struct {
 // TODO: This has to be removed once the CAOptional option is removed.
 type ClientTLSWithCAOptional struct {
 	ClientTLS `json:",inline"`
+
+	// CAConfigMap is the name of a ConfigMap in the Middleware namespace containing the CA to validate the server certificate.
+	// The CA certificate is extracted from key `tls.ca` or `ca.crt`.
+	// CAConfigMap and CASecret are mutually exclusive.
+	CAConfigMap string `json:"caConfigMap,omitempty"`
 
 	// Deprecated: TLS client authentication is a server side option (see https://github.com/golang/go/blob/740a490f71d026bb7d2d13cb8fa2d6d6e0572b70/src/crypto/tls/common.go#L634).
 	CAOptional *bool `json:"caOptional,omitempty"`

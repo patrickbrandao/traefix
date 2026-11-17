@@ -47,29 +47,51 @@ var hopHeaders = []string{
 
 var userAgentHeader = http.CanonicalHeaderKey("User-Agent")
 
+// serviceBuilder builds an HTTP handler for a Traefik service by name.
+// It mirrors the interface consumed by the customerrors middleware, so ForwardAuth
+// can route the authentication request through Traefik's load balancer.
+type serviceBuilder interface {
+	BuildHTTP(ctx context.Context, serviceName string) (http.Handler, error)
+}
+
 type forwardAuth struct {
-	address                  string
-	authResponseHeaders      []string
-	authResponseHeadersRegex *regexp.Regexp
-	next                     http.Handler
-	name                     string
-	client                   http.Client
-	trustForwardHeader       *bool
-	authRequestHeaders       []string
-	maxResponseBodySize      int64
-	addAuthCookiesToResponse map[string]struct{}
-	headerField              string
-	forwardBody              bool
-	maxBodySize              int64
-	preserveLocationHeader   bool
-	preserveRequestMethod    bool
-	authSigninURL            string
+	address                       string
+	authResponseHeaders           []string
+	authResponseHeadersRegex      *regexp.Regexp
+	next                          http.Handler
+	name                          string
+	client                        http.Client
+	serviceName                   string
+	serviceHandler                http.Handler
+	serviceRequestURI             string
+	trustForwardHeader            *bool
+	authRequestHeaders            []string
+	maxResponseBodySize           int64
+	addAuthCookiesToResponse      map[string]struct{}
+	addAuthCookiesToResponseRegex *regexp.Regexp
+	headerField                   string
+	forwardBody                   bool
+	maxBodySize                   int64
+	preserveLocationHeader        bool
+	preserveRequestMethod         bool
+	authSigninURL                 string
 }
 
 // NewForward creates a forward auth middleware.
-func NewForward(ctx context.Context, next http.Handler, config dynamic.ForwardAuth, name string) (http.Handler, error) {
+func NewForward(ctx context.Context, next http.Handler, config dynamic.ForwardAuth, serviceBuilder serviceBuilder, name string) (http.Handler, error) {
 	logger := middlewares.GetLogger(ctx, name, typeNameForward)
 	logger.Debug().Msg("Creating middleware")
+
+	if config.Service != "" {
+		if config.Address != "" {
+			return nil, errors.New("forward authentication address and service options are mutually exclusive")
+		}
+		if config.TLS != nil {
+			return nil, errors.New("forward authentication cannot use the tls option with a service, configure a ServersTransport on the service instead")
+		}
+	} else if config.Path != "" {
+		return nil, errors.New("forward authentication path option requires the service option")
+	}
 
 	addAuthCookiesToResponse := make(map[string]struct{})
 	for _, cookieName := range config.AddAuthCookiesToResponse {
@@ -105,12 +127,44 @@ func NewForward(ctx context.Context, next http.Handler, config dynamic.ForwardAu
 		logger.Warn().Msg("maxResponseBodySize is not configured, allowing unlimited response body size which can lead to DoS attacks and memory exhaustion. Please set an appropriate limit.")
 	}
 
+	if config.Timeout < 0 {
+		return nil, fmt.Errorf("forward authentication timeout must not be negative: %s", time.Duration(config.Timeout))
+	}
+	if config.Timeout == 0 {
+		logger.Warn().Msg("timeout is disabled: an authentication server that does not answer holds the client requests indefinitely, which can lead to DoS attacks. Please set an appropriate limit.")
+	}
+
 	// Ensure our request client does not follow redirects
 	fa.client = http.Client{
 		CheckRedirect: func(r *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
-		Timeout: 30 * time.Second,
+		Timeout: time.Duration(config.Timeout),
+	}
+
+	if config.Service != "" {
+		if serviceBuilder == nil {
+			return nil, errors.New("a service builder is required to use the service option")
+		}
+
+		handler, err := serviceBuilder.BuildHTTP(ctx, config.Service)
+		if err != nil {
+			return nil, fmt.Errorf("building service %s: %w", config.Service, err)
+		}
+		fa.serviceName = config.Service
+		fa.serviceHandler = handler
+
+		fa.serviceRequestURI = "/"
+		if config.Path != "" {
+			pathURL, err := url.Parse(config.Path)
+			if err != nil {
+				return nil, fmt.Errorf("parsing path %s: %w", config.Path, err)
+			}
+			fa.serviceRequestURI = pathURL.RequestURI()
+			if !strings.HasPrefix(fa.serviceRequestURI, "/") {
+				fa.serviceRequestURI = "/" + fa.serviceRequestURI
+			}
+		}
 	}
 
 	transport := http.DefaultTransport
@@ -143,6 +197,25 @@ func NewForward(ctx context.Context, next http.Handler, config dynamic.ForwardAu
 		}
 	}
 
+	// The HTTP client has no h2c scheme: h2c is plain HTTP with HTTP/1 disabled on the transport,
+	// so that the requests are multiplexed on a few connections instead of opening one per concurrent request.
+	if addr, err := url.Parse(config.Address); err == nil && addr.Scheme == "h2c" {
+		if config.TLS != nil {
+			return nil, errors.New("forward authentication cannot use the tls option with an h2c address, which is not encrypted")
+		}
+
+		addr.Scheme = "http"
+		fa.address = addr.String()
+
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.Protocols = new(http.Protocols)
+		tr.Protocols.SetUnencryptedHTTP2(true)
+		transport = tr
+		newTransport = func() http.RoundTripper {
+			return tr.Clone()
+		}
+	}
+
 	// The auth server may use a connection-bound authentication scheme (NTLM or Kerberos, as IIS Windows
 	// Authentication does), which requires the authentication requests of a client connection to be sent
 	// on a connection to the auth server dedicated to it.
@@ -154,6 +227,14 @@ func NewForward(ctx context.Context, next http.Handler, config dynamic.ForwardAu
 			return nil, fmt.Errorf("error compiling regular expression %s: %w", config.AuthResponseHeadersRegex, err)
 		}
 		fa.authResponseHeadersRegex = re
+	}
+
+	if config.AddAuthCookiesToResponseRegex != "" {
+		re, err := regexp.Compile(config.AddAuthCookiesToResponseRegex)
+		if err != nil {
+			return nil, fmt.Errorf("error compiling regular expression %s: %w", config.AddAuthCookiesToResponseRegex, err)
+		}
+		fa.addAuthCookiesToResponseRegex = re
 	}
 
 	if config.TrustForwardHeader == nil {
@@ -177,14 +258,30 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		forwardReqMethod = req.Method
 	}
 
+	forwardURL, target := fa.address, fa.address
+	if fa.serviceHandler != nil {
+		// The service handler does not dial the URL host: a fixed placeholder avoids building
+		// the URL from the client-controlled Host header, which is set on the request below.
+		forwardURL = "http://forwardauth" + fa.serviceRequestURI
+		target = "service " + fa.serviceName
+	}
+
 	// The request context carries the transports dedicated to the client connection (see kerberos.AddTransportOnContext).
-	forwardReq, err := http.NewRequestWithContext(req.Context(), forwardReqMethod, fa.address, nil)
+	forwardReq, err := http.NewRequestWithContext(req.Context(), forwardReqMethod, forwardURL, nil)
 	if err != nil {
-		logger.Debug().Err(err).Msgf("Error calling %s", fa.address)
-		observability.SetStatusErrorf(req.Context(), "Error calling %s. Cause %s", fa.address, err)
+		logger.Debug().Err(err).Msgf("Error calling %s", target)
+		observability.SetStatusErrorf(req.Context(), "Error calling %s. Cause %s", target, err)
 
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
+	}
+
+	if fa.serviceHandler != nil {
+		// The service handler is a server-side handler: unlike an http.Client it is entitled to
+		// assume a non-nil Body and a set RequestURI, as mirrored from customerrors.newRequest.
+		forwardReq.Body = http.NoBody
+		forwardReq.RequestURI = forwardReq.URL.RequestURI()
+		forwardReq.Host = req.Host
 	}
 
 	forwardBody := fa.forwardBody
@@ -240,14 +337,17 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		tracer.CaptureClientRequest(forwardSpan, forwardReq)
 	}
 
-	forwardResponse, forwardErr := fa.client.Do(forwardReq)
+	forwardResponse, forwardErr := fa.doForward(forwardReq)
 	if forwardErr != nil {
-		logger.Error().Err(forwardErr).Msgf("Error calling %s", fa.address)
-		observability.SetStatusErrorf(req.Context(), "Error calling %s. Cause: %s", fa.address, forwardErr)
-
 		statusCode := http.StatusInternalServerError
+		// A canceled request means the client went away: it is not an error of the auth server,
+		// and reporting it as such hides the real failures in logs and traces.
 		if errors.Is(forwardErr, context.Canceled) {
 			statusCode = httputil.StatusClientClosedRequest
+			logger.Debug().Err(forwardErr).Int("statusCode", statusCode).Msgf("Error calling %s", target)
+		} else {
+			logger.Error().Err(forwardErr).Int("statusCode", statusCode).Msgf("Error calling %s", target)
+			observability.SetStatusErrorf(req.Context(), "Error calling %s. Cause: %s", target, forwardErr)
 		}
 
 		rw.WriteHeader(statusCode)
@@ -264,8 +364,8 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			rw.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		logger.Debug().Err(readError).Msgf("Error reading body %s", fa.address)
-		observability.SetStatusErrorf(req.Context(), "Error reading body %s. Cause: %s", fa.address, readError)
+		logger.Debug().Err(readError).Msgf("Error reading body %s", target)
+		observability.SetStatusErrorf(req.Context(), "Error reading body %s. Cause: %s", target, readError)
 
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
@@ -298,7 +398,7 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// Pass the forward response's body and selected headers if it
 	// didn't return a response within the range of [200, 300).
 	if forwardResponse.StatusCode < http.StatusOK || forwardResponse.StatusCode >= http.StatusMultipleChoices {
-		logger.Debug().Msgf("Remote error %s. StatusCode: %d", fa.address, forwardResponse.StatusCode)
+		logger.Debug().Msgf("Remote error %s. StatusCode: %d", target, forwardResponse.StatusCode)
 
 		utils.CopyHeaders(rw.Header(), forwardResponse.Header)
 		utils.RemoveHeaders(rw.Header(), hopHeaders...)
@@ -306,8 +406,8 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		redirectURL, err := fa.redirectURL(forwardResponse)
 		if err != nil {
 			if !errors.Is(err, http.ErrNoLocation) {
-				logger.Debug().Err(err).Msgf("Error reading response location header %s", fa.address)
-				observability.SetStatusErrorf(req.Context(), "Error reading response location header %s. Cause: %s", fa.address, err)
+				logger.Debug().Err(err).Msgf("Error reading response location header %s", target)
+				observability.SetStatusErrorf(req.Context(), "Error reading response location header %s. Cause: %s", target, err)
 
 				rw.WriteHeader(http.StatusInternalServerError)
 				return
@@ -360,8 +460,10 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	req.RequestURI = req.URL.RequestURI()
 
-	authCookies := forwardResponse.Cookies()
-	if len(authCookies) == 0 {
+	authCookies := forwardResponse.Header.Values("Set-Cookie")
+	// Without a cookie to copy, the backend response is left untouched: wrapping the writer is not free,
+	// and the regex removes the matching backend cookies even when the auth server sets none.
+	if fa.addAuthCookiesToResponseRegex == nil && (len(authCookies) == 0 || len(fa.addAuthCookiesToResponse) == 0) {
 		fa.next.ServeHTTP(rw, req)
 		return
 	}
@@ -370,7 +472,11 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (fa *forwardAuth) redirectURL(forwardResponse *http.Response) (*url.URL, error) {
-	if !fa.preserveLocationHeader {
+	// With a service, the authentication request targets a placeholder URL, not a reachable
+	// authentication server, so there is nothing meaningful to resolve a relative Location against.
+	// Forwarding it untouched lets the client resolve it against the original request,
+	// which yields the correct scheme as well as the correct host.
+	if !fa.preserveLocationHeader && fa.serviceHandler == nil {
 		return forwardResponse.Location()
 	}
 
@@ -381,25 +487,40 @@ func (fa *forwardAuth) redirectURL(forwardResponse *http.Response) (*url.URL, er
 	return nil, http.ErrNoLocation
 }
 
-func (fa *forwardAuth) buildModifier(authCookies []*http.Cookie) func(res *http.Response) error {
+func (fa *forwardAuth) buildModifier(authCookies []string) func(res *http.Response) error {
 	return func(res *http.Response) error {
-		cookies := res.Cookies()
+		cookies := res.Header.Values("Set-Cookie")
 		res.Header.Del("Set-Cookie")
 
 		for _, cookie := range cookies {
-			if _, found := fa.addAuthCookiesToResponse[cookie.Name]; !found {
-				res.Header.Add("Set-Cookie", cookie.String())
+			if !fa.isAuthCookie(cookie) {
+				res.Header.Add("Set-Cookie", cookie)
 			}
 		}
 
 		for _, cookie := range authCookies {
-			if _, found := fa.addAuthCookiesToResponse[cookie.Name]; found {
-				res.Header.Add("Set-Cookie", cookie.String())
+			if fa.isAuthCookie(cookie) {
+				res.Header.Add("Set-Cookie", cookie)
 			}
 		}
 
 		return nil
 	}
+}
+
+// isAuthCookie works on the raw Set-Cookie line,
+// because re-serializing a parsed cookie drops the attributes unknown to net/http.
+// Only the name is read, so a backend cookie with a value net/http rejects is still removed.
+func (fa *forwardAuth) isAuthCookie(setCookie string) bool {
+	nameValue, _, _ := strings.Cut(setCookie, ";")
+	name, _, _ := strings.Cut(nameValue, "=")
+	name = strings.TrimSpace(name)
+
+	if _, found := fa.addAuthCookiesToResponse[name]; found {
+		return true
+	}
+
+	return fa.addAuthCookiesToResponseRegex != nil && fa.addAuthCookiesToResponseRegex.MatchString(name)
 }
 
 var errBodyTooLarge = errors.New("request body too large")
@@ -440,6 +561,98 @@ func (fa *forwardAuth) readResponseBodyBytes(res *http.Response) ([]byte, error)
 		return body[:n], nil
 	}
 	return nil, errResponseBodyTooLarge
+}
+
+// doForward issues the authentication request, either to the configured address
+// through the middleware HTTP client, or through the configured service handler.
+func (fa *forwardAuth) doForward(forwardReq *http.Request) (*http.Response, error) {
+	if fa.serviceHandler == nil {
+		return fa.client.Do(forwardReq)
+	}
+
+	// The service handler is not bounded by the client timeout: without a deadline, an
+	// authentication server that never answers would hold every client request forever.
+	if fa.client.Timeout > 0 {
+		ctx, cancel := context.WithTimeout(forwardReq.Context(), fa.client.Timeout)
+		defer cancel()
+		forwardReq = forwardReq.WithContext(ctx)
+	}
+
+	recorder := newAuthResponseRecorder(fa.maxResponseBodySize)
+	fa.serviceHandler.ServeHTTP(recorder, forwardReq)
+
+	return recorder.result(forwardReq), nil
+}
+
+// authResponseRecorder captures the response produced by the service handler,
+// so that ForwardAuth can inspect it before deciding whether to allow the request.
+type authResponseRecorder struct {
+	header      http.Header
+	snapshot    http.Header
+	code        int
+	body        bytes.Buffer
+	limit       int64
+	wroteHeader bool
+}
+
+func newAuthResponseRecorder(maxResponseBodySize int64) *authResponseRecorder {
+	return &authResponseRecorder{
+		header: make(http.Header),
+		code:   http.StatusOK,
+		limit:  maxResponseBodySize,
+	}
+}
+
+func (r *authResponseRecorder) Header() http.Header { return r.header }
+
+func (r *authResponseRecorder) WriteHeader(code int) {
+	// 1xx responses are informational: keep waiting for the final status code.
+	if r.wroteHeader || (code >= 100 && code < 200) {
+		return
+	}
+	r.code = code
+	r.wroteHeader = true
+	// Like a real connection, headers changed after WriteHeader must not be part of the response.
+	r.snapshot = r.header.Clone()
+}
+
+func (r *authResponseRecorder) Write(buf []byte) (int, error) {
+	r.WriteHeader(http.StatusOK)
+
+	if r.limit < 0 {
+		return r.body.Write(buf)
+	}
+
+	// Keep at most limit+1 bytes buffered so readResponseBodyBytes can still
+	// detect an oversized response, while reporting a full write so the service
+	// handler does not error.
+	if room := r.limit + 1 - int64(r.body.Len()); room > 0 {
+		r.body.Write(buf[:min(int64(len(buf)), room)])
+	}
+
+	return len(buf), nil
+}
+
+// FlushError is a no-op: the response is buffered until the service handler returns,
+// and a handler streaming its response must not fail because of that.
+func (r *authResponseRecorder) FlushError() error {
+	r.WriteHeader(http.StatusOK)
+	return nil
+}
+
+func (r *authResponseRecorder) result(forwardReq *http.Request) *http.Response {
+	header := r.snapshot
+	if header == nil {
+		header = r.header.Clone()
+	}
+
+	return &http.Response{
+		StatusCode: r.code,
+		Status:     fmt.Sprintf("%d %s", r.code, http.StatusText(r.code)),
+		Header:     header,
+		Body:       io.NopCloser(&r.body),
+		Request:    forwardReq,
+	}
 }
 
 func writeHeader(req, forwardReq *http.Request, trustForwardHeader bool, allowedHeaders []string) {

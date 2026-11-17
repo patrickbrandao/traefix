@@ -1311,9 +1311,8 @@ type secretUser struct {
 func basicAuthUsers(secret *corev1.Secret, authSecretType string) ([]secretUser, error) {
 	var users []secretUser
 	if authSecretType == "auth-map" {
-		if len(secret.Data) == 0 {
-			return nil, fmt.Errorf("secret %s/%s contains no user credentials", secret.Namespace, secret.Name)
-		}
+		// An empty Secret is valid: ingress-nginx keeps the location and denies every request,
+		// which the BasicAuth middleware does with an empty user list. Skipping the Ingress would expose a 404 instead.
 		// Sorted, so that an unchanged Secret gives the same configuration and does not trigger a reload.
 		for _, user := range slices.Sorted(maps.Keys(secret.Data)) {
 			users = append(users, secretUser{key: user, value: user + ":" + string(secret.Data[user])})

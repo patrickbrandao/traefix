@@ -13,6 +13,8 @@ import (
 const (
 	// ForwardAuthDefaultMaxBodySize is the ForwardAuth.MaxBodySize option default value.
 	ForwardAuthDefaultMaxBodySize int64 = -1
+	// ForwardAuthDefaultTimeout is the ForwardAuth.Timeout option default value.
+	ForwardAuthDefaultTimeout = ptypes.Duration(30 * time.Second)
 	// RetryDefaultMaxRequestBodyBytes is the Retry.MaxRequestBodyBytes option default value.
 	RetryDefaultMaxRequestBodyBytes int64 = 2 * 1024 * 1024 // 2 MB
 	// TapDefaultPath is the tap records Path option default value.
@@ -129,6 +131,9 @@ type BasicAuth struct {
 	// RemoveHeader sets the removeHeader option to true to remove the authorization header before forwarding the request to your service.
 	// Default: false.
 	RemoveHeader bool `json:"removeHeader,omitempty" toml:"removeHeader,omitempty" yaml:"removeHeader,omitempty" export:"true"`
+	// AllowCORSPreflight allows the CORS preflight requests (OPTIONS requests with non-empty Origin and Access-Control-Request-Method headers) to pass through without authentication.
+	// Default: false.
+	AllowCORSPreflight bool `json:"allowCORSPreflight,omitempty" toml:"allowCORSPreflight,omitempty" yaml:"allowCORSPreflight,omitempty" export:"true"`
 	// HeaderField defines a header field to store the authenticated user.
 	// More info: https://doc.traefik.io/traefik/v3.8/middlewares/http/basicauth/#headerfield
 	HeaderField string `json:"headerField,omitempty" toml:"headerField,omitempty" yaml:"headerField,omitempty" export:"true"`
@@ -307,7 +312,16 @@ type ErrorPage struct {
 // More info: https://doc.traefik.io/traefik/v3.8/middlewares/http/forwardauth/
 type ForwardAuth struct {
 	// Address defines the authentication server address.
+	// Supports the http, https, and h2c schemes.
+	// It is mutually exclusive with the Service option.
 	Address string `json:"address,omitempty" toml:"address,omitempty" yaml:"address,omitempty"`
+	// Service defines the name of a Traefik service to use as the authentication server.
+	// It is mutually exclusive with the Address and TLS options: the connection to the service is handled by its ServersTransport.
+	// Using a service routes the authentication request through Traefik's load balancer, enabling service discovery, health checks, and sticky sessions for the authentication server.
+	Service string `json:"service,omitempty" toml:"service,omitempty" yaml:"service,omitempty" export:"true"`
+	// Path defines the path of the authentication request when using the Service option.
+	// It can also contain a query string. It defaults to the root path.
+	Path string `json:"path,omitempty" toml:"path,omitempty" yaml:"path,omitempty" export:"true"`
 	// TLS defines the configuration used to secure the connection to the authentication server.
 	TLS *ClientTLS `json:"tls,omitempty" toml:"tls,omitempty" yaml:"tls,omitempty" export:"true"`
 	// TrustForwardHeader defines whether to trust (ie: forward) all X-Forwarded-* headers.
@@ -326,6 +340,8 @@ type ForwardAuth struct {
 	MaxResponseBodySize *int64 `json:"maxResponseBodySize,omitempty" toml:"maxResponseBodySize,omitempty" yaml:"maxResponseBodySize,omitempty" export:"true"`
 	// AddAuthCookiesToResponse defines the list of cookies to copy from the authentication server response to the response.
 	AddAuthCookiesToResponse []string `json:"addAuthCookiesToResponse,omitempty" toml:"addAuthCookiesToResponse,omitempty" yaml:"addAuthCookiesToResponse,omitempty" export:"true"`
+	// AddAuthCookiesToResponseRegex defines a regex pattern used to match cookies to copy from the authentication server response to the response.
+	AddAuthCookiesToResponseRegex string `json:"addAuthCookiesToResponseRegex,omitempty" toml:"addAuthCookiesToResponseRegex,omitempty" yaml:"addAuthCookiesToResponseRegex,omitempty" export:"true"`
 	// HeaderField defines a header field to store the authenticated user.
 	// More info: https://doc.traefik.io/traefik/v3.8/middlewares/http/forwardauth/#headerfield
 	HeaderField string `json:"headerField,omitempty" toml:"headerField,omitempty" yaml:"headerField,omitempty" export:"true"`
@@ -339,11 +355,16 @@ type ForwardAuth struct {
 	PreserveRequestMethod bool `json:"preserveRequestMethod,omitempty" toml:"preserveRequestMethod,omitempty" yaml:"preserveRequestMethod,omitempty" export:"true"`
 	// AuthSigninURL specifies the URL to redirect to when the authentication server returns 401 Unauthorized.
 	AuthSigninURL string `json:"authSigninURL,omitempty" toml:"authSigninURL,omitempty" yaml:"authSigninURL,omitempty" export:"true"`
+	// Timeout defines the maximum duration of the request to the authentication server, including connection time and reading the response body.
+	// Zero means no timeout.
+	Timeout ptypes.Duration `json:"timeout,omitempty" toml:"timeout,omitempty" yaml:"timeout,omitempty" export:"true"`
 }
 
+// SetDefaults sets the default values on a ForwardAuth.
 func (f *ForwardAuth) SetDefaults() {
 	defaultMaxBodySize := ForwardAuthDefaultMaxBodySize
 	f.MaxBodySize = &defaultMaxBodySize
+	f.Timeout = ForwardAuthDefaultTimeout
 }
 
 // +k8s:deepcopy-gen=true

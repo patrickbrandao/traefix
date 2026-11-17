@@ -7631,11 +7631,28 @@ func TestLoadIngressRoutes(t *testing.T) {
 								"/digestAuth/users/1": "test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0",
 							},
 						},
+						"default-forwardauth-configmap": {
+							ForwardAuth: &dynamic.ForwardAuth{
+								Address:     "https://auth.example.com",
+								MaxBodySize: new(int64(-1)),
+								Timeout:     dynamic.ForwardAuthDefaultTimeout,
+								TLS: &dynamic.ClientTLS{
+									CA:   "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----",
+									Cert: "urn:k8s:secret:tlssecret:tls.crt",
+									Key:  "urn:k8s:secret:tlssecret:tls.key",
+								},
+							},
+							URNRefs: map[string]string{
+								"/forwardAuth/tls/cert": "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----",
+								"/forwardAuth/tls/key":  "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----",
+							},
+						},
 						"default-forwardauth": {
 							ForwardAuth: &dynamic.ForwardAuth{
 								Address:     "test.com",
 								MaxBodySize: new(int64(-1)),
 								HeaderField: "X-Header-Field",
+								Timeout:     ptypes.Duration(10 * time.Second),
 								TLS: &dynamic.ClientTLS{
 									CA:   "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----",
 									Cert: "urn:k8s:secret:tlssecret:tls.crt",
@@ -8079,6 +8096,158 @@ func TestLoadIngressRoutes(t *testing.T) {
 							},
 						},
 					},
+					ServersTransports: map[string]*dynamic.ServersTransport{},
+				},
+			},
+		},
+		{
+			desc:  "ForwardAuth middleware referencing a Kubernetes Service",
+			paths: []string{"services.yml", "with_forward_auth_service.yml"},
+			expected: &dynamic.Configuration{
+				UDP: &dynamic.UDPConfiguration{
+					Routers:  map[string]*dynamic.UDPRouter{},
+					Services: map[string]*dynamic.UDPService{},
+				},
+				TLS: &dynamic.TLSConfiguration{},
+				TCP: &dynamic.TCPConfiguration{
+					Routers:           map[string]*dynamic.TCPRouter{},
+					Middlewares:       map[string]*dynamic.TCPMiddleware{},
+					Services:          map[string]*dynamic.TCPService{},
+					ServersTransports: map[string]*dynamic.TCPServersTransport{},
+				},
+				HTTP: &dynamic.HTTPConfiguration{
+					Routers: map[string]*dynamic.Router{},
+					Middlewares: map[string]*dynamic.Middleware{
+						"default-forwardauth": {
+							ForwardAuth: &dynamic.ForwardAuth{
+								Service:             "default-forwardauth-forwardauth-service",
+								Path:                "/verify",
+								AuthResponseHeaders: []string{"X-Auth-User"},
+								MaxBodySize:         new(int64(-1)),
+								Timeout:             dynamic.ForwardAuthDefaultTimeout,
+							},
+						},
+					},
+					Services: map[string]*dynamic.Service{
+						"default-forwardauth-forwardauth-service": {
+							LoadBalancer: &dynamic.ServersLoadBalancer{
+								Strategy: dynamic.BalancerStrategyWRR,
+								Servers: []dynamic.Server{
+									{
+										URL: "http://10.10.0.1:80",
+									},
+									{
+										URL: "http://10.10.0.2:80",
+									},
+								},
+								PassHostHeader: new(true),
+								ResponseForwarding: &dynamic.ResponseForwarding{
+									FlushInterval: ptypes.Duration(100 * time.Millisecond),
+								},
+							},
+							Observability: &dynamic.ServiceObservabilityConfig{
+								Metadata: &dynamic.ServiceObservabilityMetadata{
+									Kubernetes: &dynamic.KubernetesServiceMetadata{
+										Namespace: "default",
+										Name:      "whoami",
+										Port:      "80",
+									},
+								},
+							},
+						},
+					},
+					ServersTransports: map[string]*dynamic.ServersTransport{},
+				},
+			},
+		},
+		{
+			desc:  "ForwardAuth middleware referencing a TraefikService",
+			paths: []string{"services.yml", "with_forward_auth_traefik_service.yml"},
+			expected: &dynamic.Configuration{
+				UDP: &dynamic.UDPConfiguration{
+					Routers:  map[string]*dynamic.UDPRouter{},
+					Services: map[string]*dynamic.UDPService{},
+				},
+				TLS: &dynamic.TLSConfiguration{},
+				TCP: &dynamic.TCPConfiguration{
+					Routers:           map[string]*dynamic.TCPRouter{},
+					Middlewares:       map[string]*dynamic.TCPMiddleware{},
+					Services:          map[string]*dynamic.TCPService{},
+					ServersTransports: map[string]*dynamic.TCPServersTransport{},
+				},
+				HTTP: &dynamic.HTTPConfiguration{
+					Routers: map[string]*dynamic.Router{},
+					Middlewares: map[string]*dynamic.Middleware{
+						"default-forwardauth": {
+							ForwardAuth: &dynamic.ForwardAuth{
+								Service:     "default-forwardauth-wrr",
+								Path:        "/verify",
+								MaxBodySize: new(int64(-1)),
+								Timeout:     dynamic.ForwardAuthDefaultTimeout,
+							},
+						},
+					},
+					Services: map[string]*dynamic.Service{
+						"default-forwardauth-wrr": {
+							Weighted: &dynamic.WeightedRoundRobin{
+								Services: []dynamic.WRRService{
+									{
+										Name:   "default-whoami-80",
+										Weight: func(i int) *int { return &i }(1),
+									},
+								},
+							},
+						},
+						"default-whoami-80": {
+							LoadBalancer: &dynamic.ServersLoadBalancer{
+								Strategy: dynamic.BalancerStrategyWRR,
+								Servers: []dynamic.Server{
+									{
+										URL: "http://10.10.0.1:80",
+									},
+									{
+										URL: "http://10.10.0.2:80",
+									},
+								},
+								PassHostHeader: new(true),
+								ResponseForwarding: &dynamic.ResponseForwarding{
+									FlushInterval: ptypes.Duration(100 * time.Millisecond),
+								},
+							},
+							Observability: &dynamic.ServiceObservabilityConfig{
+								Metadata: &dynamic.ServiceObservabilityMetadata{
+									Kubernetes: &dynamic.KubernetesServiceMetadata{
+										Namespace: "default",
+										Name:      "whoami",
+										Port:      "80",
+									},
+								},
+							},
+						},
+					},
+					ServersTransports: map[string]*dynamic.ServersTransport{},
+				},
+			},
+		},
+		{
+			desc:  "ForwardAuth middleware with both an address and a service is skipped",
+			paths: []string{"services.yml", "with_forward_auth_service_and_address.yml"},
+			expected: &dynamic.Configuration{
+				UDP: &dynamic.UDPConfiguration{
+					Routers:  map[string]*dynamic.UDPRouter{},
+					Services: map[string]*dynamic.UDPService{},
+				},
+				TLS: &dynamic.TLSConfiguration{},
+				TCP: &dynamic.TCPConfiguration{
+					Routers:           map[string]*dynamic.TCPRouter{},
+					Middlewares:       map[string]*dynamic.TCPMiddleware{},
+					Services:          map[string]*dynamic.TCPService{},
+					ServersTransports: map[string]*dynamic.TCPServersTransport{},
+				},
+				HTTP: &dynamic.HTTPConfiguration{
+					Routers:           map[string]*dynamic.Router{},
+					Middlewares:       map[string]*dynamic.Middleware{},
+					Services:          map[string]*dynamic.Service{},
 					ServersTransports: map[string]*dynamic.ServersTransport{},
 				},
 			},
@@ -10689,6 +10858,101 @@ func TestLoadIngressRoutes(t *testing.T) {
 				_, err := middleware.ResolveURNRefs()
 				assert.NoError(t, err, name)
 			}
+		})
+	}
+}
+
+func TestCreateForwardAuthMiddleware_CAConfigMap(t *testing.T) {
+	testCases := []struct {
+		desc          string
+		configMap     *corev1.ConfigMap
+		caSecret      string
+		expectedCA    string
+		expectedError string
+	}{
+		{
+			desc: "tls.ca",
+			configMap: &corev1.ConfigMap{
+				Namespace: "default", Name: "auth-ca",
+				Data: map[string]string{"tls.ca": "ca-bundle"},
+			},
+			expectedCA: "ca-bundle",
+		},
+		{
+			desc: "ca.crt",
+			configMap: &corev1.ConfigMap{
+				Namespace: "default", Name: "auth-ca",
+				Data: map[string]string{"ca.crt": "ca-bundle"},
+			},
+			expectedCA: "ca-bundle",
+		},
+		{
+			desc: "tls.ca takes precedence over ca.crt",
+			configMap: &corev1.ConfigMap{
+				Namespace: "default", Name: "auth-ca",
+				Data: map[string]string{"tls.ca": "preferred-bundle", "ca.crt": "other-bundle"},
+			},
+			expectedCA: "preferred-bundle",
+		},
+		{
+			desc:          "missing ConfigMap",
+			expectedError: "failed to load auth ca configMap: configMap 'default/auth-ca' not found",
+		},
+		{
+			desc: "ConfigMap in another namespace",
+			configMap: &corev1.ConfigMap{
+				Namespace: "other", Name: "auth-ca",
+				Data: map[string]string{"ca.crt": "ca-bundle"},
+			},
+			expectedError: "failed to load auth ca configMap: configMap 'default/auth-ca' not found",
+		},
+		{
+			desc: "missing CA key",
+			configMap: &corev1.ConfigMap{
+				Namespace: "default", Name: "auth-ca",
+				Data: map[string]string{"unrelated": "value"},
+			},
+			expectedError: "failed to load auth ca configMap: configMap 'default/auth-ca' has no CA block: config map default/auth-ca contains neither tls.ca nor ca.crt",
+		},
+		{
+			desc:          "conflicting CA sources",
+			caSecret:      "auth-ca",
+			expectedError: "forward authentication TLS caSecret and caConfigMap are mutually exclusive",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			var objects []runtime.Object
+			if test.configMap != nil {
+				objects = append(objects, test.configMap)
+			}
+			client := newClientImpl(kubefake.NewClientset(objects...), traefikcrdfake.NewClientset())
+			stopCh := make(chan struct{})
+			defer close(stopCh)
+			_, err := client.WatchAll(nil, stopCh)
+			require.NoError(t, err)
+
+			p := Provider{}
+			middleware, service, err := p.createForwardAuthMiddleware(t.Context(), client, "default", "default-forwardauth-service", &traefikv1alpha1.ForwardAuth{
+				Address: "https://auth.example.com",
+				TLS: &traefikv1alpha1.ClientTLSWithCAOptional{
+					CASecret:    test.caSecret,
+					CAConfigMap: "auth-ca",
+				},
+			}, k8s.URNRefs{})
+			assert.Nil(t, service)
+			if test.expectedError != "" {
+				require.EqualError(t, err, test.expectedError)
+				assert.Nil(t, middleware)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, middleware.TLS)
+			assert.Equal(t, test.expectedCA, middleware.TLS.CA)
 		})
 	}
 }

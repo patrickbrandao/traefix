@@ -21,12 +21,30 @@ import (
 )
 
 func TestNewBasicEmpty(t *testing.T) {
-	auth := dynamic.BasicAuth{
-		Users: []string{},
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	authMiddleware, err := NewBasic(t.Context(), next, dynamic.BasicAuth{Users: []string{}}, "authName")
+	require.NoError(t, err)
+
+	ba, ok := authMiddleware.(*basicAuth)
+	require.True(t, ok)
+	ba.checkSecret = func(password, secret string) bool {
+		t.Errorf("unexpected hash computation for %q", secret)
+		return true
 	}
 
-	_, err := NewBasic(t.Context(), nil, auth, "authName")
-	require.Error(t, err)
+	for _, user := range []string{"anyone", ""} {
+		req := httptest.NewRequest(http.MethodGet, "http://example.com", nil)
+		req.SetBasicAuth(user, "")
+
+		recorder := httptest.NewRecorder()
+		authMiddleware.ServeHTTP(recorder, req)
+
+		assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+		assert.NotEmpty(t, recorder.Header().Get("WWW-Authenticate"))
+	}
 }
 
 func TestNewBasicInvalidUser(t *testing.T) {
@@ -106,6 +124,115 @@ func TestBasicAuthFail(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, http.StatusUnauthorized, res.StatusCode, "they should be equal")
+}
+
+func TestBasicAuthAllowCORSPreflight(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		allowCORSPreflight bool
+		method             string
+		origin             string
+		requestMethod      []string
+		wantAllowed        bool
+	}{
+		{name: "disabled preflight", method: http.MethodOptions, origin: "https://example.com", requestMethod: []string{"GET"}},
+		{name: "enabled preflight", allowCORSPreflight: true, method: http.MethodOptions, origin: "https://example.com", requestMethod: []string{"GET"}, wantAllowed: true},
+		{name: "missing origin", allowCORSPreflight: true, method: http.MethodOptions, requestMethod: []string{"GET"}},
+		{name: "missing header", allowCORSPreflight: true, method: http.MethodOptions, origin: "https://example.com"},
+		{name: "empty header", allowCORSPreflight: true, method: http.MethodOptions, origin: "https://example.com", requestMethod: []string{""}},
+		{name: "non OPTIONS with header", allowCORSPreflight: true, method: http.MethodGet, origin: "https://example.com", requestMethod: []string{"GET"}},
+		{name: "ordinary request", allowCORSPreflight: true, method: http.MethodGet},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				assert.Equal(t, http.MethodOptions, r.Method)
+				assert.Empty(t, r.URL.User)
+				w.WriteHeader(http.StatusNoContent)
+			})
+
+			middleware, err := NewBasic(t.Context(), next, dynamic.BasicAuth{
+				Users:              []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"},
+				AllowCORSPreflight: tc.allowCORSPreflight,
+			}, "authName")
+			require.NoError(t, err)
+
+			response := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, "/", nil)
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.requestMethod != nil {
+				req.Header["Access-Control-Request-Method"] = tc.requestMethod
+			}
+			middleware.ServeHTTP(response, req)
+			if tc.wantAllowed {
+				assert.Equal(t, http.StatusNoContent, response.Code)
+				assert.True(t, called)
+			} else {
+				assert.Equal(t, http.StatusUnauthorized, response.Code)
+				assert.False(t, called)
+			}
+		})
+	}
+}
+
+func TestBasicAuthAllowCORSPreflightHeaderField(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Values("X-Webauth-User"))
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	middleware, err := NewBasic(t.Context(), next, dynamic.BasicAuth{
+		Users:              []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"},
+		AllowCORSPreflight: true,
+		HeaderField:        "X-Webauth-User",
+	}, "authName")
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodOptions, "/", nil)
+	req.Header.Set("Origin", "https://example.com")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	req.Header.Set("X-Webauth-User", "admin")
+
+	response := httptest.NewRecorder()
+	middleware.ServeHTTP(response, req)
+
+	assert.Equal(t, http.StatusNoContent, response.Code)
+}
+
+func TestBasicAuthAllowCORSPreflightRemoveHeader(t *testing.T) {
+	for _, removeHeader := range []bool{false, true} {
+		t.Run(fmt.Sprintf("removeHeader=%t", removeHeader), func(t *testing.T) {
+			const credentials = "Basic dGVzdDpzZWNyZXQ="
+			called := false
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				if removeHeader {
+					assert.NotContains(t, r.Header, authorizationHeader)
+				} else {
+					assert.Equal(t, credentials, r.Header.Get(authorizationHeader))
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			middleware, err := NewBasic(t.Context(), next, dynamic.BasicAuth{
+				Users:              []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"},
+				AllowCORSPreflight: true,
+				RemoveHeader:       removeHeader,
+			}, "authName")
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodOptions, "/", nil)
+			req.Header.Set("Origin", "https://example.com")
+			req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+			req.Header.Set(authorizationHeader, credentials)
+			response := httptest.NewRecorder()
+			middleware.ServeHTTP(response, req)
+			assert.Equal(t, http.StatusNoContent, response.Code)
+			assert.True(t, called)
+		})
+	}
 }
 
 func TestBasicAuthSuccess(t *testing.T) {

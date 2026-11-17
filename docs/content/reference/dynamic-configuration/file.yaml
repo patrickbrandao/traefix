@@ -162,6 +162,7 @@ http:
         usersFile: foobar
         realm: foobar
         removeHeader: true
+        allowCORSPreflight: true
         headerField: foobar
     Middleware03:
       buffering:
@@ -225,6 +226,8 @@ http:
     Middleware10:
       forwardAuth:
         address: foobar
+        service: foobar
+        path: foobar
         tls:
           ca: foobar
           cert: foobar
@@ -242,12 +245,14 @@ http:
         addAuthCookiesToResponse:
           - foobar
           - foobar
+        addAuthCookiesToResponseRegex: foobar
         headerField: foobar
         forwardBody: true
         maxBodySize: 42
         maxResponseBodySize: 42
         preserveLocationHeader: true
         preserveRequestMethod: true
+        timeout: 42s
     Middleware11:
       grpcWeb:
         allowOrigins:

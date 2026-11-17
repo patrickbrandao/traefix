@@ -3,6 +3,8 @@ package auth
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,9 +16,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
+	"github.com/traefik/traefik/v3/pkg/middlewares/forwardedheaders"
 	"github.com/traefik/traefik/v3/pkg/middlewares/observability"
 	"github.com/traefik/traefik/v3/pkg/observability/tracing"
 	"github.com/traefik/traefik/v3/pkg/proxy/httputil"
@@ -44,7 +49,7 @@ func TestForwardAuthFail(t *testing.T) {
 
 	middleware, err := NewForward(t.Context(), next, dynamic.ForwardAuth{
 		Address: server.URL,
-	}, "authTest")
+	}, nil, "authTest")
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(middleware)
@@ -73,6 +78,8 @@ func TestForwardAuthSuccess(t *testing.T) {
 		w.Header().Add("Foo-Bar", "auth-value")
 		w.Header().Add("Set-Cookie", "authCookie=Auth")
 		w.Header().Add("Set-Cookie", "authCookieNotAdded=Auth")
+		w.Header().Add("Set-Cookie", "authCookieRegex1=Auth; Path=/; Priority=High")
+		w.Header().Add("Set-Cookie", "authCookieRegex2=Auth")
 		fmt.Fprintln(w, "Success")
 	}))
 	t.Cleanup(server.Close)
@@ -84,18 +91,20 @@ func TestForwardAuthSuccess(t *testing.T) {
 		assert.Equal(t, "auth-value", r.Header.Get("Foo-Bar"))
 		assert.Empty(t, r.Header.Get("Foo-Baz"))
 		w.Header().Add("Set-Cookie", "authCookie=Backend")
+		w.Header().Add("Set-Cookie", "authCookieRegexMatches=Backend")
 		w.Header().Add("Set-Cookie", "backendCookie=Backend")
 		w.Header().Add("Other-Header", "BackendHeaderValue")
 		fmt.Fprintln(w, "traefik")
 	})
 
 	auth := dynamic.ForwardAuth{
-		Address:                  server.URL,
-		AuthResponseHeaders:      []string{"X-Auth-User", "X-Auth-Group"},
-		AuthResponseHeadersRegex: "^Foo-",
-		AddAuthCookiesToResponse: []string{"authCookie"},
+		Address:                       server.URL,
+		AuthResponseHeaders:           []string{"X-Auth-User", "X-Auth-Group"},
+		AuthResponseHeadersRegex:      "^Foo-",
+		AddAuthCookiesToResponse:      []string{"authCookie"},
+		AddAuthCookiesToResponseRegex: "^authCookieRegex",
 	}
-	middleware, err := NewForward(t.Context(), next, auth, "authTest")
+	middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(middleware)
@@ -108,7 +117,7 @@ func TestForwardAuthSuccess(t *testing.T) {
 	res, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, res.StatusCode)
-	assert.Equal(t, []string{"backendCookie=Backend", "authCookie=Auth"}, res.Header["Set-Cookie"])
+	assert.Equal(t, []string{"backendCookie=Backend", "authCookie=Auth", "authCookieRegex1=Auth; Path=/; Priority=High", "authCookieRegex2=Auth"}, res.Header["Set-Cookie"])
 	assert.Equal(t, []string{"BackendHeaderValue"}, res.Header["Other-Header"])
 
 	body, err := io.ReadAll(res.Body)
@@ -116,6 +125,133 @@ func TestForwardAuthSuccess(t *testing.T) {
 	err = res.Body.Close()
 	require.NoError(t, err)
 	assert.Equal(t, "traefik\n", string(body))
+}
+
+func TestForwardAuthH2C(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	authServer := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, 2, r.ProtoMajor)
+			w.Header().Set("X-Auth-User", "user@example.com")
+			fmt.Fprintln(w, "Success")
+		}),
+	}
+	authServer.Protocols = new(http.Protocols)
+	authServer.Protocols.SetHTTP1(false)
+	authServer.Protocols.SetUnencryptedHTTP2(true)
+	go authServer.Serve(ln) //nolint:errcheck
+	t.Cleanup(func() { authServer.Close() })
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "user@example.com", r.Header.Get("X-Auth-User"))
+		fmt.Fprintln(w, "traefik")
+	})
+
+	auth := dynamic.ForwardAuth{
+		Address:             "h2c://" + ln.Addr().String(),
+		AuthResponseHeaders: []string{"X-Auth-User"},
+	}
+	middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(middleware)
+	t.Cleanup(ts.Close)
+
+	req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+	res, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+
+	body, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	err = res.Body.Close()
+	require.NoError(t, err)
+	assert.Equal(t, "traefik\n", string(body))
+}
+
+func TestForwardAuthH2CWithTLS(t *testing.T) {
+	auth := dynamic.ForwardAuth{
+		Address: "h2c://127.0.0.1:8080",
+		TLS:     &dynamic.ClientTLS{InsecureSkipVerify: true},
+	}
+
+	_, err := NewForward(t.Context(), nil, auth, nil, "authTest")
+	require.Error(t, err)
+}
+
+func TestForwardAuthSuccessBackendCookiesUnchanged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Set-Cookie", "authCookie=Auth")
+		fmt.Fprintln(w, "Success")
+	}))
+	t.Cleanup(server.Close)
+
+	backendCookies := []string{
+		`prefs={"theme":"dark"}; Path=/`,
+		`greeting=hello world; Path=/`,
+		`list=a,b,c; Path=/`,
+		`sid=abc123; Path=/; Secure; HttpOnly; Priority=High`,
+	}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, cookie := range backendCookies {
+			w.Header().Add("Set-Cookie", cookie)
+		}
+		fmt.Fprintln(w, "traefik")
+	})
+
+	auth := dynamic.ForwardAuth{Address: server.URL}
+	middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(middleware)
+	t.Cleanup(ts.Close)
+
+	req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+	res, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = res.Body.Close() })
+
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, backendCookies, res.Header["Set-Cookie"])
+}
+
+func TestForwardAuthSuccessAddAuthCookiesKeepsRawBackendCookies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Set-Cookie", "authCookie=Auth")
+		fmt.Fprintln(w, "Success")
+	}))
+	t.Cleanup(server.Close)
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Set-Cookie", "authCookie=Backend")
+		w.Header().Add("Set-Cookie", `greeting=hello world; Path=/`)
+		w.Header().Add("Set-Cookie", `sid=abc123; Path=/; Secure; HttpOnly; Priority=High`)
+		fmt.Fprintln(w, "traefik")
+	})
+
+	auth := dynamic.ForwardAuth{
+		Address:                  server.URL,
+		AddAuthCookiesToResponse: []string{"authCookie"},
+	}
+	middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(middleware)
+	t.Cleanup(ts.Close)
+
+	req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+	res, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = res.Body.Close() })
+
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, []string{
+		`greeting=hello world; Path=/`,
+		`sid=abc123; Path=/; Secure; HttpOnly; Priority=High`,
+		"authCookie=Auth",
+	}, res.Header["Set-Cookie"])
 }
 
 func TestForwardAuthForwardBody(t *testing.T) {
@@ -140,7 +276,7 @@ func TestForwardAuthForwardBody(t *testing.T) {
 	maxBodySize := int64(len(data))
 	auth := dynamic.ForwardAuth{Address: server.URL, ForwardBody: true, MaxBodySize: &maxBodySize}
 
-	middleware, err := NewForward(t.Context(), next, auth, "authTest")
+	middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(middleware)
@@ -206,7 +342,7 @@ func TestForwardAuthDoesNotForwardCONNECTBody(t *testing.T) {
 				PreserveRequestMethod: true,
 				Address:               server.URL,
 			}
-			middleware, err := NewForward(t.Context(), next, auth, "authTest")
+			middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 			require.NoError(t, err)
 
 			ts := httptest.NewUnstartedServer(middleware)
@@ -252,7 +388,7 @@ func TestForwardAuthForwardBodyEmptyBody(t *testing.T) {
 
 	auth := dynamic.ForwardAuth{Address: server.URL, ForwardBody: true}
 
-	middleware, err := NewForward(t.Context(), next, auth, "authTest")
+	middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(middleware)
@@ -290,7 +426,7 @@ func TestForwardAuthForwardBodySizeLimit(t *testing.T) {
 	maxBodySize := int64(len(data)) - 1
 	auth := dynamic.ForwardAuth{Address: server.URL, ForwardBody: true, MaxBodySize: &maxBodySize}
 
-	middleware, err := NewForward(t.Context(), next, auth, "authTest")
+	middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(middleware)
@@ -327,7 +463,7 @@ func TestForwardAuthNotForwardBody(t *testing.T) {
 
 	auth := dynamic.ForwardAuth{Address: server.URL}
 
-	middleware, err := NewForward(t.Context(), next, auth, "authTest")
+	middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(middleware)
@@ -407,7 +543,7 @@ func TestForwardAuthConnectionBoundAuthentication(t *testing.T) {
 				_, _ = fmt.Fprint(rw, req.Header.Get("X-Auth-User"))
 			})
 
-			middleware, err := NewForward(t.Context(), next, auth, "authTest")
+			middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 			require.NoError(t, err)
 
 			ts := httptest.NewUnstartedServer(middleware)
@@ -468,7 +604,7 @@ func TestForwardAuthRedirect(t *testing.T) {
 
 	auth := dynamic.ForwardAuth{Address: authTs.URL}
 
-	authMiddleware, err := NewForward(t.Context(), next, auth, "authTest")
+	authMiddleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(authMiddleware)
@@ -519,7 +655,7 @@ func TestForwardAuthRemoveHopByHopHeaders(t *testing.T) {
 
 	auth := dynamic.ForwardAuth{Address: authTs.URL}
 
-	authMiddleware, err := NewForward(t.Context(), next, auth, "authTest")
+	authMiddleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(authMiddleware)
@@ -565,7 +701,7 @@ func TestForwardAuthFailResponseHeaders(t *testing.T) {
 	auth := dynamic.ForwardAuth{
 		Address: authTs.URL,
 	}
-	authMiddleware, err := NewForward(t.Context(), next, auth, "authTest")
+	authMiddleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(authMiddleware)
@@ -607,6 +743,9 @@ func TestForwardAuthClientClosedRequest(t *testing.T) {
 	requestStarted := make(chan struct{})
 	responseComplete := make(chan struct{})
 
+	var logs bytes.Buffer
+	logger := zerolog.New(&logs).Level(zerolog.DebugLevel)
+
 	authTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(requestStarted)
 		// Wait for the client to give up on the request, so the auth server never answers before the cancellation is observed.
@@ -622,10 +761,14 @@ func TestForwardAuthClientClosedRequest(t *testing.T) {
 	auth := dynamic.ForwardAuth{
 		Address: authTs.URL,
 	}
-	authMiddleware, err := NewForward(t.Context(), next, auth, "authTest")
+	authMiddleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 	require.NoError(t, err)
+	authMiddleware = observability.WithObservabilityHandler(authMiddleware, observability.Observability{TracingEnabled: true})
+	mockTracer := &mockTracer{}
 
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, initialSpan := tracing.NewTracer(mockTracer, nil, nil, nil).Start(logger.WithContext(t.Context()), "initial")
+	defer initialSpan.End()
+	ctx, cancel := context.WithCancel(ctx)
 	req := httptest.NewRequestWithContext(ctx, "GET", "http://foo", http.NoBody)
 
 	recorder := httptest.NewRecorder()
@@ -641,6 +784,15 @@ func TestForwardAuthClientClosedRequest(t *testing.T) {
 	<-responseComplete
 
 	assert.Equal(t, httputil.StatusClientClosedRequest, recorder.Result().StatusCode)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(logs.Bytes(), &logEntry))
+	assert.Equal(t, zerolog.DebugLevel.String(), logEntry[zerolog.LevelFieldName])
+	assert.Equal(t, "Error calling "+authTs.URL, logEntry[zerolog.MessageFieldName])
+	assert.Equal(t, "Get \""+authTs.URL+"\": context canceled", logEntry[zerolog.ErrorFieldName])
+	assert.InDelta(t, httputil.StatusClientClosedRequest, logEntry["statusCode"], 0)
+	require.Len(t, mockTracer.spans, 2)
+	assert.Equal(t, codes.Unset, mockTracer.spans[0].status)
 }
 
 func TestForwardAuthForwardError(t *testing.T) {
@@ -652,7 +804,7 @@ func TestForwardAuthForwardError(t *testing.T) {
 	auth := dynamic.ForwardAuth{
 		Address: "http://non-existing-server",
 	}
-	authMiddleware, err := NewForward(t.Context(), next, auth, "authTest")
+	authMiddleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 1*time.Microsecond)
@@ -669,6 +821,40 @@ func TestForwardAuthForwardError(t *testing.T) {
 	<-responseComplete
 
 	assert.Equal(t, http.StatusInternalServerError, recorder.Result().StatusCode)
+}
+
+func TestForwardAuthForwardErrorTracing(t *testing.T) {
+	authTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	authURL := authTs.URL
+	authTs.Close()
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fail()
+	})
+
+	var logs bytes.Buffer
+	logger := zerolog.New(&logs).Level(zerolog.DebugLevel)
+
+	authMiddleware, err := NewForward(t.Context(), next, dynamic.ForwardAuth{Address: authURL}, nil, "authTest")
+	require.NoError(t, err)
+	authMiddleware = observability.WithObservabilityHandler(authMiddleware, observability.Observability{TracingEnabled: true})
+	mockTracer := &mockTracer{}
+
+	ctx, initialSpan := tracing.NewTracer(mockTracer, nil, nil, nil).Start(logger.WithContext(t.Context()), "initial")
+	defer initialSpan.End()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "http://foo", http.NoBody)
+
+	recorder := httptest.NewRecorder()
+	authMiddleware.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusInternalServerError, recorder.Result().StatusCode)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(logs.Bytes(), &logEntry))
+	assert.Equal(t, zerolog.ErrorLevel.String(), logEntry[zerolog.LevelFieldName])
+	assert.InDelta(t, http.StatusInternalServerError, logEntry["statusCode"], 0)
+	require.Len(t, mockTracer.spans, 2)
+	assert.Equal(t, codes.Error, mockTracer.spans[0].status)
 }
 
 func TestForwardAuth_writeHeader(t *testing.T) {
@@ -1007,7 +1193,7 @@ func TestForwardAuth_writeHeader(t *testing.T) {
 				TrustForwardHeader: &test.trustForwardHeader,
 				AuthRequestHeaders: test.authRequestHeaders,
 			}
-			hdl, err := NewForward(t.Context(), nil, cfg, "test")
+			hdl, err := NewForward(t.Context(), nil, cfg, nil, "test")
 			require.NoError(t, err)
 
 			fwdAuth, ok := hdl.(*forwardAuth)
@@ -1185,7 +1371,7 @@ func TestForwardAuth_oldWriteHeader(t *testing.T) {
 		t.Run(test.desc, func(t *testing.T) {
 			t.Parallel()
 
-			hdl, err := NewForward(t.Context(), nil, dynamic.ForwardAuth{AuthRequestHeaders: test.authRequestHeaders}, "test")
+			hdl, err := NewForward(t.Context(), nil, dynamic.ForwardAuth{AuthRequestHeaders: test.authRequestHeaders}, nil, "test")
 			require.NoError(t, err)
 
 			fwdAuth, ok := hdl.(*forwardAuth)
@@ -1287,7 +1473,7 @@ func TestForwardAuthTracing(t *testing.T) {
 				Address:            server.URL,
 				AuthRequestHeaders: []string{"X-Foo"},
 			}
-			next, err := NewForward(t.Context(), next, auth, "authTest")
+			next, err := NewForward(t.Context(), next, auth, nil, "authTest")
 			require.NoError(t, err)
 
 			next = observability.WithObservabilityHandler(next, observability.Observability{
@@ -1334,7 +1520,7 @@ func TestForwardAuthPreserveLocationHeader(t *testing.T) {
 		Address:                server.URL,
 		PreserveLocationHeader: true,
 	}
-	middleware, err := NewForward(t.Context(), next, auth, "authTest")
+	middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(middleware)
@@ -1388,7 +1574,7 @@ func TestForwardAuthPreserveRequestMethod(t *testing.T) {
 				PreserveRequestMethod: test.preserveRequestMethod,
 			}
 
-			middleware, err := NewForward(t.Context(), next, auth, "authTest")
+			middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 			require.NoError(t, err)
 
 			ts := httptest.NewServer(middleware)
@@ -1403,6 +1589,99 @@ func TestForwardAuthPreserveRequestMethod(t *testing.T) {
 			assert.True(t, reqReachesNextServer)
 		})
 	}
+}
+
+func TestForwardAuthTimeout(t *testing.T) {
+	testCases := []struct {
+		desc           string
+		timeout        ptypes.Duration
+		expectedStatus int
+		expectedBody   string
+	}{
+		{
+			desc:           "authentication server slower than the timeout",
+			timeout:        ptypes.Duration(50 * time.Millisecond),
+			expectedStatus: http.StatusInternalServerError,
+			expectedBody:   "",
+		},
+		{
+			desc:           "authentication server faster than the timeout",
+			timeout:        ptypes.Duration(5 * time.Second),
+			expectedStatus: http.StatusOK,
+			expectedBody:   "traefik\n",
+		},
+		{
+			desc:           "timeout disabled",
+			timeout:        0,
+			expectedStatus: http.StatusOK,
+			expectedBody:   "traefik\n",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case <-time.After(300 * time.Millisecond):
+				case <-r.Context().Done():
+					return
+				}
+				fmt.Fprintln(w, "Success")
+			}))
+			t.Cleanup(server.Close)
+
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintln(w, "traefik")
+			})
+
+			auth := dynamic.ForwardAuth{
+				Address: server.URL,
+				Timeout: test.timeout,
+			}
+
+			middleware, err := NewForward(t.Context(), next, auth, nil, "timeoutTest")
+			require.NoError(t, err)
+
+			ts := httptest.NewServer(middleware)
+			t.Cleanup(ts.Close)
+
+			req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+			res, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+
+			assert.Equal(t, test.expectedStatus, res.StatusCode)
+
+			body, err := io.ReadAll(res.Body)
+			require.NoError(t, err)
+			err = res.Body.Close()
+			require.NoError(t, err)
+
+			assert.Equal(t, test.expectedBody, string(body))
+		})
+	}
+}
+
+func TestForwardAuthDefaultTimeout(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+
+	auth := dynamic.ForwardAuth{Address: "http://auth.example.com"}
+	auth.SetDefaults()
+
+	middleware, err := NewForward(t.Context(), next, auth, nil, "defaultTimeoutTest")
+	require.NoError(t, err)
+
+	fa, ok := middleware.(*forwardAuth)
+	require.True(t, ok)
+	assert.Equal(t, 30*time.Second, fa.client.Timeout)
+}
+
+func TestForwardAuthNegativeTimeout(t *testing.T) {
+	auth := dynamic.ForwardAuth{Address: "http://auth.example.com", Timeout: ptypes.Duration(-time.Second)}
+
+	_, err := NewForward(t.Context(), nil, auth, nil, "negativeTimeoutTest")
+	require.Error(t, err)
 }
 
 func TestForwardAuthMaxResponseBodySize(t *testing.T) {
@@ -1466,7 +1745,7 @@ func TestForwardAuthMaxResponseBodySize(t *testing.T) {
 				MaxResponseBodySize: &maxResponseBodySize,
 			}
 
-			middleware, err := NewForward(t.Context(), next, auth, "maxResponseBodySizeTest")
+			middleware, err := NewForward(t.Context(), next, auth, nil, "maxResponseBodySizeTest")
 			require.NoError(t, err)
 
 			ts := httptest.NewServer(middleware)
@@ -1543,7 +1822,7 @@ func TestForwardAuthAuthSigninURL(t *testing.T) {
 				Address:       authServer.URL,
 				AuthSigninURL: test.authSigninURL,
 			}
-			middleware, err := NewForward(t.Context(), next, auth, "authTest")
+			middleware, err := NewForward(t.Context(), next, auth, nil, "authTest")
 			require.NoError(t, err)
 
 			ts := httptest.NewServer(middleware)
@@ -1597,6 +1876,7 @@ type mockSpan struct {
 
 	name       string
 	attributes []attribute.KeyValue
+	status     codes.Code
 }
 
 var _ trace.Span = &mockSpan{}
@@ -1604,8 +1884,8 @@ var _ trace.Span = &mockSpan{}
 func (*mockSpan) SpanContext() trace.SpanContext {
 	return trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{1}, SpanID: trace.SpanID{1}})
 }
-func (*mockSpan) IsRecording() bool                  { return false }
-func (s *mockSpan) SetStatus(_ codes.Code, _ string) {}
+func (*mockSpan) IsRecording() bool                     { return false }
+func (s *mockSpan) SetStatus(code codes.Code, _ string) { s.status = code }
 func (s *mockSpan) SetAttributes(kv ...attribute.KeyValue) {
 	s.attributes = append(s.attributes, kv...)
 }
@@ -1618,4 +1898,400 @@ func (s *mockSpan) SetName(name string) { s.name = name }
 
 func (s *mockSpan) TracerProvider() trace.TracerProvider {
 	return nil
+}
+
+func TestForwardAuthCookiesWithoutAuthCookies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	for _, test := range []struct {
+		desc        string
+		regex       string
+		wantCookies []string
+	}{
+		{
+			desc:        "regex strips matching backend cookies without auth cookies",
+			regex:       "^auth_",
+			wantCookies: []string{"backendCookie=Backend; Path=/; Priority=High"},
+		},
+		{
+			desc:        "unset regex preserves existing behavior without auth cookies",
+			wantCookies: []string{"auth_session=Backend", "auth_invalid=a\\b", "backendCookie=Backend; Path=/; Priority=High"},
+		},
+	} {
+		t.Run(test.desc, func(t *testing.T) {
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("Set-Cookie", "auth_session=Backend")
+				w.Header().Add("Set-Cookie", "auth_invalid=a\\b")
+				w.Header().Add("Set-Cookie", "backendCookie=Backend; Path=/; Priority=High")
+				w.WriteHeader(http.StatusOK)
+			})
+			middleware, err := NewForward(t.Context(), next, dynamic.ForwardAuth{
+				Address:                       server.URL,
+				AddAuthCookiesToResponseRegex: test.regex,
+			}, nil, "authTest")
+			require.NoError(t, err)
+
+			recorder := httptest.NewRecorder()
+			middleware.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "http://example.com/", nil))
+
+			assert.Equal(t, http.StatusOK, recorder.Code)
+			assert.Equal(t, test.wantCookies, recorder.Header().Values("Set-Cookie"))
+		})
+	}
+}
+
+type mockServiceBuilder struct {
+	handler http.Handler
+	err     error
+}
+
+func (m mockServiceBuilder) BuildHTTP(_ context.Context, _ string) (http.Handler, error) {
+	return m.handler, m.err
+}
+
+func TestForwardAuthServiceSuccess(t *testing.T) {
+	authService := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/verify", r.URL.Path)
+		assert.Equal(t, "example.com", r.Host)
+		w.Header().Set("X-Auth-User", "user@example.com")
+		w.Header().Add("Set-Cookie", "authCookie=Auth")
+		fmt.Fprintln(w, "Success")
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "user@example.com", r.Header.Get("X-Auth-User"))
+		fmt.Fprintln(w, "traefik")
+	})
+
+	auth := dynamic.ForwardAuth{
+		Service:             "auth@file",
+		Path:                "/verify",
+		AuthResponseHeaders: []string{"X-Auth-User"},
+	}
+
+	middleware, err := NewForward(t.Context(), next, auth, mockServiceBuilder{handler: authService}, "authTest")
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(middleware)
+	t.Cleanup(ts.Close)
+
+	req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+	req.Host = "example.com"
+	res, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+
+	body, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	require.NoError(t, res.Body.Close())
+	assert.Equal(t, "traefik\n", string(body))
+}
+
+func TestForwardAuthServiceForbidden(t *testing.T) {
+	authService := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/", r.URL.Path)
+		w.Header().Set(forward.ProxyAuthenticate, "test")
+		http.Error(w, "Forbidden", http.StatusForbidden)
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	auth := dynamic.ForwardAuth{Service: "auth@file"}
+
+	middleware, err := NewForward(t.Context(), next, auth, mockServiceBuilder{handler: authService}, "authTest")
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(middleware)
+	t.Cleanup(ts.Close)
+
+	req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+	res, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusForbidden, res.StatusCode)
+
+	body, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	require.NoError(t, res.Body.Close())
+	assert.Equal(t, "test", res.Header.Get(forward.ProxyAuthenticate))
+	assert.Equal(t, "Forbidden\n", string(body))
+}
+
+func TestForwardAuthServiceRedirect(t *testing.T) {
+	authService := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://auth.example.com/login", http.StatusFound)
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	auth := dynamic.ForwardAuth{Service: "auth@file"}
+
+	middleware, err := NewForward(t.Context(), next, auth, mockServiceBuilder{handler: authService}, "authTest")
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(middleware)
+	t.Cleanup(ts.Close)
+
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	require.NoError(t, res.Body.Close())
+
+	assert.Equal(t, http.StatusFound, res.StatusCode)
+	assert.Equal(t, "https://auth.example.com/login", res.Header.Get("Location"))
+}
+
+func TestForwardAuthServiceTLSMutuallyExclusive(t *testing.T) {
+	auth := dynamic.ForwardAuth{
+		Service: "auth@file",
+		TLS:     &dynamic.ClientTLS{},
+	}
+
+	_, err := NewForward(t.Context(), nil, auth, mockServiceBuilder{handler: http.NotFoundHandler()}, "authTest")
+	require.Error(t, err)
+}
+
+func TestForwardAuthServiceAddressMutuallyExclusive(t *testing.T) {
+	auth := dynamic.ForwardAuth{
+		Address: "http://auth.example.com/verify",
+		Service: "auth@file",
+	}
+
+	_, err := NewForward(t.Context(), nil, auth, mockServiceBuilder{handler: http.NotFoundHandler()}, "authTest")
+	require.Error(t, err)
+}
+
+func TestForwardAuthPathRequiresService(t *testing.T) {
+	auth := dynamic.ForwardAuth{
+		Address: "http://auth.example.com",
+		Path:    "/verify",
+	}
+
+	_, err := NewForward(t.Context(), nil, auth, nil, "authTest")
+	require.Error(t, err)
+}
+
+func TestForwardAuthServiceBuilderError(t *testing.T) {
+	auth := dynamic.ForwardAuth{Service: "auth@file"}
+
+	_, err := NewForward(t.Context(), nil, auth, mockServiceBuilder{err: errors.New("boom")}, "authTest")
+	require.Error(t, err)
+}
+
+func TestForwardAuthServiceMaxResponseBodySize(t *testing.T) {
+	authService := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "this body is definitely too large")
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	maxResponseBodySize := int64(4)
+	auth := dynamic.ForwardAuth{
+		Service:             "auth@file",
+		MaxResponseBodySize: &maxResponseBodySize,
+	}
+
+	middleware, err := NewForward(t.Context(), next, auth, mockServiceBuilder{handler: authService}, "authTest")
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(middleware)
+	t.Cleanup(ts.Close)
+
+	req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+	res, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	require.NoError(t, res.Body.Close())
+
+	assert.Equal(t, http.StatusUnauthorized, res.StatusCode)
+}
+
+func TestForwardAuthServiceRelativeRedirect(t *testing.T) {
+	authService := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/login?rd=%2Fdashboard")
+		w.WriteHeader(http.StatusFound)
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	auth := dynamic.ForwardAuth{Service: "auth@file"}
+
+	middleware, err := NewForward(t.Context(), next, auth, mockServiceBuilder{handler: authService}, "authTest")
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(middleware)
+	t.Cleanup(ts.Close)
+
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	require.NoError(t, res.Body.Close())
+
+	assert.Equal(t, http.StatusFound, res.StatusCode)
+	assert.Equal(t, "/login?rd=%2Fdashboard", res.Header.Get("Location"))
+}
+
+// TestForwardAuthServiceRelativeRedirectTLS ensures a relative Location is not resolved against the
+// http placeholder URL, which would downgrade an HTTPS request to plaintext.
+func TestForwardAuthServiceRelativeRedirectTLS(t *testing.T) {
+	authService := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/login")
+		w.WriteHeader(http.StatusFound)
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	auth := dynamic.ForwardAuth{Service: "auth@file"}
+
+	middleware, err := NewForward(t.Context(), next, auth, mockServiceBuilder{handler: authService}, "authTest")
+	require.NoError(t, err)
+
+	ts := httptest.NewTLSServer(middleware)
+	t.Cleanup(ts.Close)
+
+	client := ts.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	require.NoError(t, res.Body.Close())
+
+	assert.Equal(t, http.StatusFound, res.StatusCode)
+
+	location := res.Header.Get("Location")
+	assert.Equal(t, "/login", location)
+	assert.NotContains(t, location, "http://")
+}
+
+// TestForwardAuthServiceRequestShape ensures the authentication request handed to the service is
+// shaped like a server-side request: the service handler is a handler, not an http.Client.
+func TestForwardAuthServiceRequestShape(t *testing.T) {
+	var gotBodyNil bool
+	var gotRequestURI string
+
+	authService := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBodyNil = r.Body == nil
+		gotRequestURI = r.RequestURI
+		w.WriteHeader(http.StatusOK)
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "traefik")
+	})
+
+	auth := dynamic.ForwardAuth{Service: "auth@file", Path: "/verify?a=b"}
+
+	middleware, err := NewForward(t.Context(), next, auth, mockServiceBuilder{handler: authService}, "authTest")
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(middleware)
+	t.Cleanup(ts.Close)
+
+	req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+	res, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	require.NoError(t, res.Body.Close())
+
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.False(t, gotBodyNil)
+	assert.Equal(t, "/verify?a=b", gotRequestURI)
+}
+
+func TestForwardAuthServiceResponseRecorder(t *testing.T) {
+	authService := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Auth-User", "user@example.com")
+		w.WriteHeader(http.StatusOK)
+		w.Header().Set("X-Auth-Late", "late")
+		fmt.Fprint(w, "chunk-1")
+		require.NoError(t, http.NewResponseController(w).Flush())
+		fmt.Fprint(w, "chunk-2")
+
+		_, _, err := http.NewResponseController(w).Hijack()
+		require.ErrorIs(t, err, http.ErrNotSupported)
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "user@example.com", r.Header.Get("X-Auth-User"))
+		assert.Empty(t, r.Header.Get("X-Auth-Late"))
+		fmt.Fprintln(w, "traefik")
+	})
+
+	auth := dynamic.ForwardAuth{Service: "auth@file", AuthResponseHeaders: []string{"X-Auth-User", "X-Auth-Late"}}
+
+	middleware, err := NewForward(t.Context(), next, auth, mockServiceBuilder{handler: authService}, "authTest")
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(middleware)
+	t.Cleanup(ts.Close)
+
+	req := testhelpers.MustNewRequest(http.MethodGet, ts.URL, nil)
+	res, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+
+	body, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	require.NoError(t, res.Body.Close())
+
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "traefik\n", string(body))
+}
+
+func TestForwardAuthServiceTimeout(t *testing.T) {
+	authService := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+		w.WriteHeader(http.StatusGatewayTimeout)
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	auth := dynamic.ForwardAuth{Service: "auth@file", Timeout: ptypes.Duration(50 * time.Millisecond)}
+
+	middleware, err := NewForward(t.Context(), next, auth, mockServiceBuilder{handler: authService}, "authTest")
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	middleware.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "http://example.com/", nil))
+
+	assert.Equal(t, http.StatusGatewayTimeout, recorder.Code)
+}
+
+func TestForwardAuthServiceHost(t *testing.T) {
+	authService := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "user@example.com", r.Host)
+		assert.Equal(t, "forwardauth", r.URL.Host)
+		assert.Equal(t, "user@example.com", r.Header.Get(forwardedheaders.XForwardedHost))
+		w.WriteHeader(http.StatusOK)
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	middleware, err := NewForward(t.Context(), next, dynamic.ForwardAuth{Service: "auth@file"}, mockServiceBuilder{handler: authService}, "authTest")
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.Host = "user@example.com"
+	recorder := httptest.NewRecorder()
+	middleware.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
 }
