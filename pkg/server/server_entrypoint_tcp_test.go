@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -30,7 +31,62 @@ import (
 	"github.com/traefik/traefik/v3/pkg/tcp"
 	"github.com/traefik/traefik/v3/pkg/tls/generate"
 	"golang.org/x/net/http2"
+	"golang.org/x/time/rate"
 )
+
+func TestAcceptTCPWithKeepAlive(t *testing.T) {
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	var clients []net.Conn
+	for range 3 {
+		client, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		clients = append(clients, client)
+	}
+	t.Cleanup(func() {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+	})
+
+	var logs bytes.Buffer
+	logger := zerolog.New(&logs).Level(zerolog.WarnLevel)
+	failures := &keepAliveFailures{logger: &logger, warnings: rate.Sometimes{First: 1, Interval: time.Minute}}
+
+	var failed []*net.TCPConn
+	accepted, err := acceptTCPWithKeepAlive(listener.AcceptTCP, func(conn *net.TCPConn) error {
+		if len(failed) < 2 {
+			failed = append(failed, conn)
+			return syscall.ECONNRESET
+		}
+		return configureTCPKeepAlive(conn)
+	}, failures)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = accepted.Close() })
+
+	require.Len(t, failed, 2)
+	for _, conn := range failed {
+		assert.NotSame(t, conn, accepted)
+		// A closed TCPConn rejects operations rather than retaining the accepted socket.
+		assert.ErrorIs(t, conn.SetKeepAlive(true), net.ErrClosed)
+	}
+
+	// Only the first failure is reported as a warning, the next ones are rate limited.
+	assert.Equal(t, 1, strings.Count(logs.String(), "Closed accepted connections whose TCP keep-alive could not be set"))
+	assert.Equal(t, int64(1), failures.dropped.Load())
+}
+
+func TestAcceptTCPWithKeepAlive_listenerError(t *testing.T) {
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	require.NoError(t, listener.Close())
+
+	logger := zerolog.Nop()
+	_, err = acceptTCPWithKeepAlive(listener.AcceptTCP, configureTCPKeepAlive, &keepAliveFailures{logger: &logger})
+	require.ErrorIs(t, err, net.ErrClosed)
+}
 
 func TestShutdownHijacked(t *testing.T) {
 	router, err := tcprouter.NewRouter(nil)

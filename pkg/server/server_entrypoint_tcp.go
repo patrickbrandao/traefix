@@ -36,6 +36,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/server/service/kerberos"
 	"github.com/traefik/traefik/v3/pkg/tcp"
 	"github.com/traefik/traefik/v3/pkg/types"
+	"golang.org/x/time/rate"
 )
 
 type key string
@@ -439,26 +440,77 @@ func writeCloser(conn net.Conn) (tcp.WriteCloser, error) {
 // connections.
 type tcpKeepAliveListener struct {
 	*net.TCPListener
+
+	failures *keepAliveFailures
+}
+
+func newTCPKeepAliveListener(ctx context.Context, listener *net.TCPListener) tcpKeepAliveListener {
+	return tcpKeepAliveListener{
+		TCPListener: listener,
+		failures: &keepAliveFailures{
+			logger:   log.Ctx(ctx),
+			warnings: rate.Sometimes{First: 1, Interval: time.Minute},
+		},
+	}
 }
 
 func (ln tcpKeepAliveListener) Accept() (net.Conn, error) {
-	tc, err := ln.AcceptTCP()
-	if err != nil {
-		return nil, err
-	}
+	return acceptTCPWithKeepAlive(ln.AcceptTCP, configureTCPKeepAlive, ln.failures)
+}
 
+func configureTCPKeepAlive(tc *net.TCPConn) error {
 	if err := tc.SetKeepAlive(true); err != nil {
-		return nil, err
+		return err
 	}
 
 	if err := tc.SetKeepAlivePeriod(3 * time.Minute); err != nil {
 		// Some systems, such as OpenBSD, have no user-settable per-socket TCP keepalive options.
 		if !errors.Is(err, syscall.ENOPROTOOPT) {
-			return nil, err
+			return err
 		}
 	}
 
-	return tc, nil
+	return nil
+}
+
+func acceptTCPWithKeepAlive(accept func() (*net.TCPConn, error), configure func(*net.TCPConn) error, failures *keepAliveFailures) (net.Conn, error) {
+	for {
+		tc, err := accept()
+		if err != nil {
+			return nil, err
+		}
+
+		// A peer resetting the connection right after it was accepted makes the keep-alive options fail on some systems
+		// (ECONNRESET on FreeBSD, EINVAL on illumos and macOS). Returning the error would stop the entry point for good,
+		// so only this connection is dropped.
+		if err := configure(tc); err != nil {
+			_ = tc.Close()
+			failures.record(err)
+			continue
+		}
+
+		return tc, nil
+	}
+}
+
+// keepAliveFailures reports the connections closed because their TCP keep-alive could not be set.
+type keepAliveFailures struct {
+	logger *zerolog.Logger
+	// dropped counts the connections closed since the last warning.
+	dropped  atomic.Int64
+	warnings rate.Sometimes
+}
+
+func (f *keepAliveFailures) record(err error) {
+	f.dropped.Add(1)
+	f.logger.Debug().Err(err).Msg("Closed an accepted connection whose TCP keep-alive could not be set")
+
+	// A failure on every connection would leave the entry point serving nothing, so it is also reported as a warning,
+	// rate limited as scanners resetting connections trigger it routinely.
+	f.warnings.Do(func() {
+		f.logger.Warn().Err(err).Int64("connections", f.dropped.Swap(0)).
+			Msg("Closed accepted connections whose TCP keep-alive could not be set")
+	})
 }
 
 func buildProxyProtocolListener(ctx context.Context, entryPoint *static.EntryPoint, listener net.Listener) (net.Listener, error) {
@@ -540,7 +592,7 @@ func buildListener(ctx context.Context, name string, config *static.EntryPoint) 
 	if !ok {
 		return nil, fmt.Errorf("listener type %T is not supported for TCP entrypoints", listener)
 	}
-	listener = tcpKeepAliveListener{tcpListener}
+	listener = newTCPKeepAliveListener(ctx, tcpListener)
 
 	if config.ProxyProtocol != nil {
 		listener, err = buildProxyProtocolListener(ctx, config, listener)
