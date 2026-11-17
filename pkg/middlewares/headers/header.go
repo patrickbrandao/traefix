@@ -22,6 +22,13 @@ type Header struct {
 	hasCorsHeaders     bool
 	headers            *dynamic.Headers
 	allowOriginRegexes []*regexp.Regexp
+	replaceReqRegexes  map[string]headerReplacement
+	replaceRespRegexes map[string]headerReplacement
+}
+
+type headerReplacement struct {
+	regexp      *regexp.Regexp
+	replacement string
 }
 
 // NewHeader constructs a new header instance from supplied frontend header struct.
@@ -38,13 +45,76 @@ func NewHeader(next http.Handler, cfg dynamic.Headers) (*Header, error) {
 		regexes[i] = reg
 	}
 
+	replaceReqRegexes, err := compileHeaderReplacements(cfg.ReplaceRequestHeadersRegex)
+	if err != nil {
+		return nil, fmt.Errorf("replaceRequestHeadersRegex: %w", err)
+	}
+
+	replaceRespRegexes, err := compileHeaderReplacements(cfg.ReplaceResponseHeadersRegex)
+	if err != nil {
+		return nil, fmt.Errorf("replaceResponseHeadersRegex: %w", err)
+	}
+
 	return &Header{
 		next:               next,
 		headers:            &cfg,
 		hasCustomHeaders:   hasCustomHeaders,
 		hasCorsHeaders:     hasCorsHeaders,
 		allowOriginRegexes: regexes,
+		replaceReqRegexes:  replaceReqRegexes,
+		replaceRespRegexes: replaceRespRegexes,
 	}, nil
+}
+
+func compileHeaderReplacements(cfg map[string]dynamic.ReplaceHeaderRegex) (map[string]headerReplacement, error) {
+	if len(cfg) == 0 {
+		return nil, nil
+	}
+
+	replacements := make(map[string]headerReplacement, len(cfg))
+	for header, rep := range cfg {
+		// An empty regex matches between every character and would mangle the whole value.
+		if rep.Regex == "" {
+			return nil, fmt.Errorf("empty regex for header %q", header)
+		}
+
+		reg, err := regexp.Compile(rep.Regex)
+		if err != nil {
+			return nil, fmt.Errorf("parsing regex for header %q: %w", header, err)
+		}
+
+		replacements[http.CanonicalHeaderKey(header)] = headerReplacement{
+			regexp:      reg,
+			replacement: rep.Replacement,
+		}
+	}
+
+	return replacements, nil
+}
+
+// replaceHeaderValues applies the replacements to every value of the headers, so that multi-valued headers such as Set-Cookie are kept.
+// A value replaced by an empty string is removed.
+func replaceHeaderValues(h http.Header, replacements map[string]headerReplacement) {
+	for header, rep := range replacements {
+		values := h.Values(header)
+		if len(values) == 0 {
+			continue
+		}
+
+		newValues := make([]string, 0, len(values))
+		for _, value := range values {
+			if value = rep.regexp.ReplaceAllString(value, rep.replacement); value != "" {
+				newValues = append(newValues, value)
+			}
+		}
+
+		if len(newValues) == 0 {
+			h.Del(header)
+			continue
+		}
+
+		h[header] = newValues
+	}
 }
 
 func (s *Header) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
@@ -77,6 +147,8 @@ func (s *Header) PostRequestModifyResponseHeaders(res *http.Response) error {
 			res.Header.Set(header, value)
 		}
 	}
+
+	replaceHeaderValues(res.Header, s.replaceRespRegexes)
 
 	if res != nil && res.Request != nil {
 		match, ok := s.matchOrigin(res.Request.Header.Get("Origin"))
@@ -137,6 +209,8 @@ func (s *Header) modifyCustomRequestHeaders(req *http.Request) {
 			req.Header.Set(header, value)
 		}
 	}
+
+	replaceHeaderValues(req.Header, s.replaceReqRegexes)
 }
 
 // processCorsHeaders processes the incoming request,

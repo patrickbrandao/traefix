@@ -1,6 +1,7 @@
 package headers
 
 import (
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -644,6 +645,193 @@ func TestNewHeader_customResponseHeaders(t *testing.T) {
 			mid.ServeHTTP(rw, req)
 
 			assert.Equal(t, test.expected, rw.Result().Header)
+		})
+	}
+}
+
+func TestNewHeader_replaceRequestHeadersRegex(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		replace  map[string]dynamic.ReplaceHeaderRegex
+		custom   map[string]string
+		header   http.Header
+		expected http.Header
+	}{
+		{
+			desc: "replace a header",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "^b(.{2})$", Replacement: "f$1"},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{"Foo": {"far"}},
+		},
+		{
+			desc: "non canonical header name",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"foo": {Regex: "^b(.{2})$", Replacement: "f$1"},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{"Foo": {"far"}},
+		},
+		{
+			desc: "no match",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "^b(.{3})$", Replacement: "f$1"},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{"Foo": {"bar"}},
+		},
+		{
+			desc: "absent header is not added",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Too": {Regex: ".*", Replacement: "foo"},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{"Foo": {"bar"}},
+		},
+		{
+			desc: "every value is replaced",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "^b", Replacement: "f"},
+			},
+			header:   http.Header{"Foo": {"bar", "baz", "qux"}},
+			expected: http.Header{"Foo": {"far", "faz", "qux"}},
+		},
+		{
+			desc: "value replaced by an empty string is removed",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "^bar$", Replacement: ""},
+			},
+			header:   http.Header{"Foo": {"bar", "baz"}},
+			expected: http.Header{"Foo": {"baz"}},
+		},
+		{
+			desc: "header removed when every value is replaced by an empty string",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: ".+", Replacement: ""},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{},
+		},
+		{
+			desc:   "replacement applied after custom headers",
+			custom: map[string]string{"Foo": "bar"},
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "^b", Replacement: "f"},
+			},
+			header:   http.Header{},
+			expected: http.Header{"Foo": {"far"}},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			mid, err := NewHeader(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {}), dynamic.Headers{
+				CustomRequestHeaders:       test.custom,
+				ReplaceRequestHeadersRegex: test.replace,
+			})
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodGet, "/foo", nil)
+			req.Header = test.header
+
+			rw := httptest.NewRecorder()
+			mid.ServeHTTP(rw, req)
+
+			assert.Equal(t, http.StatusOK, rw.Code)
+			assert.Equal(t, test.expected, req.Header)
+		})
+	}
+}
+
+func TestNewHeader_replaceResponseHeadersRegex(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		replace  map[string]dynamic.ReplaceHeaderRegex
+		header   http.Header
+		expected http.Header
+	}{
+		{
+			desc: "replace the Location host",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Location": {Regex: `^https?://backend\.internal(:\d+)?/`, Replacement: "https://example.com/"},
+			},
+			header:   http.Header{"Location": {"http://backend.internal:8080/login"}},
+			expected: http.Header{"Location": {"https://example.com/login"}},
+		},
+		{
+			desc: "every Set-Cookie is kept",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Set-Cookie": {Regex: `; Domain=backend\.internal`, Replacement: "; Domain=example.com"},
+			},
+			header: http.Header{"Set-Cookie": {
+				"a=1; Domain=backend.internal",
+				"b=2; Path=/",
+			}},
+			expected: http.Header{"Set-Cookie": {
+				"a=1; Domain=example.com",
+				"b=2; Path=/",
+			}},
+		},
+		{
+			desc: "absent header is not added",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Location": {Regex: ".*", Replacement: "foo"},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{"Foo": {"bar"}},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				maps.Copy(rw.Header(), test.header)
+				rw.WriteHeader(http.StatusOK)
+			})
+
+			mid, err := NewHeader(next, dynamic.Headers{ReplaceResponseHeadersRegex: test.replace})
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodGet, "/foo", nil)
+			rw := httptest.NewRecorder()
+			mid.ServeHTTP(rw, req)
+
+			assert.Equal(t, http.StatusOK, rw.Code)
+			assert.Equal(t, test.expected, rw.Result().Header)
+		})
+	}
+}
+
+func TestNewHeader_replaceHeadersRegexInvalid(t *testing.T) {
+	testCases := []struct {
+		desc string
+		cfg  dynamic.Headers
+	}{
+		{
+			desc: "invalid request regex",
+			cfg: dynamic.Headers{ReplaceRequestHeadersRegex: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "(", Replacement: "bar"},
+			}},
+		},
+		{
+			desc: "empty response regex",
+			cfg: dynamic.Headers{ReplaceResponseHeadersRegex: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Replacement: "bar"},
+			}},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := NewHeader(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {}), test.cfg)
+			require.Error(t, err)
 		})
 	}
 }

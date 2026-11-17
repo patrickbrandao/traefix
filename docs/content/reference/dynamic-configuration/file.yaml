@@ -259,6 +259,20 @@ http:
         customResponseHeaders:
           name0: foobar
           name1: foobar
+        replaceRequestHeadersRegex:
+          name0:
+            regex: foobar
+            replacement: foobar
+          name1:
+            regex: foobar
+            replacement: foobar
+        replaceResponseHeadersRegex:
+          name0:
+            regex: foobar
+            replacement: foobar
+          name1:
+            regex: foobar
+            replacement: foobar
         accessControlAllowCredentials: true
         accessControlAllowHeaders:
           - foobar
