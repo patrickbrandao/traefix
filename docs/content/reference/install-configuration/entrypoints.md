@@ -534,6 +534,10 @@ it means port N cannot be used by another UDP `entryPoint`.
 Since HTTP/3 requires the use of TLS,
 only routers with TLS enabled will be usable with HTTP/3.
 
+When the `entryPoint` address is a literal IPv4 address (for example `0.0.0.0:443`),
+the HTTP/3 UDP listener only accepts IPv4 traffic, while the TCP listener keeps accepting IPv6 as well.
+Use an address without host (for example `:443`) to serve HTTP/3 over both IPv4 and IPv6.
+
 ### ProxyProtocol and Load-Balancers
 
 The replacement of the remote client address will occur only for IP addresses listed in `trustedIPs`. This is where you specify your load balancer IPs or CIDR ranges.

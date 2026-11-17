@@ -36,6 +36,21 @@ const (
 	maxHTTP3InitialPacketSize = 1452
 )
 
+// http3ListenNetwork returns the network to use when listening for the HTTP/3 UDP
+// packet conn for the given entry point address. It only narrows down to "udp4"
+// when the address host is a literal IPv4 address (including 0.0.0.0), as some CNIs
+// do not deliver IPv4 packets to the dual-stack socket Go opens for "udp" (https://github.com/traefik/traefik/issues/13633).
+// Every other case (unspecified host, IPv6 literal, or hostname) keeps using the dual-stack "udp" network.
+func http3ListenNetwork(address string) string {
+	if host, _, err := net.SplitHostPort(address); err == nil {
+		if ip := net.ParseIP(host); ip != nil && ip.To4() != nil {
+			return "udp4"
+		}
+	}
+
+	return "udp"
+}
+
 func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint, httpsServer *httpServer) (*http3server, error) {
 	var conn net.PacketConn
 	var err error
@@ -63,7 +78,7 @@ func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint,
 
 	if conn == nil {
 		listenConfig := newListenConfig(config)
-		conn, err = listenConfig.ListenPacket(ctx, "udp", config.GetAddress())
+		conn, err = listenConfig.ListenPacket(ctx, http3ListenNetwork(config.GetAddress()), config.GetAddress())
 		if err != nil {
 			return nil, fmt.Errorf("starting listener: %w", err)
 		}
