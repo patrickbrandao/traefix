@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +74/-4 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/provider/k8s/ingress-nginx |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,22 @@ Correção localizada em um arquivo com teste. Status needs-review, sem review d
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- Mesmo bug de #13793, agora no provider ingress-nginx: `loadCertificates` parava no primeiro `spec.tls[]` com Secret ausente ou sem keypair e descartava os certificados válidos seguintes do Ingress.
+- Bug adicional que o PR corrige: o Secret era marcado como `loaded` **antes** de ser lido com sucesso. Se a leitura falhava uma vez, as referências seguintes à mesma Secret no mesmo rebuild eram puladas em silêncio.
+- A correção junta os erros (`errors.Join`) e marca `loaded` só depois do sucesso. O chamador continua registrando o erro.
+- Sem impacto de segurança: o escopo de namespace das Secrets não muda.
+
+**Ajustes**
+
+- O teste novo foi mesclado ao `build_test.go` existente (que o PR criava do zero) e adaptado ao lint `embedlit`.
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress-nginx/` ok.
+- `golangci-lint run ./pkg/provider/kubernetes/ingress-nginx/...`: 0 issues.

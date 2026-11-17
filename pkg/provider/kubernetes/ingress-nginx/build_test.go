@@ -109,3 +109,57 @@ func TestBackendEndpointsCacheKey(t *testing.T) {
 	// A backend without a Service cannot be keyed and must bypass the cache.
 	assert.Empty(t, backendEndpointsCacheKey("testing", netv1.IngressBackend{}, IngressConfig{}))
 }
+
+func TestLoadCertificatesContinuesAfterMissingSecret(t *testing.T) {
+	t.Parallel()
+
+	const namespace = "default"
+
+	validFirst := &corev1.Secret{
+		Name: "valid-first", Namespace: namespace,
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			corev1.TLSCertKey:       []byte("first-certificate"),
+			corev1.TLSPrivateKeyKey: []byte("first-key"),
+		},
+	}
+	validLast := &corev1.Secret{
+		Name: "valid-last", Namespace: namespace,
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			corev1.TLSCertKey:       []byte("last-certificate"),
+			corev1.TLSPrivateKeyKey: []byte("last-key"),
+		},
+	}
+
+	kubeClient := kubefake.NewClientset(validFirst, validLast)
+	client := newClient(kubeClient)
+	_, err := client.WatchAll(t.Context(), "", "")
+	require.NoError(t, err)
+
+	provider := Provider{k8sClient: client}
+	ingress := &netv1.Ingress{
+		Name: "testing", Namespace: namespace,
+		Spec: netv1.IngressSpec{
+			TLS: []netv1.IngressTLS{
+				{SecretName: validFirst.Name},
+				{SecretName: "missing"},
+				{SecretName: validLast.Name},
+			},
+		},
+	}
+
+	certs := make(map[string]certPair)
+	loaded := make(map[string]bool)
+	err = provider.loadCertificates(t.Context(), ingress, certs, loaded)
+
+	require.ErrorContains(t, err, "default/missing")
+	assert.Equal(t, map[string]certPair{
+		"default/valid-first": {Cert: "first-certificate", Key: "first-key"},
+		"default/valid-last":  {Cert: "last-certificate", Key: "last-key"},
+	}, certs)
+	assert.Equal(t, map[string]bool{
+		"default/valid-first": true,
+		"default/valid-last":  true,
+	}, loaded)
+}
