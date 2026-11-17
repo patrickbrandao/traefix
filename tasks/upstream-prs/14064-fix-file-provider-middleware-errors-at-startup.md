@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +189/-1 em 2 arquivos |
 | Labels | status/1-needs-design-review, kind/bug/fix, size/L, area/provider |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,18 @@ Mexe no aggregator (nucleo de configuracao). Label status/1-needs-design-review;
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- A corrida existe. Com throttling ligado, o `Provide` do file provider retornava assim que a mensagem entrava no ring channel, e a goroutine de encaminhamento podia ser escalonada depois de o provider interno já ter enviado a sua configuração. Como o `ConfigurationWatcher` aplica a configuração quando chega a do provider interno, routers internos que usam middlewares de entrypoint vindos do file provider logavam "middleware does not exist" no boot.
+- A solução: a primeira mensagem não passa pelo ring channel e, se for enviada durante o `Provide`, é entregue antes do retorno, garantido pelo handshake `synced`/`stopped`. As mensagens seguintes continuam com throttling.
+- Não há risco de deadlock: o canal do `ConfigurationWatcher` tem buffer de 100 e o receptor já está rodando antes do aggregator. Providers que mandam a primeira mensagem de forma assíncrona não ficam bloqueados (o handshake é aceito logo). Se o provider retorna erro sem enviar nada, o `Provide` retorna logo. Os demais providers são lançados em `safe.Go`, então a espera de um não atrasa os outros.
+- O comportamento do throttling depois da primeira mensagem não muda (espera `providerThrottleDuration` antes de consumir o ring).
+- Lint: o teste ignorava o erro recebido de `errCh` (errcheck).
+- Os testes usam tempos curtos (100 ms), o que pode gerar flakiness em CI muito carregado, mas passaram com `-race -count=3`.
+
+**Ajustes:** só a correção do errcheck no teste (o erro recebido vai para a mensagem de falha).
+
+**Testes:** `go build ./pkg/...` ok; `go test -race -count=3 ./pkg/provider/aggregator/` ok; `go test ./pkg/server/` ok; `golangci-lint run ./pkg/provider/aggregator/...` com 0 issues.

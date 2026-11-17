@@ -115,12 +115,15 @@ func (p *DynConfBuilder) buildTCPServiceConfiguration(ctx context.Context, conta
 		}
 	}
 
-	// Keep an empty server load-balancer for non-running containers.
-	if container.Status != "" && container.Status != containertypes.StateRunning {
-		return nil
-	}
-	// Keep an empty server load-balancer for unhealthy containers.
-	if container.Health != "" && container.Health != containertypes.Healthy {
+	// Drop any label-defined servers to keep the load-balancer empty (503 instead of 500).
+	// https://github.com/traefik/traefik/issues/13261
+	if (container.Status != "" && container.Status != containertypes.StateRunning) ||
+		(container.Health != "" && container.Health != containertypes.Healthy) {
+		for _, service := range configuration.Services {
+			if service.LoadBalancer != nil {
+				service.LoadBalancer.Servers = nil
+			}
+		}
 		return nil
 	}
 
@@ -144,12 +147,15 @@ func (p *DynConfBuilder) buildUDPServiceConfiguration(ctx context.Context, conta
 		}
 	}
 
-	// Keep an empty server load-balancer for non-running containers.
-	if container.Status != "" && container.Status != containertypes.StateRunning {
-		return nil
-	}
-	// Keep an empty server load-balancer for unhealthy containers.
-	if container.Health != "" && container.Health != containertypes.Healthy {
+	// Drop any label-defined servers to keep the load-balancer empty (503 instead of 500).
+	// https://github.com/traefik/traefik/issues/13261
+	if (container.Status != "" && container.Status != containertypes.StateRunning) ||
+		(container.Health != "" && container.Health != containertypes.Healthy) {
+		for _, service := range configuration.Services {
+			if service.LoadBalancer != nil {
+				service.LoadBalancer.Servers = nil
+			}
+		}
 		return nil
 	}
 
@@ -166,7 +172,9 @@ func (p *DynConfBuilder) buildUDPServiceConfiguration(ctx context.Context, conta
 func (p *DynConfBuilder) buildServiceConfiguration(ctx context.Context, container dockerData, configuration *dynamic.HTTPConfiguration) error {
 	serviceName := getServiceName(container)
 
+	autoCreatedService := false
 	if len(configuration.Services) == 0 {
+		autoCreatedService = true
 		configuration.Services = make(map[string]*dynamic.Service)
 		lb := &dynamic.ServersLoadBalancer{}
 		lb.SetDefaults()
@@ -175,23 +183,51 @@ func (p *DynConfBuilder) buildServiceConfiguration(ctx context.Context, containe
 		}
 	}
 
-	// Keep an empty server load-balancer for non-running containers.
-	if container.Status != "" && container.Status != containertypes.StateRunning {
-		return nil
-	}
-	// Keep an empty server load-balancer for unhealthy containers.
-	if container.Health != "" && container.Health != containertypes.Healthy {
+	// Drop any label-defined servers to keep the load-balancer empty (503 instead of 500).
+	// https://github.com/traefik/traefik/issues/13261
+	if (container.Status != "" && container.Status != containertypes.StateRunning) ||
+		(container.Health != "" && container.Health != containertypes.Healthy) {
+		for _, service := range configuration.Services {
+			if service.LoadBalancer != nil {
+				service.LoadBalancer.Servers = nil
+			}
+		}
 		return nil
 	}
 
 	for name, service := range configuration.Services {
 		ctx := log.Ctx(ctx).With().Str(logs.ServiceName, name).Logger().WithContext(ctx)
 		if err := p.addServer(ctx, container, service.LoadBalancer); err != nil {
+			// A service nobody uses must not take down the routers of the container,
+			// e.g. a router to api@internal on a macvlan container without port (upstream issue 13532).
+			if autoCreatedService && !defaultServiceRequired(configuration, name) {
+				log.Ctx(ctx).Warn().Err(err).
+					Msgf("Ignoring auto-created service %q: no router references it", name)
+				delete(configuration.Services, name)
+				continue
+			}
 			return fmt.Errorf("service %q error: %w", name, err)
 		}
 	}
 
 	return nil
+}
+
+// defaultServiceRequired reports whether a router may use the auto-created service:
+// provider.BuildRouterConfiguration creates a default router when there is none,
+// and links routers without an explicit service to the only service of the container.
+func defaultServiceRequired(configuration *dynamic.HTTPConfiguration, serviceName string) bool {
+	if len(configuration.Routers) == 0 {
+		return true
+	}
+
+	for _, router := range configuration.Routers {
+		if router.Service == "" || router.Service == serviceName {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (p *DynConfBuilder) keepContainer(ctx context.Context, container dockerData) bool {
@@ -233,9 +269,19 @@ func (p *DynConfBuilder) keepContainer(ctx context.Context, container dockerData
 	return true
 }
 
+// shouldKeepEmptyService reports whether a Swarm service without tasks or a VIP should retain an empty load-balancer.
+func (p *DynConfBuilder) shouldKeepEmptyService(container dockerData) bool {
+	return p.swarm && p.AllowEmptyServices && len(container.NetworkSettings.Networks) == 0
+}
+
 func (p *DynConfBuilder) addServerTCP(ctx context.Context, container dockerData, loadBalancer *dynamic.TCPServersLoadBalancer) error {
 	if loadBalancer == nil {
 		return errors.New("load-balancer is not defined")
+	}
+
+	if p.shouldKeepEmptyService(container) {
+		loadBalancer.Servers = nil
+		return nil
 	}
 
 	if len(loadBalancer.Servers) == 0 {
@@ -264,6 +310,11 @@ func (p *DynConfBuilder) addServerUDP(ctx context.Context, container dockerData,
 		return errors.New("load-balancer is not defined")
 	}
 
+	if p.shouldKeepEmptyService(container) {
+		loadBalancer.Servers = nil
+		return nil
+	}
+
 	if len(loadBalancer.Servers) == 0 {
 		loadBalancer.Servers = []dynamic.UDPServer{{}}
 	}
@@ -288,6 +339,11 @@ func (p *DynConfBuilder) addServerUDP(ctx context.Context, container dockerData,
 func (p *DynConfBuilder) addServer(ctx context.Context, container dockerData, loadBalancer *dynamic.ServersLoadBalancer) error {
 	if loadBalancer == nil {
 		return errors.New("load-balancer is not defined")
+	}
+
+	if p.shouldKeepEmptyService(container) {
+		loadBalancer.Servers = nil
+		return nil
 	}
 
 	if len(loadBalancer.Servers) == 0 {

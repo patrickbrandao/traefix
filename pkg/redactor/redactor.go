@@ -7,6 +7,7 @@ import (
 
 	"github.com/mitchellh/copystructure"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
+	"github.com/traefik/traefik/v3/pkg/config/static"
 	"github.com/traefik/traefik/v3/pkg/types"
 	"mvdan.cc/xurls/v2"
 )
@@ -70,7 +71,8 @@ func doOnJSON(input string) string {
 }
 
 func doOnStruct(field reflect.Value, tag string, redactByDefault bool) error {
-	if field.Type().AssignableTo(reflect.TypeFor[dynamic.PluginConf]()) {
+	if field.Type().AssignableTo(reflect.TypeFor[dynamic.PluginConf]()) ||
+		field.Type().AssignableTo(reflect.TypeFor[static.PluginConf]()) {
 		resetPlugin(field)
 		return nil
 	}

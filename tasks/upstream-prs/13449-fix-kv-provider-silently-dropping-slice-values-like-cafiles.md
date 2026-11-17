@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +52/-0 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/provider/kv |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,16 @@ PR base v3.7 (portar para master), e um maintainer pediu rebase para v3.6. Sem r
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- Bug real: uma chave "pasta" (por exemplo `.../caFiles/` com valor vazio, como a UI do Consul cria) cai em `simplePairs` com a chave `.../caFiles`, depois de normalizada no decode, e colide com o slice `.../caFiles/0..n`. O resultado é que o slice some ou fica vazio, então `caFiles` e listas parecidas são descartadas sem aviso.
+- A correção ignora chaves terminadas em `/` com valor vazio antes de agrupar. Uma chave terminada em `/` com valor não vazio continua valendo (há teste).
+- Mudança de comportamento mínima: uma pasta vazia isolada não gera mais um nó com valor vazio. Isso não tinha significado na configuração.
+- Sem risco de segurança.
+
+**Ajustes:** só um comentário de *porquê* na condição.
+
+**Testes:** `go test ./pkg/config/kv/ ./pkg/provider/kv/...` ok; `go build ./pkg/...` ok; `golangci-lint run ./pkg/config/kv/...` com 0 issues.

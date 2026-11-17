@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +243/-18 em 2 arquivos |
 | Labels | status/1-needs-design-review, area/provider/docker, kind/bug/fix, size/L |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -37,3 +37,16 @@ PR base v3.7 (portar para master). Sem review nem comentários. Status 1-needs-d
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- O bug existe no código atual. Quando o container está unhealthy ou parado (mas é mantido por `allowEmptyServices` ou `allowNonRunning`) e a label define `loadbalancer.server.port`, o servidor decodificado fica no load balancer com URL vazia. Na hora da requisição isso dá `unsupported protocol scheme ""` e o cliente recebe 500 em vez de 503.
+- A correção limpa `Servers` de todos os serviços do container nesses casos, para HTTP, TCP e UDP. É simples e não muda o caso saudável.
+- Os testes cobrem a combinação com a label de porta, que antes não era testada.
+- Sem risco de segurança. Há sobreposição com o #13561, que mexe na mesma função mas em outro ponto (porta não resolvida em serviço não referenciado); os dois são compatíveis.
+
+**Ajustes:** nenhum.
+
+**Testes:** `go build ./...` ok; `go test ./pkg/provider/docker/` ok; `golangci-lint run ./pkg/provider/docker/...` com 0 issues.

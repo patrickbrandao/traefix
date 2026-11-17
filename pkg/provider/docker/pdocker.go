@@ -92,13 +92,12 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 			}
 
 			if p.Watch {
-				startStopHandle := func(m eventtypes.Message) {
+				startStopHandle := func(m eventtypes.Message) error {
 					logger.Debug().Msgf("Provider event received %+v", m)
 					containers, err := p.listContainers(ctx, dockerClient)
 					if err != nil {
 						logger.Error().Err(err).Msg("Failed to list containers for docker")
-						// Call cancel to get out of the monitor
-						return
+						return err
 					}
 
 					configuration := builder.build(ctx, containers)
@@ -112,18 +111,21 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 						case <-ctx.Done():
 						}
 					}
+
+					return nil
 				}
 
 				res := dockerClient.Events(ctx, client.EventsListOptions{
 					Filters: make(client.Filters).Add("type", string(eventtypes.ContainerEventType)),
 				})
+				healthStatuses := make(map[string]eventtypes.Action)
 				for {
 					select {
 					case event := <-res.Messages:
-						if event.Action == "start" ||
-							event.Action == "die" ||
-							strings.HasPrefix(string(event.Action), "health_status") {
-							startStopHandle(event)
+						if shouldHandleEvent(event, healthStatuses) {
+							if err := startStopHandle(event); err != nil {
+								return err
+							}
 						}
 					case err := <-res.Err:
 						if errors.Is(err, io.EOF) {
@@ -149,6 +151,29 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 	})
 
 	return nil
+}
+
+// shouldHandleEvent reports whether the event may change the configuration.
+// Docker can emit a health_status event on every health check probe, even when the status did not change,
+// so health_status events are skipped when the container status is the same as the last one seen.
+// healthStatuses holds the last health status of each container, and is cleaned up when a container starts or dies.
+func shouldHandleEvent(event eventtypes.Message, healthStatuses map[string]eventtypes.Action) bool {
+	switch {
+	case event.Action == eventtypes.ActionStart || event.Action == eventtypes.ActionDie:
+		delete(healthStatuses, event.Actor.ID)
+		return true
+
+	case strings.HasPrefix(string(event.Action), string(eventtypes.ActionHealthStatus)):
+		if last, ok := healthStatuses[event.Actor.ID]; ok && last == event.Action {
+			return false
+		}
+
+		healthStatuses[event.Actor.ID] = event.Action
+		return true
+
+	default:
+		return false
+	}
 }
 
 func (p *Provider) createClient(ctx context.Context) (*client.Client, error) {
