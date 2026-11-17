@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	otypes "github.com/traefik/traefik/v3/pkg/observability/types"
 	th "github.com/traefik/traefik/v3/pkg/testhelpers"
@@ -116,7 +117,7 @@ func TestPrometheus(t *testing.T) {
 
 	prometheusRegistry.
 		EntryPointReqsCounter().
-		With(map[string][]string{"User-Agent": {"foobar"}}, "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http", "entrypoint", "http").
+		With(map[string][]string{"User-Agent": {"foobar"}}, nil, "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http", "entrypoint", "http").
 		Add(1)
 	prometheusRegistry.
 		EntryPointReqDurationHistogram().
@@ -133,7 +134,7 @@ func TestPrometheus(t *testing.T) {
 
 	prometheusRegistry.
 		RouterReqsCounter().
-		With(nil, "router", "demo", "service", "service1", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
+		With(nil, nil, "router", "demo", "service", "service1", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
 		Add(1)
 	prometheusRegistry.
 		RouterReqsTLSCounter().
@@ -154,7 +155,7 @@ func TestPrometheus(t *testing.T) {
 
 	prometheusRegistry.
 		ServiceReqsCounter().
-		With(map[string][]string{"User-Agent": {"foobar"}}, "service", "service1", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
+		With(map[string][]string{"User-Agent": {"foobar"}}, nil, "service", "service1", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
 		Add(1)
 	prometheusRegistry.
 		ServiceReqsTLSCounter().
@@ -443,15 +444,15 @@ func TestPrometheusMetricRemoval(t *testing.T) {
 	// should be removed after that scrape.
 	prometheusRegistry.
 		EntryPointReqsCounter().
-		With(nil, "entrypoint", "entrypoint2", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
+		With(nil, nil, "entrypoint", "entrypoint2", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
 		Add(1)
 	prometheusRegistry.
 		RouterReqsCounter().
-		With(nil, "router", "router2", "service", "bar@providerName", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
+		With(nil, nil, "router", "router2", "service", "bar@providerName", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
 		Add(1)
 	prometheusRegistry.
 		ServiceReqsCounter().
-		With(nil, "service", "service1", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
+		With(nil, nil, "service", "service1", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
 		Add(1)
 	prometheusRegistry.
 		ServiceServerUpGauge().
@@ -469,15 +470,15 @@ func TestPrometheusMetricRemoval(t *testing.T) {
 	// here the counter examples.
 	prometheusRegistry.
 		EntryPointReqsCounter().
-		With(nil, "entrypoint", "entrypoint1", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
+		With(nil, nil, "entrypoint", "entrypoint1", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
 		Add(1)
 	prometheusRegistry.
 		RouterReqsCounter().
-		With(nil, "router", "foo@providerName", "service", "bar", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
+		With(nil, nil, "router", "foo@providerName", "service", "bar", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
 		Add(1)
 	prometheusRegistry.
 		ServiceReqsCounter().
-		With(nil, "service", "bar@providerName", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
+		With(nil, nil, "service", "bar@providerName", "code", strconv.Itoa(http.StatusOK), "method", http.MethodGet, "protocol", "http").
 		Add(1)
 	prometheusRegistry.
 		ServiceServerUpGauge().
@@ -555,7 +556,7 @@ func TestPrometheusRemovedMetricsReset(t *testing.T) {
 	}
 	prometheusRegistry.
 		ServiceReqsCounter().
-		With(nil, labelNamesValues...).
+		With(nil, nil, labelNamesValues...).
 		Add(3)
 
 	delayForTrackingCompletion()
@@ -569,7 +570,7 @@ func TestPrometheusRemovedMetricsReset(t *testing.T) {
 
 	prometheusRegistry.
 		ServiceReqsCounter().
-		With(nil, labelNamesValues...).
+		With(nil, nil, labelNamesValues...).
 		Add(1)
 
 	delayForTrackingCompletion()
@@ -737,4 +738,22 @@ func buildTimestampAssert(t *testing.T, metricName string) func(family *dto.Metr
 			t.Errorf("metric %s has wrong timestamp %v", metricName, ts)
 		}
 	}
+}
+
+func TestCounterWithHeaders_responseHeaderLabels(t *testing.T) {
+	c := newCounterWithHeadersFrom(prometheus.CounterOpts{Name: "test_requests_total"},
+		map[string]string{"useragent": "User-Agent", "dup": "X-Req"},
+		map[string]string{"cache": "X-Cache-Status", "dup": "X-Resp"},
+		[]string{"code"})
+
+	reqHeaders := http.Header{"User-Agent": {"foobar"}, "X-Req": {"req"}}
+	respHeaders := http.Header{"X-Cache-Status": {"HIT"}, "X-Resp": {"resp"}}
+
+	require.NotPanics(t, func() {
+		c.With(reqHeaders, respHeaders, "code", "200").Add(1)
+	})
+
+	m := &dto.Metric{}
+	require.NoError(t, c.cv.With(prometheus.Labels{"code": "200", "useragent": "foobar", "dup": "req", "cache": "HIT"}).Write(m))
+	assert.InDelta(t, 1, m.GetCounter().GetValue(), 0)
 }
