@@ -98,7 +98,9 @@ func (r *redisLimiter) Allow(ctx context.Context, source string) (*time.Duration
 
 func (r *redisLimiter) evaluateScript(ctx context.Context, key string) (bool, *time.Duration, error) {
 	if r.rate == rate.Inf {
-		return true, nil, nil
+		// A nil delay would reject the request, while an infinite rate must allow all of them.
+		var noDelay time.Duration
+		return true, &noDelay, nil
 	}
 
 	params := []any{

@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +36/-1 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/middleware |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -37,3 +37,17 @@ Correção pequena, com teste. Afeta qualquer configuração com redis e average
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado.**
+
+Achados: bug confirmado no código atual. Com `average: 0` (`rate.Inf`), `redisLimiter.evaluateScript`
+devolvia delay `nil`, que o `ServeHTTP` interpreta como rejeição, e o backend Redis respondia 429 a toda
+requisição, enquanto o in-memory deixava tudo passar. A correção (delay zero) é mínima e não toca no Redis.
+Nada suspeito no diff.
+
+Ajustes: só o comentário, reescrito para dizer o porquê (delay `nil` significa rejeitar).
+
+Testes: `go test ./pkg/middlewares/ratelimiter/` (novo `TestRedisRateLimitAverageZeroDisablesLimiting` ok),
+`go build ./...` ok, `golangci-lint` 0 issues.
