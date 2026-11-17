@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-acme/lego/v5/challenge"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/traefik/traefik/v3/pkg/safe"
 	"github.com/traefik/traefik/v3/pkg/types"
 )
@@ -645,6 +647,37 @@ func Test_getCertificateRenewDurations(t *testing.T) {
 			renewPeriod, renewInterval := getCertificateRenewDurations(test.certificatesDurations)
 			assert.Equal(t, test.expectRenewPeriod, renewPeriod)
 			assert.Equal(t, test.expectRenewInterval, renewInterval)
+		})
+	}
+}
+
+func Test_parseNetworkStack(t *testing.T) {
+	testCases := []struct {
+		value     string
+		expected  challenge.NetworkStack
+		expectErr bool
+	}{
+		{value: "", expected: challenge.DualStack},
+		{value: "both", expected: challenge.DualStack},
+		{value: "ipv4only", expected: challenge.IPv4Only},
+		{value: "ipv4", expected: challenge.IPv4Only},
+		{value: "ipv6only", expected: challenge.IPv6Only},
+		{value: "ipv6", expected: challenge.IPv6Only},
+		{value: "ipv6-only", expectErr: true},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.value, func(t *testing.T) {
+			t.Parallel()
+
+			networkStack, err := parseNetworkStack(test.value)
+			if test.expectErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, networkStack)
 		})
 	}
 }
