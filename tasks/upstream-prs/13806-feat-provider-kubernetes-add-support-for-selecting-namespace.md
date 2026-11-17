@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +441/-19 em 11 arquivos |
 | Labels | status/0-needs-triage, area/provider/k8s/ingress, size/L, area/provider/k8s/crd, area/provider/k8s, area/provider/k8s/gatewayapi, area/provider/k8s/knative |
-| Status | pendente |
+| Status | rejeitado |
 
 ## O que faz
 
@@ -41,3 +41,20 @@ Permite escolher os namespaces observados por label selector, em vez de listar n
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados**
+
+- **Segurança, fail-open:** `aggregateWatchedNamespaces` devolve a lista estática somada aos namespaces que casam com o seletor. Se o seletor não casa com nenhum namespace (erro de digitação, labels ainda não aplicadas, namespaces criados depois do Traefik) e `namespaces` está vazio, o resultado é uma lista vazia, que o cliente interpreta como **"observar todos os namespaces"**. Uma opção pensada para *restringir* o escopo acaba ampliando o escopo ao cluster inteiro: o Traefik passa a ler Ingresses, Services e Secrets de namespaces que deveriam ficar de fora.
+- Os namespaces só são listados na inicialização: namespaces criados ou rotulados depois são ignorados até reiniciar. A mesma limitação existe no ingress-nginx e é tratada (com problemas) em #13713.
+- O escopo é amplo: altera quatro providers (Kubernetes Ingress, CRD, Gateway e Knative), três deles fora do foco deste grupo, com alto risco de conflito com outras importações.
+- Sem revisão de maintainer nem comentários no upstream.
+
+**Decisão**
+
+Rejeitado na forma atual por causa do fail-open. Para uma reimplementação: um seletor sem nenhum namespace correspondente precisa resultar em "nenhum namespace" (ou em erro), nunca em "todos". E é preciso descobrir namespaces dinamicamente, com um canal de parada por namespace (ver a task de #13713).
+
+**Testes**
+
+Nenhum (nada importado).
