@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/config/runtime"
+	"github.com/traefik/traefik/v3/pkg/fingerprint"
 	"github.com/traefik/traefik/v3/pkg/middlewares/accesslog"
 	"github.com/traefik/traefik/v3/pkg/middlewares/denyrouterrecursion"
 	metricsMiddle "github.com/traefik/traefik/v3/pkg/middlewares/metrics"
@@ -379,6 +380,8 @@ func (m *Manager) buildHTTPHandler(ctx context.Context, router *runtime.RouterIn
 	chain = chain.Append(func(next http.Handler) (http.Handler, error) {
 		return accesslog.NewConcatFieldHandler(next, accesslog.RouterName, routerName), nil
 	})
+
+	chain = chain.Append(fingerprint.WrapRouterHandler(routerName, serviceName))
 
 	// Here we are adding deny handlers for encoded path characters and fragment.
 	// Deny handler are only added for root routers, child routers are protected by their parent router deny handlers.

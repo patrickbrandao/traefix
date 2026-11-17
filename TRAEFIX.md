@@ -43,6 +43,21 @@ WEBUI=1 scripts/traefix/deploy-dev.sh    # recompila a WebUI também
 O container do servidor monta o binário enviado em `/traefik` (bind mount); detalhes do
 servidor em `.private/` (fora do git).
 
+## Recursos de segurança
+
+Especificação: `tmp/report-waf-features.md` (fases 0 a 4). Implementado até agora:
+
+- **Fingerprint por entrypoint** (`entryPoints.<nome>.fingerprint`, fase 1): ID de conexão (ULID),
+  JA3, JA4, Akamai h2 e JA4H calculados com a ordem real dos cabeçalhos em h1, h2 e h2c;
+  cabeçalhos `X-Traefix-*` (prefixo em `headerPrefix`) nas requisições, com remoção dos
+  enviados pelo cliente; exportação assíncrona em lote para uma URL no esquema
+  `traefix.fingerprint/v1`; métricas `traefik_fingerprint_*` em todos os backends. h3 recebe
+  ID, cabeçalhos e registros, sem JA4/JA4H por enquanto. Documentação:
+  `docs/content/reference/install-configuration/entrypoints-fingerprint.md`.
+- Código em `pkg/fingerprint/`; ganchos no upstream em `pkg/server/server_entrypoint_tcp*.go`,
+  `pkg/server/router/router.go`, `pkg/config/static/entrypoints.go` e uma linha por backend em
+  `pkg/observability/metrics/` (métricas em `traefix.go`).
+
 ## Convenções
 
 - Arquivos exclusivos do Traefix ficam separados dos do upstream (`Dockerfile.traefix*`,

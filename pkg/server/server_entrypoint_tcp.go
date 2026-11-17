@@ -45,8 +45,6 @@ type key string
 const (
 	connStateKey       key    = "connState"
 	debugConnectionEnv string = "DEBUG_CONNECTION"
-	// fingerprintPrototypeEnv enables the connection capture prototype until it gets an entry point option.
-	fingerprintPrototypeEnv string = "TRAEFIX_FINGERPRINT_PROTOTYPE"
 )
 
 var (
@@ -139,7 +137,7 @@ func NewTCPEntryPoints(entryPointsConfig static.EntryPoints, hostResolverConfig 
 			OpenConnectionsGauge().
 			With("entrypoint", entryPointName, "protocol", "TCP")
 
-		serverEntryPointsTCP[entryPointName], err = NewTCPEntryPoint(ctx, entryPointName, config, hostResolverConfig, openConnectionsGauge)
+		serverEntryPointsTCP[entryPointName], err = NewTCPEntryPoint(ctx, entryPointName, config, hostResolverConfig, openConnectionsGauge, withMetricsRegistry(metricsRegistry))
 		if err != nil {
 			return nil, fmt.Errorf("error while building entryPoint %s: %w", entryPointName, err)
 		}
@@ -187,12 +185,13 @@ type TCPEntryPoint struct {
 	httpServer             *httpServer
 	httpsServer            *httpServer
 	http3Server            *http3server
+	fingerprint            *fingerprint.EntryPoint
 	// inShutdown reports whether the Shutdown method has been called.
 	inShutdown atomic.Bool
 }
 
 // NewTCPEntryPoint creates a new TCPEntryPoint.
-func NewTCPEntryPoint(ctx context.Context, name string, config *static.EntryPoint, hostResolverConfig *types.HostResolverConfig, openConnectionsGauge gokitmetrics.Gauge) (*TCPEntryPoint, error) {
+func NewTCPEntryPoint(ctx context.Context, name string, config *static.EntryPoint, hostResolverConfig *types.HostResolverConfig, openConnectionsGauge gokitmetrics.Gauge, opts ...tcpEntryPointOption) (*TCPEntryPoint, error) {
 	tracker := newConnectionTracker(openConnectionsGauge)
 
 	listener, err := buildListener(ctx, name, config)
@@ -211,20 +210,28 @@ func NewTCPEntryPoint(ctx context.Context, name string, config *static.EntryPoin
 	// which is called once for the HTTP server and once for the HTTPS server.
 	logHeaderNamesStrategiesWarnings(ctx, config)
 
-	httpServer, err := newHTTPServer(ctx, listener, config, true, reqDecorator)
+	fp, err := newFingerprint(ctx, name, config, opts)
 	if err != nil {
+		return nil, err
+	}
+
+	httpServer, err := newHTTPServer(ctx, listener, config, true, reqDecorator, withFingerprint(fp))
+	if err != nil {
+		closeFingerprint(fp)
 		return nil, fmt.Errorf("creating HTTP server: %w", err)
 	}
 
 	rt.SetHTTPForwarder(httpServer.Forwarder)
 
-	httpsServer, err := newHTTPServer(ctx, listener, config, false, reqDecorator)
+	httpsServer, err := newHTTPServer(ctx, listener, config, false, reqDecorator, withFingerprint(fp))
 	if err != nil {
+		closeFingerprint(fp)
 		return nil, fmt.Errorf("creating HTTPS server: %w", err)
 	}
 
 	h3Server, err := newHTTP3Server(ctx, name, config, httpsServer)
 	if err != nil {
+		closeFingerprint(fp)
 		return nil, fmt.Errorf("creating HTTP3 server: %w", err)
 	}
 
@@ -241,6 +248,7 @@ func NewTCPEntryPoint(ctx context.Context, name string, config *static.EntryPoin
 		httpServer:             httpServer,
 		httpsServer:            httpsServer,
 		http3Server:            h3Server,
+		fingerprint:            fp,
 	}, nil
 }
 
@@ -318,6 +326,10 @@ func (e *TCPEntryPoint) Start(ctx context.Context) {
 				}
 			}
 
+			if e.fingerprint != nil {
+				writeCloser = e.fingerprint.Accept(writeCloser)
+			}
+
 			e.switcher.ServeTCP(newTrackedConnection(writeCloser, e.tracker))
 		})
 	}
@@ -387,6 +399,11 @@ func (e *TCPEntryPoint) Shutdown(ctx context.Context) {
 	}
 
 	wg.Wait()
+
+	if e.fingerprint != nil {
+		e.fingerprint.Close(ctx)
+	}
+
 	cancel()
 }
 
@@ -704,9 +721,17 @@ type httpServer struct {
 	Server    stoppableServer
 	Forwarder *httpForwarder
 	Switcher  *middlewares.HTTPHandlerSwitcher
+
+	fingerprint *fingerprint.EntryPoint
 }
 
-func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.EntryPoint, withH2c bool, reqDecorator *requestdecorator.RequestDecorator) (*httpServer, error) {
+func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.EntryPoint, withH2c bool, reqDecorator *requestdecorator.RequestDecorator, opts ...httpServerOption) (*httpServer, error) {
+	var options httpServerOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	fp := options.fingerprint
+
 	if configuration.HTTP2.MaxConcurrentStreams < 0 {
 		return nil, errors.New("max concurrent streams value must be greater than or equal to zero")
 	}
@@ -809,9 +834,9 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 
 	handler = populateRequestTLS(handler)
 
-	captureConn := os.Getenv(fingerprintPrototypeEnv) != ""
-	if captureConn {
-		handler = fingerprint.Handler(handler)
+	// The fingerprint handler runs first, so that the client headers carrying its prefix never reach another handler.
+	if fp != nil {
+		handler = fp.Handler(handler)
 	}
 
 	// The round trippers and connection pools dedicated to a connection (Kerberos or NTLM) are only reachable from its
@@ -826,8 +851,8 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 		ctx = fast.AddConnPoolsOnContext(ctx)
 		transportConnContexts.add(ctx, c)
 
-		if captureConn {
-			ctx = fingerprint.ContextWithConn(ctx, c)
+		if fp != nil {
+			ctx = fp.ConnContext(ctx, c)
 		}
 
 		if tlsConn, ok := fingerprint.UnwrapConn(c).(*tls.Conn); ok {
@@ -857,6 +882,9 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 	connState := func(c net.Conn, state http.ConnState) {
 		// A hijacked connection never reports the closed state, and serves no further request.
 		if state == http.StateClosed || state == http.StateHijacked {
+			if fp != nil {
+				fp.ConnClosed(c)
+			}
 			if ctx, ok := transportConnContexts.remove(c); ok {
 				kerberos.ReleaseTransportOnContext(ctx)
 				fast.ReleaseConnPoolsOnContext(ctx)
@@ -893,11 +921,8 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 	}
 
 	listener := newHTTPForwarder(ln)
-	if captureConn {
-		captureConfig := fingerprint.Config{MaxDecoderHeaderTableSize: uint32(configuration.HTTP2.MaxDecoderHeaderTableSize)}
-		listener.wrapConn = func(c net.Conn) net.Conn {
-			return fingerprint.WrapConn(c, captureConfig)
-		}
+	if fp != nil {
+		listener.wrapConn = fp.WrapConn
 	}
 	go func() {
 		err := serverHTTP.Serve(listener)
@@ -906,9 +931,10 @@ func newHTTPServer(ctx context.Context, ln net.Listener, configuration *static.E
 		}
 	}()
 	return &httpServer{
-		Server:    serverHTTP,
-		Forwarder: listener,
-		Switcher:  httpSwitcher,
+		Server:      serverHTTP,
+		Forwarder:   listener,
+		Switcher:    httpSwitcher,
+		fingerprint: fp,
 	}, nil
 }
 

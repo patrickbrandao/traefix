@@ -44,6 +44,7 @@ type Capture struct {
 	h2Prefix          []byte
 	h2PrefixDone      bool
 	h2PrefixTruncated bool
+	firstPseudoNames  []string
 
 	cfg Config
 }
@@ -78,6 +79,23 @@ func (c *Capture) H2Prefix() ([]byte, bool) {
 	}
 
 	return c.h2Prefix, c.h2PrefixTruncated
+}
+
+// FirstPseudoNames returns the pseudo-header names of the first HTTP/2 request, in the received order.
+func (c *Capture) FirstPseudoNames() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.firstPseudoNames
+}
+
+func (c *Capture) releaseH2Prefix() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.h2PrefixDone {
+		c.h2Prefix = nil
+	}
 }
 
 func (c *Capture) observe(p []byte) {
@@ -126,7 +144,7 @@ func (c *Capture) detectProto(p []byte) []byte {
 
 	if !bytes.HasPrefix(h2Preface, c.detect) {
 		c.state = stateH1
-		c.h1 = newH1Parser()
+		c.h1 = newH1Parser(c.cfg.fields)
 		buffered := c.detect
 		c.detect = nil
 		if err := c.h1.feed(buffered, c.addRequest); err != nil {
@@ -141,7 +159,7 @@ func (c *Capture) detectProto(p []byte) []byte {
 	}
 
 	c.state = stateH2
-	c.h2 = newH2Parser(c.cfg.MaxDecoderHeaderTableSize)
+	c.h2 = newH2Parser(c.cfg.MaxDecoderHeaderTableSize, c.cfg.fields)
 	c.detect = nil
 
 	return p
@@ -178,6 +196,9 @@ func (c *Capture) appendH2Prefix(p []byte) {
 }
 
 func (c *Capture) addRequest(r *Request) {
+	if c.h2 != nil && c.firstPseudoNames == nil {
+		c.firstPseudoNames = r.PseudoNames
+	}
 	if len(c.pending) >= maxPendingRequests {
 		c.pending[0] = nil
 		c.pending = c.pending[1:]

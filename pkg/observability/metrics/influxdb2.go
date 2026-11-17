@@ -85,6 +85,7 @@ func RegisterInfluxDB2(ctx context.Context, config *otypes.InfluxDB2) Registry {
 		lastConfigReloadSuccessGauge:   influxDB2Store.NewGauge(influxDBLastConfigReloadSuccessName),
 		openConnectionsGauge:           influxDB2Store.NewGauge(influxDBOpenConnsName),
 		tlsCertsNotAfterTimestampGauge: influxDB2Store.NewGauge(influxDBTLSCertsNotAfterTimestampName),
+		traefix:                        newInfluxDB2TraefixMetrics(influxDB2Store),
 	}
 
 	if config.AddEntryPointsLabels {

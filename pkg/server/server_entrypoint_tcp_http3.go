@@ -121,6 +121,10 @@ func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint,
 				fast.ReleaseConnPoolsOnContext(ctx)
 			})
 
+			if fp := httpsServer.fingerprint; fp != nil {
+				ctx = fp.QUICConnContext(ctx, c)
+			}
+
 			tlsOptionsName, err := h3.getTLSOptionsName(c)
 			if err != nil {
 				log.Error().Msgf("Error getting TLS options name for client: %v", err)

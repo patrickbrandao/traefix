@@ -5,11 +5,15 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strconv"
@@ -18,12 +22,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go/http3"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/traefik/traefik/v3/pkg/config/static"
 	"github.com/traefik/traefik/v3/pkg/fingerprint"
 	tcprouter "github.com/traefik/traefik/v3/pkg/server/router/tcp"
+	traefiktls "github.com/traefik/traefik/v3/pkg/tls"
 	"github.com/traefik/traefik/v3/pkg/tls/generate"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
@@ -78,21 +84,34 @@ func fingerprintTLSConfig(tb testing.TB) *tls.Config {
 func startFingerprintEntryPoint(tb testing.TB, enabled bool) string {
 	tb.Helper()
 
+	var fp *static.Fingerprint
 	if enabled {
-		tb.Setenv(fingerprintPrototypeEnv, "1")
-	} else {
-		tb.Setenv(fingerprintPrototypeEnv, "")
+		fp = &static.Fingerprint{}
+		fp.SetDefaults()
+		if url := os.Getenv("FINGERPRINT_EXPORT_URL"); url != "" {
+			fp.Export = &static.FingerprintExport{URL: url, RawBytes: true}
+			fp.Export.SetDefaults()
+		}
 	}
+
+	return startEntryPointWithFingerprint(tb, fp)
+}
+
+func startEntryPointWithFingerprint(tb testing.TB, fp *static.Fingerprint) string {
+	tb.Helper()
 
 	epConfig := &static.EntryPointsTransport{}
 	epConfig.SetDefaults()
 
-	entryPoint, err := NewTCPEntryPoint(tb.Context(), "", &static.EntryPoint{
+	config := &static.EntryPoint{
 		Address:          "127.0.0.1:0",
 		Transport:        epConfig,
 		ForwardedHeaders: &static.ForwardedHeaders{},
 		HTTP2:            &static.HTTP2Config{},
-	}, nil, nil)
+	}
+	config.Fingerprint = fp
+
+	entryPoint, err := NewTCPEntryPoint(tb.Context(), "", config, nil, nil)
 	require.NoError(tb, err)
 
 	router, err := tcprouter.NewRouter(nil)
@@ -107,7 +126,7 @@ func startFingerprintEntryPoint(tb testing.TB, enabled bool) string {
 	return entryPoint.listener.Addr().String()
 }
 
-func TestFingerprintPrototype(t *testing.T) {
+func TestFingerprintEntryPoint_headerOrder(t *testing.T) {
 	addr := startFingerprintEntryPoint(t, true)
 
 	testCases := []struct {
@@ -157,7 +176,7 @@ func TestFingerprintPrototype(t *testing.T) {
 	}
 }
 
-func TestFingerprintPrototype_disabled(t *testing.T) {
+func TestFingerprintEntryPoint_disabled(t *testing.T) {
 	addr := startFingerprintEntryPoint(t, false)
 
 	conn, err := net.Dial("tcp", addr)
@@ -240,10 +259,11 @@ func fingerprintH2Roundtrip(t *testing.T, conn net.Conn) string {
 	}
 }
 
-// BenchmarkFingerprintPrototype measures an HTTPS entry point with the capture off and on.
+// BenchmarkFingerprintEntryPoint measures an HTTPS entry point with the capture off and on.
 // The entry point runs in a child process, so that server-cpu-ns/op is the CPU time of the server alone
 // (user and system, from the child rusage, also reported apart), apart from the client load generated here.
-func BenchmarkFingerprintPrototype(b *testing.B) {
+// With the capture on, the entry point also adds the headers and exports the records to a destination run here.
+func BenchmarkFingerprintEntryPoint(b *testing.B) {
 	for _, proto := range []string{"h2", "h1"} {
 		for _, enabled := range []bool{false, true} {
 			name := fmt.Sprintf("%s/capture=%t", proto, enabled)
@@ -293,12 +313,12 @@ func BenchmarkFingerprintPrototype(b *testing.B) {
 	}
 }
 
-// TestFingerprintServerProcess is the entry point process of BenchmarkFingerprintPrototype.
+// TestFingerprintServerProcess is the entry point process of BenchmarkFingerprintEntryPoint.
 // It answers each line read on stdin with its CPU time so far, and exits when stdin is closed.
 func TestFingerprintServerProcess(t *testing.T) {
 	capture := os.Getenv("FINGERPRINT_SERVER_PROCESS")
 	if capture == "" {
-		t.Skip("only run as the child process of BenchmarkFingerprintPrototype")
+		t.Skip("only run as the child process of BenchmarkFingerprintEntryPoint")
 	}
 
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
@@ -331,8 +351,18 @@ func startFingerprintServerProcess(b *testing.B, enabled bool) (string, *fingerp
 	if profile := os.Getenv("FINGERPRINT_SERVER_CPUPROFILE"); profile != "" {
 		args = append(args, "-test.cpuprofile="+profile+"."+capture)
 	}
+	// The export destination discards the batches, outside of the measured process.
+	dest := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}))
+	b.Cleanup(dest.Close)
+
 	cmd := exec.Command(os.Args[0], args...)
-	cmd.Env = append(os.Environ(), "FINGERPRINT_SERVER_PROCESS="+capture)
+	exportURL := dest.URL
+	if os.Getenv("FINGERPRINT_BENCH_NO_EXPORT") != "" {
+		exportURL = ""
+	}
+	cmd.Env = append(os.Environ(), "FINGERPRINT_SERVER_PROCESS="+capture, "FINGERPRINT_EXPORT_URL="+exportURL)
 	stdin, err := cmd.StdinPipe()
 	require.NoError(b, err)
 	stdout, err := cmd.StdoutPipe()
@@ -386,4 +416,121 @@ func benchRoundtrip(b *testing.B, client *http.Client, req *http.Request) {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+}
+
+func echoFingerprintHeaders(rw http.ResponseWriter, req *http.Request) {
+	out := map[string]string{}
+	for name := range req.Header {
+		if strings.HasPrefix(name, "X-Fs-") {
+			out[name] = req.Header.Get(name)
+		}
+	}
+	if err := json.NewEncoder(rw).Encode(out); err != nil {
+		rw.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+// TestFingerprintEntryPoint_routers covers the whole entry point: the accept wrapper, the TCP router reading the
+// ClientHello for the SNI routing, the TLS termination, net/http, and the HTTP/3 server.
+func TestFingerprintEntryPoint_routers(t *testing.T) {
+	certContent, err := localhostCert.Read()
+	require.NoError(t, err)
+	keyContent, err := localhostKey.Read()
+	require.NoError(t, err)
+	tlsCert, err := tls.X509KeyPair(certContent, keyContent)
+	require.NoError(t, err)
+
+	// The same free port serves TCP and UDP.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	epConfig := &static.EntryPointsTransport{}
+	epConfig.SetDefaults()
+	config := &static.EntryPoint{
+		Address:          addr,
+		Transport:        epConfig,
+		ForwardedHeaders: &static.ForwardedHeaders{},
+		HTTP2:            &static.HTTP2Config{},
+		HTTP3:            &static.HTTP3Config{},
+		Fingerprint:      &static.Fingerprint{HeaderPrefix: "X-Fs-"},
+	}
+
+	entryPoint, err := NewTCPEntryPoint(t.Context(), "websecure", config, nil, nil)
+	require.NoError(t, err)
+
+	router, err := tcprouter.NewRouter(nil)
+	require.NoError(t, err)
+	router.AddHTTPTLSConfig("example.com", &tls.Config{Certificates: []tls.Certificate{tlsCert}, NextProtos: []string{"h2", "http/1.1"}}, traefiktls.DefaultTLSConfigName)
+	router.SetHTTPSHandler(http.HandlerFunc(echoFingerprintHeaders), nil)
+
+	go entryPoint.Start(t.Context())
+	entryPoint.SwitchRouter(router)
+	t.Cleanup(func() { entryPoint.Shutdown(context.Background()) })
+
+	certPool := x509.NewCertPool()
+	certPool.AppendCertsFromPEM(certContent)
+	tlsConf := &tls.Config{RootCAs: certPool, ServerName: "example.com"}
+
+	get := func(t *testing.T, rt http.RoundTripper) map[string]string {
+		t.Helper()
+
+		req, err := http.NewRequest(http.MethodGet, "https://"+addr+"/", nil)
+		require.NoError(t, err)
+		req.Host = "example.com"
+		req.Header.Set("X-Fs-Src-Ip", "6.6.6.6")
+
+		resp, err := rt.RoundTrip(req)
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+
+		var got map[string]string
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+		return got
+	}
+
+	t.Run("h2", func(t *testing.T) {
+		var protocols http.Protocols
+		protocols.SetHTTP2(true)
+		transport := &http.Transport{TLSClientConfig: tlsConf.Clone(), Protocols: &protocols}
+		t.Cleanup(transport.CloseIdleConnections)
+
+		got := get(t, transport)
+		assert.Equal(t, "127.0.0.1", got["X-Fs-Src-Ip"])
+		assert.Equal(t, "h2", got["X-Fs-Proto"])
+		assert.Len(t, got["X-Fs-Conn-Id"], 26)
+		// The SNI is in the ClientHello read by the accept wrapper.
+		assert.Regexp(t, `^t13d\d{4}h2_`, got["X-Fs-Ja4"])
+		assert.Regexp(t, `^[0-9a-f]{32}$`, got["X-Fs-Ja3"])
+		assert.NotEmpty(t, got["X-Fs-H2"])
+		assert.Regexp(t, `^ge20`, got["X-Fs-Ja4h"])
+	})
+
+	t.Run("h3", func(t *testing.T) {
+		transport := &http3.Transport{TLSClientConfig: tlsConf.Clone()}
+		t.Cleanup(func() { _ = transport.Close() })
+
+		var got map[string]string
+		// The HTTP/3 server starts with the entry point, in its own goroutine.
+		require.Eventually(t, func() bool {
+			req, err := http.NewRequest(http.MethodGet, "https://"+addr+"/", nil)
+			require.NoError(t, err)
+			req.Host = "example.com"
+			req.Header.Set("X-Fs-Src-Ip", "6.6.6.6")
+			resp, err := transport.RoundTrip(req)
+			if err != nil {
+				return false
+			}
+			defer func() { _ = resp.Body.Close() }()
+			return json.NewDecoder(resp.Body).Decode(&got) == nil
+		}, 5*time.Second, 100*time.Millisecond)
+
+		assert.Equal(t, "127.0.0.1", got["X-Fs-Src-Ip"])
+		assert.Equal(t, "h3", got["X-Fs-Proto"])
+		assert.Len(t, got["X-Fs-Conn-Id"], 26)
+		// The HTTP/3 header order and the QUIC ClientHello are not captured yet.
+		assert.NotContains(t, got, "X-Fs-Ja4h")
+		assert.NotContains(t, got, "X-Fs-Ja4")
+	})
 }

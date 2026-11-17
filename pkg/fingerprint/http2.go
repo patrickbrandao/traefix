@@ -54,18 +54,20 @@ type h2Parser struct {
 	cur        *Request
 	blockBytes int
 
+	fields *fieldMatcher
+
 	firstBlockDone bool
 	// onFirstBlockEnd is called with the count of bytes of the current feed call consumed up to the end of the
 	// first header block.
 	onFirstBlockEnd func(consumed int)
 }
 
-func newH2Parser(maxTableSize uint32) *h2Parser {
+func newH2Parser(maxTableSize uint32, fields *fieldMatcher) *h2Parser {
 	if maxTableSize == 0 {
 		maxTableSize = defaultHeaderTableSize
 	}
 
-	p := &h2Parser{}
+	p := &h2Parser{fields: fields}
 	p.dec = hpack.NewDecoder(maxTableSize, p.onField)
 
 	return p
@@ -101,6 +103,9 @@ func (p *h2Parser) onField(f hpack.HeaderField) {
 		return
 	}
 	r.Names = append(r.Names, f.Name)
+	if p.fields.match(f.Name) {
+		r.Fields = append(r.Fields, Field{Name: f.Name, Value: truncateValue(f.Value)})
+	}
 
 	switch f.Name {
 	case "cookie":

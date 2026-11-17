@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/traefik/traefik/v3/pkg/config/static"
 	"github.com/traefik/traefik/v3/pkg/tls/generate"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
@@ -22,6 +23,8 @@ import (
 
 type wrappingListener struct {
 	net.Listener
+
+	ep *EntryPoint
 }
 
 func (l wrappingListener) Accept() (net.Conn, error) {
@@ -29,13 +32,29 @@ func (l wrappingListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return WrapConn(c, Config{}), nil
+	return l.ep.WrapConn(c), nil
+}
+
+func newTestEntryPoint(t *testing.T, export *static.FingerprintExport) *EntryPoint {
+	t.Helper()
+
+	cfg := &static.Fingerprint{}
+	cfg.SetDefaults()
+	cfg.Export = export
+
+	ep, err := NewEntryPoint(t.Context(), "test", cfg, nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { ep.Close(context.Background()) })
+
+	return ep
 }
 
 // startServer serves the given listener with net/http as the entry point does: HTTP/1, HTTP/2 and unencrypted HTTP/2.
 // Each response body tells the protocol, whether the TLS state was set, and the JA4H of the captured request.
 func startServer(t *testing.T, ln net.Listener) {
 	t.Helper()
+
+	ep := newTestEntryPoint(t, nil)
 
 	var protocols http.Protocols
 	protocols.SetHTTP1(true)
@@ -44,7 +63,7 @@ func startServer(t *testing.T, ln net.Listener) {
 
 	srv := &http.Server{
 		Protocols: &protocols,
-		Handler: Handler(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		Handler: ep.Handler(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 			_, _ = io.Copy(io.Discard, req.Body)
 
 			ja4h := "none"
@@ -53,10 +72,10 @@ func startServer(t *testing.T, ln net.Listener) {
 			}
 			_, _ = fmt.Fprintf(rw, "%d %t %s", req.ProtoMajor, req.TLS != nil, ja4h)
 		})),
-		ConnContext: ContextWithConn,
+		ConnContext: ep.ConnContext,
 	}
 
-	go func() { _ = srv.Serve(wrappingListener{Listener: ln}) }()
+	go func() { _ = srv.Serve(wrappingListener{Listener: ln, ep: ep}) }()
 	t.Cleanup(func() { _ = srv.Close() })
 }
 
@@ -228,7 +247,8 @@ func TestServer_noCaptureWithoutWrap(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	srv := &http.Server{Handler: Handler(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	ep := newTestEntryPoint(t, nil)
+	srv := &http.Server{Handler: ep.Handler(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		_, ok := FromRequest(req)
 		_, _ = fmt.Fprint(rw, ok)
 	}))}
@@ -248,18 +268,20 @@ func TestUnwrapConn(t *testing.T) {
 	c1, c2 := net.Pipe()
 	t.Cleanup(func() { _ = c1.Close(); _ = c2.Close() })
 
+	ep := newTestEntryPoint(t, nil)
+
 	tc := tls.Server(c1, &tls.Config{})
-	wrapped := WrapConn(tc, Config{})
+	wrapped := ep.WrapConn(tc)
 
 	_, isStater := wrapped.(interface{ ConnectionState() tls.ConnectionState })
 	assert.True(t, isStater)
 	assert.Same(t, tc, UnwrapConn(wrapped))
 
-	plain := WrapConn(c1, Config{})
+	plain := ep.WrapConn(c1)
 	_, isStater = plain.(interface{ ConnectionState() tls.ConnectionState })
 	assert.False(t, isStater)
 	assert.Equal(t, c1, UnwrapConn(plain))
 
-	assert.NotNil(t, captureFromContext(ContextWithConn(context.Background(), wrapped)))
-	assert.Nil(t, captureFromContext(ContextWithConn(context.Background(), c1)))
+	assert.NotNil(t, connInfoFromContext(ep.ConnContext(context.Background(), wrapped)))
+	assert.Nil(t, connInfoFromContext(ep.ConnContext(context.Background(), c1)))
 }

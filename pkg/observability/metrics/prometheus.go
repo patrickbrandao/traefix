@@ -134,6 +134,9 @@ func initStandardRegistry(config *otypes.Prometheus) Registry {
 	}
 	promState.tlsCertsGaugeVec = tlsCertsNotAfterTimestamp.gv
 
+	traefix, traefixVectors := newPrometheusTraefixMetrics(buckets)
+	promState.vectors = append(promState.vectors, traefixVectors...)
+
 	reg := &standardRegistry{
 		epEnabled:                      config.AddEntryPointsLabels,
 		routerEnabled:                  config.AddRoutersLabels,
@@ -142,6 +145,7 @@ func initStandardRegistry(config *otypes.Prometheus) Registry {
 		lastConfigReloadSuccessGauge:   lastConfigReloadSuccess,
 		tlsCertsNotAfterTimestampGauge: tlsCertsNotAfterTimestamp,
 		openConnectionsGauge:           openConnections,
+		traefix:                        traefix,
 	}
 
 	if config.AddEntryPointsLabels {

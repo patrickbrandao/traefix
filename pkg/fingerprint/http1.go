@@ -40,10 +40,12 @@ type h1Parser struct {
 	cur           *Request
 	contentLength int64
 	chunked       bool
+
+	fields *fieldMatcher
 }
 
-func newH1Parser() *h1Parser {
-	return &h1Parser{}
+func newH1Parser(fields *fieldMatcher) *h1Parser {
+	return &h1Parser{fields: fields}
 }
 
 func (p *h1Parser) feed(b []byte, emit func(*Request)) error {
@@ -75,12 +77,21 @@ func (p *h1Parser) feed(b []byte, emit func(*Request)) error {
 				line = line[:n-1]
 			}
 			overflow := p.lineOverflow
-			p.line = p.line[:0]
 			p.lineOverflow = false
 
-			if err := p.processLine(line, overflow, emit); err != nil {
+			err := p.processLine(line, overflow, emit)
+
+			// A long line leaves a large buffer behind, which the next, usually short, lines do not need.
+			if cap(p.line) > 1024 {
+				p.line = nil
+			} else {
+				p.line = p.line[:0]
+			}
+
+			if err != nil {
 				return err
 			}
+			continue
 		}
 	}
 
@@ -202,6 +213,9 @@ func (p *h1Parser) addField(line []byte, overflow bool) {
 
 	if len(r.Names) < maxH1Names {
 		r.Names = append(r.Names, string(name))
+		if p.fields.match(r.Names[len(r.Names)-1]) {
+			r.Fields = append(r.Fields, Field{Name: r.Names[len(r.Names)-1], Value: truncateValue(string(value))})
+		}
 	} else {
 		r.Truncated = true
 	}

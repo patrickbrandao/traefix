@@ -1,7 +1,6 @@
 package fingerprint
 
 import (
-	"context"
 	"net/http"
 )
 
@@ -19,6 +18,9 @@ type Request struct {
 	Names []string
 	// PseudoNames holds the HTTP/2 pseudo-header names in the received order.
 	PseudoNames []string
+
+	// Fields holds the fields whose value is exported, in the received order.
+	Fields []Field
 
 	// Cookies holds the values of the Cookie fields, in the received order.
 	Cookies           []string
@@ -40,25 +42,4 @@ func (r *Request) matches(req *http.Request) bool {
 	}
 
 	return r.Authority == "" || r.Authority == req.Host
-}
-
-type requestKey struct{}
-
-// Handler attaches to each request the header block read from the wire for it.
-func Handler(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if capture := captureFromContext(req.Context()); capture != nil {
-			if r := capture.take(req); r != nil {
-				req = req.WithContext(context.WithValue(req.Context(), requestKey{}, r))
-			}
-		}
-
-		next.ServeHTTP(rw, req)
-	})
-}
-
-// FromRequest returns the header block read from the wire for req, if it was captured.
-func FromRequest(req *http.Request) (*Request, bool) {
-	r, ok := req.Context().Value(requestKey{}).(*Request)
-	return r, ok
 }

@@ -76,6 +76,7 @@ func RegisterDatadog(ctx context.Context, config *otypes.Datadog) Registry {
 		lastConfigReloadSuccessGauge:   datadogClient.NewGauge(ddLastConfigReloadSuccessName),
 		openConnectionsGauge:           datadogClient.NewGauge(ddOpenConnsName),
 		tlsCertsNotAfterTimestampGauge: datadogClient.NewGauge(ddTLSCertsNotAfterTimestampName),
+		traefix:                        newDatadogTraefixMetrics(datadogClient),
 	}
 
 	if config.AddEntryPointsLabels {

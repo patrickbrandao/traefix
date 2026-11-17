@@ -123,6 +123,7 @@ func RegisterOpenTelemetry(ctx context.Context, config *otypes.OTLP) Registry {
 		lastConfigReloadSuccessGauge:   newOTLPGaugeFrom(meter, configLastReloadSuccessName, "Last config reload success", "ms"),
 		openConnectionsGauge:           newOTLPGaugeFrom(meter, openConnectionsName, "How many open connections exist, by entryPoint and protocol", "1"),
 		tlsCertsNotAfterTimestampGauge: newOTLPGaugeFrom(meter, tlsCertsNotAfterTimestampName, "Certificate expiration timestamp", "s"),
+		traefix:                        newOTLPTraefixMetrics(meter),
 	}
 
 	if config.AddEntryPointsLabels {

@@ -55,6 +55,8 @@ type Registry interface {
 	ServiceInflightRequestsGauge() metrics.Gauge
 	ServiceReqsBytesCounter() metrics.Counter
 	ServiceRespsBytesCounter() metrics.Counter
+
+	traefixRegistry
 }
 
 // NewVoidRegistry is a noop implementation of metrics.Registry.
@@ -185,6 +187,7 @@ func NewMultiRegistry(registries []Registry) Registry {
 		serviceInflightRequestsGauge:   multi.NewGauge(serviceInflightRequestsGauge...),
 		serviceReqsBytesCounter:        multi.NewCounter(serviceReqsBytesCounter...),
 		serviceRespsBytesCounter:       multi.NewCounter(serviceRespsBytesCounter...),
+		traefix:                        newMultiTraefixMetrics(registries),
 	}
 }
 
@@ -214,6 +217,8 @@ type standardRegistry struct {
 	serviceInflightRequestsGauge   metrics.Gauge
 	serviceReqsBytesCounter        metrics.Counter
 	serviceRespsBytesCounter       metrics.Counter
+
+	traefix traefixMetrics
 }
 
 func (r *standardRegistry) IsEpEnabled() bool {

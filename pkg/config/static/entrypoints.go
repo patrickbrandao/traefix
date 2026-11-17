@@ -55,6 +55,7 @@ type EntryPoint struct {
 	HTTP3            *HTTP3Config          `description:"HTTP/3 configuration." json:"http3,omitempty" toml:"http3,omitempty" yaml:"http3,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 	UDP              *UDPConfig            `description:"UDP configuration." json:"udp,omitempty" toml:"udp,omitempty" yaml:"udp,omitempty"`
 	Observability    *ObservabilityConfig  `description:"Observability configuration." json:"observability,omitempty" toml:"observability,omitempty" yaml:"observability,omitempty" export:"true"`
+	Fingerprint      *Fingerprint          `description:"Identifies and fingerprints the connections and requests (Traefix)." json:"fingerprint,omitempty" toml:"fingerprint,omitempty" yaml:"fingerprint,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 }
 
 // GetAddress strips any potential protocol part of the address field of the
