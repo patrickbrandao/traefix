@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +147/-0 em 3 arquivos |
 | Labels | status/1-needs-design-review, kind/bug/fix, size/M, area/provider/k8s/ingress-nginx |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -38,3 +38,21 @@ Muda a tradução de buffering para uma classe de backend. Status: needs-design-
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- Com `backend-protocol: GRPC/GRPCS` e `proxy-buffering`/`proxy-request-buffering: "on"`, o provider ingress-nginx criava um middleware `Buffering`. Para gRPC isso é incorreto: o buffering do oxy acumula request e response inteiros, o que quebra streaming (client-, server- e bidi-streaming) e pode segurar até `maxRequestBodyBytes`/`maxResponseBodyBytes` em memória por stream. O `grpc_pass` do NGINX não tem buffering equivalente. O PR deixa de criar o middleware para backends gRPC.
+- Efeito colateral a registrar: para gRPC, o limite `proxy-body-size` (que só é aplicado pelo middleware de buffering) também deixa de existir. Hoje ele já não é aplicado com o buffering de requisição desligado, que é o padrão (ver a task de #13220), então quase nada muda na prática.
+- Sem outros riscos: só remove um middleware para um protocolo em que ele era nocivo.
+
+**Ajustes**
+
+- Teste adaptado ao formato atual: o conflito com casos novos de `TestLoadIngresses` foi resolvido e as expectativas de TLS seguem o modelo atual (opção TLS por host, `hostTLSOption()`).
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress-nginx/` ok.
+- `golangci-lint run ./pkg/provider/kubernetes/ingress-nginx/...`: 0 issues.
