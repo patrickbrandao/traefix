@@ -117,6 +117,15 @@ func (m *Mirroring) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			// prepare request, update body from buffer
 			r := rr.Clone(req.Context())
 
+			if !m.mirrorBody {
+				// The main handler has consumed, and the server may have closed, the shared body:
+				// the mirrored request must neither read nor advertise it.
+				r.Body = http.NoBody
+				r.ContentLength = 0
+				r.TransferEncoding = nil
+				r.Header.Del("Content-Length")
+			}
+
 			handler.ServeHTTP(m.rw, r.WithContext(mirrorContext(r.Context())))
 		}
 	})

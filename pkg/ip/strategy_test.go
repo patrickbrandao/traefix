@@ -221,14 +221,41 @@ func TestTrustedIPsStrategy_GetIP(t *testing.T) {
 		desc          string
 		trustedIPs    []string
 		xForwardedFor string
+		remoteAddr    string
 		expected      string
-		useRemote     bool
 	}{
 		{
 			desc:          "Trust all IPs",
 			trustedIPs:    []string{"10.0.0.4", "10.0.0.3", "10.0.0.2", "10.0.0.1"},
 			xForwardedFor: "10.0.0.4,10.0.0.3,10.0.0.2,10.0.0.1",
+			remoteAddr:    "10.0.0.4:1234",
 			expected:      "",
+		},
+		{
+			desc:          "Trust all IPs from an untrusted remote address",
+			trustedIPs:    []string{"10.0.0.4", "10.0.0.3", "10.0.0.2", "10.0.0.1"},
+			xForwardedFor: "10.0.0.4,10.0.0.3,10.0.0.2,10.0.0.1",
+			remoteAddr:    "192.168.0.1:1234",
+			expected:      "192.168.0.1",
+		},
+		{
+			desc:       "No X-Forwarded-For from an untrusted remote address",
+			trustedIPs: []string{"10.0.0.1/24"},
+			remoteAddr: "192.168.0.1:1234",
+			expected:   "192.168.0.1",
+		},
+		{
+			desc:       "No X-Forwarded-For from a trusted remote address",
+			trustedIPs: []string{"10.0.0.1/24"},
+			remoteAddr: "10.0.0.5:1234",
+			expected:   "",
+		},
+		{
+			desc:          "Untrusted remote address does not take precedence over X-Forwarded-For",
+			trustedIPs:    []string{"10.0.0.1/24"},
+			xForwardedFor: "127.0.0.1,10.0.0.1",
+			remoteAddr:    "192.168.0.1:1234",
+			expected:      "127.0.0.1",
 		},
 		{
 			desc:          "Do not trust all IPs",
@@ -246,6 +273,7 @@ func TestTrustedIPsStrategy_GetIP(t *testing.T) {
 			desc:          "Trust all IPs with CIDR",
 			trustedIPs:    []string{"10.0.0.1/24"},
 			xForwardedFor: "10.0.0.4,10.0.0.3,10.0.0.2,10.0.0.1",
+			remoteAddr:    "10.0.0.5:1234",
 			expected:      "",
 		},
 	}
@@ -260,6 +288,9 @@ func TestTrustedIPsStrategy_GetIP(t *testing.T) {
 			strategy := PoolStrategy{Checker: checker}
 			req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1", nil)
 			req.Header.Set(xForwardedFor, test.xForwardedFor)
+			if test.remoteAddr != "" {
+				req.RemoteAddr = test.remoteAddr
+			}
 			actual := strategy.GetIP(req)
 			assert.Equal(t, test.expected, actual)
 		})

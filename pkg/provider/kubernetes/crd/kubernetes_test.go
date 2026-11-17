@@ -8062,9 +8062,10 @@ func TestLoadIngressRoutes(t *testing.T) {
 								StatusRewrites: map[string]int{
 									"404": 200,
 								},
-								Service:             "default-errorpage-errorpage-service",
-								Query:               "query",
-								ErrorRequestHeaders: []string{"X-Foo-Bar", "X-Bar-Foo"},
+								Service:              "default-errorpage-errorpage-service",
+								Query:                "query",
+								ErrorRequestHeaders:  []string{"X-Foo-Bar", "X-Bar-Foo"},
+								ErrorResponseHeaders: []string{"WWW-Authenticate"},
 							},
 						},
 					},
@@ -16016,6 +16017,41 @@ func TestGlobalNativeLB(t *testing.T) {
 
 			conf := p.loadConfigurationFromCRD(t.Context(), client)
 			assert.Equal(t, test.expected, conf)
+		})
+	}
+}
+
+func TestCreateCompressMiddleware(t *testing.T) {
+	disabled := false
+
+	testCases := []struct {
+		desc     string
+		compress *traefikv1alpha1.Compress
+		expected *dynamic.Compress
+	}{
+		{
+			desc: "nil",
+		},
+		{
+			desc:     "defaults",
+			compress: &traefikv1alpha1.Compress{},
+			expected: &dynamic.Compress{Encodings: []string{"gzip", "br", "zstd"}},
+		},
+		{
+			desc:     "request content type exclusion disabled",
+			compress: &traefikv1alpha1.Compress{ExcludeRequestContentType: &disabled},
+			expected: &dynamic.Compress{
+				Encodings:                 []string{"gzip", "br", "zstd"},
+				ExcludeRequestContentType: &disabled,
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, test.expected, createCompressMiddleware(test.compress))
 		})
 	}
 }

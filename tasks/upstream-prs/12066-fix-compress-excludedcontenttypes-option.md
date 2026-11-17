@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +8/-30 em 7 arquivos |
 | Labels | status/1-needs-design-review, kind/bug/fix, size/S, area/middleware, breaking |
-| Status | pendente |
+| Status | rejeitado |
 
 ## O que faz
 
@@ -38,3 +38,17 @@ Base é v3.7, então o port para master é manual. Maintainer pediu issue dedica
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: rejeitado.** O traefik/traefik#13206 resolve o mesmo problema.
+
+Achados:
+- O PR remove por completo a checagem do `Content-Type` da requisição em `excludedContentTypes`. Isso muda o comportamento padrão (breaking): quem exclui pela requisição (ex.: clientes que enviam `Content-Type: text/event-stream`) passa a receber respostas comprimidas.
+- O maintainer (rtribotte) pediu uma issue dedicada para discutir a remoção do comportamento legado. O PR está parado em `status/1-needs-design-review`.
+- O diff edita à mão os YAML de CRD (que são gerados) e troca "list" por "List" no comentário de `dynamic.Compress` (typo).
+- Nenhum problema de segurança.
+
+Decisão: o #13206 resolve o mesmo problema (issues #12014 e #12070) sem quebrar o padrão. Ele cria a opção `excludeRequestContentType`, com padrão `true`. Importamos o #13206 no lugar deste.
+
+Testes: nenhum, porque o PR não foi importado.

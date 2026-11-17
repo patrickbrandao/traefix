@@ -225,6 +225,11 @@ func (in *Compress) DeepCopyInto(out *Compress) {
 		*out = new(string)
 		**out = **in
 	}
+	if in.ExcludeRequestContentType != nil {
+		in, out := &in.ExcludeRequestContentType, &out.ExcludeRequestContentType
+		*out = new(bool)
+		**out = **in
+	}
 	return
 }
 
@@ -272,6 +277,11 @@ func (in *ErrorPage) DeepCopyInto(out *ErrorPage) {
 	in.Service.DeepCopyInto(&out.Service)
 	if in.ErrorRequestHeaders != nil {
 		in, out := &in.ErrorRequestHeaders, &out.ErrorRequestHeaders
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.ErrorResponseHeaders != nil {
+		in, out := &in.ErrorResponseHeaders, &out.ErrorResponseHeaders
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
@@ -939,6 +949,11 @@ func (in *MiddlewareSpec) DeepCopyInto(out *MiddlewareSpec) {
 		*out = new(dynamic.ReplacePathRegex)
 		**out = **in
 	}
+	if in.QueryParameters != nil {
+		in, out := &in.QueryParameters, &out.QueryParameters
+		*out = new(dynamic.QueryParameters)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.Chain != nil {
 		in, out := &in.Chain, &out.Chain
 		*out = new(Chain)
@@ -982,6 +997,11 @@ func (in *MiddlewareSpec) DeepCopyInto(out *MiddlewareSpec) {
 	if in.RedirectScheme != nil {
 		in, out := &in.RedirectScheme, &out.RedirectScheme
 		*out = new(dynamic.RedirectScheme)
+		**out = **in
+	}
+	if in.RedirectTrailingSlash != nil {
+		in, out := &in.RedirectTrailingSlash, &out.RedirectTrailingSlash
+		*out = new(dynamic.RedirectTrailingSlash)
 		**out = **in
 	}
 	if in.BasicAuth != nil {

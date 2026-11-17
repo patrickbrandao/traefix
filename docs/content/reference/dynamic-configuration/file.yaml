@@ -198,6 +198,7 @@ http:
           - foobar
           - foobar
         defaultEncoding: foobar
+        excludeRequestContentType: true
     Middleware07:
       contentType:
         autoDetect: true
@@ -221,6 +222,9 @@ http:
         service: foobar
         query: foobar
         errorRequestHeaders:
+          - foobar
+          - foobar
+        errorResponseHeaders:
           - foobar
           - foobar
     Middleware10:
@@ -266,6 +270,20 @@ http:
         customResponseHeaders:
           name0: foobar
           name1: foobar
+        replaceRequestHeadersRegex:
+          name0:
+            regex: foobar
+            replacement: foobar
+          name1:
+            regex: foobar
+            replacement: foobar
+        replaceResponseHeadersRegex:
+          name0:
+            regex: foobar
+            replacement: foobar
+          name1:
+            regex: foobar
+            replacement: foobar
         accessControlAllowCredentials: true
         accessControlAllowHeaders:
           - foobar
@@ -427,6 +445,10 @@ http:
         scheme: foobar
         port: foobar
         permanent: true
+    Middleware20a:
+      redirectTrailingSlash:
+        mode: add
+        permanent: true
     Middleware21:
       replacePath:
         path: foobar
@@ -434,6 +456,17 @@ http:
       replacePathRegex:
         regex: foobar
         replacement: foobar
+    Middleware22a:
+      queryParameters:
+        set:
+          name0: foobar
+          name1: foobar
+        add:
+          name0: foobar
+          name1: foobar
+        delete:
+          - foobar
+          - foobar
     Middleware23:
       retry:
         attempts: 42

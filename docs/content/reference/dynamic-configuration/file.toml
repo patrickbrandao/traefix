@@ -190,6 +190,7 @@
         minResponseBodyBytes = 42
         encodings = ["foobar", "foobar"]
         defaultEncoding = "foobar"
+        excludeRequestContentType = true
     [http.middlewares.Middleware07]
       [http.middlewares.Middleware07.contentType]
         autoDetect = true
@@ -206,6 +207,7 @@
         service = "foobar"
         query = "foobar"
         errorRequestHeaders = ["foobar", "foobar"]
+        errorResponseHeaders = ["foobar", "foobar"]
         [http.middlewares.Middleware09.errors.statusRewrites]
           name0 = 42
           name1 = 42
@@ -274,6 +276,20 @@
         [http.middlewares.Middleware12.headers.customResponseHeaders]
           name0 = "foobar"
           name1 = "foobar"
+        [http.middlewares.Middleware12.headers.replaceRequestHeadersRegex]
+          [http.middlewares.Middleware12.headers.replaceRequestHeadersRegex.name0]
+            regex = "foobar"
+            replacement = "foobar"
+          [http.middlewares.Middleware12.headers.replaceRequestHeadersRegex.name1]
+            regex = "foobar"
+            replacement = "foobar"
+        [http.middlewares.Middleware12.headers.replaceResponseHeadersRegex]
+          [http.middlewares.Middleware12.headers.replaceResponseHeadersRegex.name0]
+            regex = "foobar"
+            replacement = "foobar"
+          [http.middlewares.Middleware12.headers.replaceResponseHeadersRegex.name1]
+            regex = "foobar"
+            replacement = "foobar"
         [http.middlewares.Middleware12.headers.sslProxyHeaders]
           name0 = "foobar"
           name1 = "foobar"
@@ -377,6 +393,10 @@
         scheme = "foobar"
         port = "foobar"
         permanent = true
+    [http.middlewares.Middleware20a]
+      [http.middlewares.Middleware20a.redirectTrailingSlash]
+        mode = "add"
+        permanent = true
     [http.middlewares.Middleware21]
       [http.middlewares.Middleware21.replacePath]
         path = "foobar"
@@ -384,6 +404,15 @@
       [http.middlewares.Middleware22.replacePathRegex]
         regex = "foobar"
         replacement = "foobar"
+    [http.middlewares.Middleware22a]
+      [http.middlewares.Middleware22a.queryParameters]
+        delete = ["foobar", "foobar"]
+        [http.middlewares.Middleware22a.queryParameters.set]
+          name0 = "foobar"
+          name1 = "foobar"
+        [http.middlewares.Middleware22a.queryParameters.add]
+          name0 = "foobar"
+          name1 = "foobar"
     [http.middlewares.Middleware23]
       [http.middlewares.Middleware23.retry]
         attempts = 42

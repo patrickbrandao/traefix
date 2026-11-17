@@ -41,28 +41,30 @@ type MiddlewareSpecApplyConfiguration struct {
 	StripPrefixRegex *dynamic.StripPrefixRegex `json:"stripPrefixRegex,omitempty"`
 	ReplacePath      *dynamic.ReplacePath      `json:"replacePath,omitempty"`
 	ReplacePathRegex *dynamic.ReplacePathRegex `json:"replacePathRegex,omitempty"`
+	QueryParameters  *dynamic.QueryParameters  `json:"queryParameters,omitempty"`
 	Chain            *ChainApplyConfiguration  `json:"chain,omitempty"`
 	// Deprecated: please use IPAllowList instead.
-	IPWhiteList       *dynamic.IPWhiteList              `json:"ipWhiteList,omitempty"`
-	IPAllowList       *dynamic.IPAllowList              `json:"ipAllowList,omitempty"`
-	Headers           *dynamic.Headers                  `json:"headers,omitempty"`
-	EncodedCharacters *dynamic.EncodedCharacters        `json:"encodedCharacters,omitempty"`
-	Errors            *ErrorPageApplyConfiguration      `json:"errors,omitempty"`
-	RateLimit         *RateLimitApplyConfiguration      `json:"rateLimit,omitempty"`
-	RedirectRegex     *dynamic.RedirectRegex            `json:"redirectRegex,omitempty"`
-	RedirectScheme    *dynamic.RedirectScheme           `json:"redirectScheme,omitempty"`
-	BasicAuth         *BasicAuthApplyConfiguration      `json:"basicAuth,omitempty"`
-	DigestAuth        *DigestAuthApplyConfiguration     `json:"digestAuth,omitempty"`
-	ForwardAuth       *ForwardAuthApplyConfiguration    `json:"forwardAuth,omitempty"`
-	InFlightReq       *dynamic.InFlightReq              `json:"inFlightReq,omitempty"`
-	Buffering         *BufferingApplyConfiguration      `json:"buffering,omitempty"`
-	CircuitBreaker    *CircuitBreakerApplyConfiguration `json:"circuitBreaker,omitempty"`
-	Compress          *CompressApplyConfiguration       `json:"compress,omitempty"`
-	PassTLSClientCert *dynamic.PassTLSClientCert        `json:"passTLSClientCert,omitempty"`
-	Retry             *RetryApplyConfiguration          `json:"retry,omitempty"`
-	ContentType       *dynamic.ContentType              `json:"contentType,omitempty"`
-	GrpcWeb           *dynamic.GrpcWeb                  `json:"grpcWeb,omitempty"`
-	Tap               *TapApplyConfiguration            `json:"tap,omitempty"`
+	IPWhiteList           *dynamic.IPWhiteList              `json:"ipWhiteList,omitempty"`
+	IPAllowList           *dynamic.IPAllowList              `json:"ipAllowList,omitempty"`
+	Headers               *dynamic.Headers                  `json:"headers,omitempty"`
+	EncodedCharacters     *dynamic.EncodedCharacters        `json:"encodedCharacters,omitempty"`
+	Errors                *ErrorPageApplyConfiguration      `json:"errors,omitempty"`
+	RateLimit             *RateLimitApplyConfiguration      `json:"rateLimit,omitempty"`
+	RedirectRegex         *dynamic.RedirectRegex            `json:"redirectRegex,omitempty"`
+	RedirectScheme        *dynamic.RedirectScheme           `json:"redirectScheme,omitempty"`
+	RedirectTrailingSlash *dynamic.RedirectTrailingSlash    `json:"redirectTrailingSlash,omitempty"`
+	BasicAuth             *BasicAuthApplyConfiguration      `json:"basicAuth,omitempty"`
+	DigestAuth            *DigestAuthApplyConfiguration     `json:"digestAuth,omitempty"`
+	ForwardAuth           *ForwardAuthApplyConfiguration    `json:"forwardAuth,omitempty"`
+	InFlightReq           *dynamic.InFlightReq              `json:"inFlightReq,omitempty"`
+	Buffering             *BufferingApplyConfiguration      `json:"buffering,omitempty"`
+	CircuitBreaker        *CircuitBreakerApplyConfiguration `json:"circuitBreaker,omitempty"`
+	Compress              *CompressApplyConfiguration       `json:"compress,omitempty"`
+	PassTLSClientCert     *dynamic.PassTLSClientCert        `json:"passTLSClientCert,omitempty"`
+	Retry                 *RetryApplyConfiguration          `json:"retry,omitempty"`
+	ContentType           *dynamic.ContentType              `json:"contentType,omitempty"`
+	GrpcWeb               *dynamic.GrpcWeb                  `json:"grpcWeb,omitempty"`
+	Tap                   *TapApplyConfiguration            `json:"tap,omitempty"`
 	// Plugin defines the middleware plugin configuration.
 	// More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/overview/#community-middlewares
 	Plugin map[string]v1.JSON `json:"plugin,omitempty"`
@@ -111,6 +113,14 @@ func (b *MiddlewareSpecApplyConfiguration) WithReplacePath(value dynamic.Replace
 // If called multiple times, the ReplacePathRegex field is set to the value of the last call.
 func (b *MiddlewareSpecApplyConfiguration) WithReplacePathRegex(value dynamic.ReplacePathRegex) *MiddlewareSpecApplyConfiguration {
 	b.ReplacePathRegex = &value
+	return b
+}
+
+// WithQueryParameters sets the QueryParameters field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the QueryParameters field is set to the value of the last call.
+func (b *MiddlewareSpecApplyConfiguration) WithQueryParameters(value dynamic.QueryParameters) *MiddlewareSpecApplyConfiguration {
+	b.QueryParameters = &value
 	return b
 }
 
@@ -183,6 +193,14 @@ func (b *MiddlewareSpecApplyConfiguration) WithRedirectRegex(value dynamic.Redir
 // If called multiple times, the RedirectScheme field is set to the value of the last call.
 func (b *MiddlewareSpecApplyConfiguration) WithRedirectScheme(value dynamic.RedirectScheme) *MiddlewareSpecApplyConfiguration {
 	b.RedirectScheme = &value
+	return b
+}
+
+// WithRedirectTrailingSlash sets the RedirectTrailingSlash field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the RedirectTrailingSlash field is set to the value of the last call.
+func (b *MiddlewareSpecApplyConfiguration) WithRedirectTrailingSlash(value dynamic.RedirectTrailingSlash) *MiddlewareSpecApplyConfiguration {
+	b.RedirectTrailingSlash = &value
 	return b
 }
 

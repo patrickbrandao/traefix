@@ -343,34 +343,36 @@ func (p *Provider) loadConfigurationFromCRD(ctx context.Context, client Client) 
 		}
 
 		addToConfig(log.Ctx(ctxMid), "middleware", id, conf.HTTP.Middlewares, &dynamic.Middleware{
-			AddPrefix:         middleware.Spec.AddPrefix,
-			StripPrefix:       middleware.Spec.StripPrefix,
-			StripPrefixRegex:  middleware.Spec.StripPrefixRegex,
-			ReplacePath:       middleware.Spec.ReplacePath,
-			ReplacePathRegex:  middleware.Spec.ReplacePathRegex,
-			Chain:             chain,
-			IPWhiteList:       middleware.Spec.IPWhiteList,
-			IPAllowList:       middleware.Spec.IPAllowList,
-			Headers:           middleware.Spec.Headers,
-			EncodedCharacters: middleware.Spec.EncodedCharacters,
-			Errors:            errorPage,
-			RateLimit:         rateLimit,
-			RedirectRegex:     middleware.Spec.RedirectRegex,
-			RedirectScheme:    middleware.Spec.RedirectScheme,
-			BasicAuth:         basicAuth,
-			DigestAuth:        digestAuth,
-			ForwardAuth:       forwardAuth,
-			InFlightReq:       middleware.Spec.InFlightReq,
-			Buffering:         createBufferingMiddleware(middleware.Spec.Buffering),
-			CircuitBreaker:    circuitBreaker,
-			Compress:          createCompressMiddleware(middleware.Spec.Compress),
-			PassTLSClientCert: middleware.Spec.PassTLSClientCert,
-			Retry:             retry,
-			ContentType:       middleware.Spec.ContentType,
-			GrpcWeb:           middleware.Spec.GrpcWeb,
-			Tap:               tap,
-			Plugin:            plugin,
-			URNRefs:           refs.OrNil(),
+			AddPrefix:             middleware.Spec.AddPrefix,
+			StripPrefix:           middleware.Spec.StripPrefix,
+			StripPrefixRegex:      middleware.Spec.StripPrefixRegex,
+			ReplacePath:           middleware.Spec.ReplacePath,
+			ReplacePathRegex:      middleware.Spec.ReplacePathRegex,
+			QueryParameters:       middleware.Spec.QueryParameters,
+			Chain:                 chain,
+			IPWhiteList:           middleware.Spec.IPWhiteList,
+			IPAllowList:           middleware.Spec.IPAllowList,
+			Headers:               middleware.Spec.Headers,
+			EncodedCharacters:     middleware.Spec.EncodedCharacters,
+			Errors:                errorPage,
+			RateLimit:             rateLimit,
+			RedirectRegex:         middleware.Spec.RedirectRegex,
+			RedirectScheme:        middleware.Spec.RedirectScheme,
+			RedirectTrailingSlash: middleware.Spec.RedirectTrailingSlash,
+			BasicAuth:             basicAuth,
+			DigestAuth:            digestAuth,
+			ForwardAuth:           forwardAuth,
+			InFlightReq:           middleware.Spec.InFlightReq,
+			Buffering:             createBufferingMiddleware(middleware.Spec.Buffering),
+			CircuitBreaker:        circuitBreaker,
+			Compress:              createCompressMiddleware(middleware.Spec.Compress),
+			PassTLSClientCert:     middleware.Spec.PassTLSClientCert,
+			Retry:                 retry,
+			ContentType:           middleware.Spec.ContentType,
+			GrpcWeb:               middleware.Spec.GrpcWeb,
+			Tap:                   tap,
+			Plugin:                plugin,
+			URNRefs:               refs.OrNil(),
 		})
 	}
 
@@ -724,11 +726,12 @@ func (p *Provider) createErrorPageMiddleware(ctx context.Context, client Client,
 	}
 
 	errp := &dynamic.ErrorPage{
-		Status:              errorPage.Status,
-		StatusRewrites:      errorPage.StatusRewrites,
-		Query:               errorPage.Query,
-		ErrorRequestHeaders: errorPage.ErrorRequestHeaders,
-		Service:             serviceName,
+		Status:               errorPage.Status,
+		StatusRewrites:       errorPage.StatusRewrites,
+		Query:                errorPage.Query,
+		ErrorRequestHeaders:  errorPage.ErrorRequestHeaders,
+		ErrorResponseHeaders: errorPage.ErrorResponseHeaders,
+		Service:              serviceName,
 	}
 	if service != nil {
 		errp.Service = serviceKey
@@ -1094,6 +1097,8 @@ func createCompressMiddleware(compress *traefikv1alpha1.Compress) *dynamic.Compr
 	if compress.DefaultEncoding != nil {
 		c.DefaultEncoding = *compress.DefaultEncoding
 	}
+
+	c.ExcludeRequestContentType = compress.ExcludeRequestContentType
 
 	return c
 }

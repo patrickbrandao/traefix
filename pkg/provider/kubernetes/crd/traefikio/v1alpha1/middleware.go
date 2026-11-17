@@ -31,28 +31,30 @@ type MiddlewareSpec struct {
 	StripPrefixRegex *dynamic.StripPrefixRegex `json:"stripPrefixRegex,omitempty"`
 	ReplacePath      *dynamic.ReplacePath      `json:"replacePath,omitempty"`
 	ReplacePathRegex *dynamic.ReplacePathRegex `json:"replacePathRegex,omitempty"`
+	QueryParameters  *dynamic.QueryParameters  `json:"queryParameters,omitempty"`
 	Chain            *Chain                    `json:"chain,omitempty"`
 	// Deprecated: please use IPAllowList instead.
-	IPWhiteList       *dynamic.IPWhiteList       `json:"ipWhiteList,omitempty"`
-	IPAllowList       *dynamic.IPAllowList       `json:"ipAllowList,omitempty"`
-	Headers           *dynamic.Headers           `json:"headers,omitempty"`
-	EncodedCharacters *dynamic.EncodedCharacters `json:"encodedCharacters,omitempty"`
-	Errors            *ErrorPage                 `json:"errors,omitempty"`
-	RateLimit         *RateLimit                 `json:"rateLimit,omitempty"`
-	RedirectRegex     *dynamic.RedirectRegex     `json:"redirectRegex,omitempty"`
-	RedirectScheme    *dynamic.RedirectScheme    `json:"redirectScheme,omitempty"`
-	BasicAuth         *BasicAuth                 `json:"basicAuth,omitempty"`
-	DigestAuth        *DigestAuth                `json:"digestAuth,omitempty"`
-	ForwardAuth       *ForwardAuth               `json:"forwardAuth,omitempty"`
-	InFlightReq       *dynamic.InFlightReq       `json:"inFlightReq,omitempty"`
-	Buffering         *Buffering                 `json:"buffering,omitempty"`
-	CircuitBreaker    *CircuitBreaker            `json:"circuitBreaker,omitempty"`
-	Compress          *Compress                  `json:"compress,omitempty"`
-	PassTLSClientCert *dynamic.PassTLSClientCert `json:"passTLSClientCert,omitempty"`
-	Retry             *Retry                     `json:"retry,omitempty"`
-	ContentType       *dynamic.ContentType       `json:"contentType,omitempty"`
-	GrpcWeb           *dynamic.GrpcWeb           `json:"grpcWeb,omitempty"`
-	Tap               *Tap                       `json:"tap,omitempty"`
+	IPWhiteList           *dynamic.IPWhiteList           `json:"ipWhiteList,omitempty"`
+	IPAllowList           *dynamic.IPAllowList           `json:"ipAllowList,omitempty"`
+	Headers               *dynamic.Headers               `json:"headers,omitempty"`
+	EncodedCharacters     *dynamic.EncodedCharacters     `json:"encodedCharacters,omitempty"`
+	Errors                *ErrorPage                     `json:"errors,omitempty"`
+	RateLimit             *RateLimit                     `json:"rateLimit,omitempty"`
+	RedirectRegex         *dynamic.RedirectRegex         `json:"redirectRegex,omitempty"`
+	RedirectScheme        *dynamic.RedirectScheme        `json:"redirectScheme,omitempty"`
+	RedirectTrailingSlash *dynamic.RedirectTrailingSlash `json:"redirectTrailingSlash,omitempty"`
+	BasicAuth             *BasicAuth                     `json:"basicAuth,omitempty"`
+	DigestAuth            *DigestAuth                    `json:"digestAuth,omitempty"`
+	ForwardAuth           *ForwardAuth                   `json:"forwardAuth,omitempty"`
+	InFlightReq           *dynamic.InFlightReq           `json:"inFlightReq,omitempty"`
+	Buffering             *Buffering                     `json:"buffering,omitempty"`
+	CircuitBreaker        *CircuitBreaker                `json:"circuitBreaker,omitempty"`
+	Compress              *Compress                      `json:"compress,omitempty"`
+	PassTLSClientCert     *dynamic.PassTLSClientCert     `json:"passTLSClientCert,omitempty"`
+	Retry                 *Retry                         `json:"retry,omitempty"`
+	ContentType           *dynamic.ContentType           `json:"contentType,omitempty"`
+	GrpcWeb               *dynamic.GrpcWeb               `json:"grpcWeb,omitempty"`
+	Tap                   *Tap                           `json:"tap,omitempty"`
 	// Plugin defines the middleware plugin configuration.
 	// More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/overview/#community-middlewares
 	Plugin map[string]apiextensionv1.JSON `json:"plugin,omitempty"`
@@ -121,6 +123,9 @@ type ErrorPage struct {
 	// When nil (not set), all original request headers are forwarded.
 	// Set to an empty list to forward no headers, or list specific headers to forward only those.
 	ErrorRequestHeaders []string `json:"errorRequestHeaders,omitempty"`
+	// ErrorResponseHeaders defines the original backend response headers forwarded to the error page service request.
+	// These headers replace matching request headers. If not set, no response headers are forwarded to the service.
+	ErrorResponseHeaders []string `json:"errorResponseHeaders,omitempty"`
 }
 
 // +k8s:deepcopy-gen=true
@@ -377,6 +382,10 @@ type Compress struct {
 	Encodings []string `json:"encodings,omitempty"`
 	// DefaultEncoding specifies the default encoding if the `Accept-Encoding` header is not in the request or contains a wildcard (`*`).
 	DefaultEncoding *string `json:"defaultEncoding,omitempty"`
+	// ExcludeRequestContentType defines whether the request Content-Type header is also compared to the excluded content types.
+	// Requests with a matching Content-Type are passed through without compression.
+	// Default: true.
+	ExcludeRequestContentType *bool `json:"excludeRequestContentType,omitempty"`
 }
 
 // +k8s:deepcopy-gen=true

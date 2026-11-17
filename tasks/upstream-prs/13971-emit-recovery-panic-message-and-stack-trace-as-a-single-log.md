@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +39/-2 em 2 arquivos |
 | Labels | status/1-needs-design-review, kind/bug/fix, size/S, area/middleware |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,24 @@ Escopo pequeno (2 arquivos, +39/-2) com teste de regressao. Label status/1-needs
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes** (ajustes pequenos).
+
+Análise:
+- O middleware de recovery registrava a mensagem do panic e o stack trace em dois eventos de log. Se o panic acontece no shutdown (#13693), o processo pode sair entre as duas escritas, e o stack se perde (#13970). O fix junta tudo num único evento.
+- Mudança mínima, sem efeito de comportamento fora do log. Upstream: em `status/1-needs-design-review`.
+- Segurança: o conteúdo logado é o mesmo de antes (o stack tem no máximo 64 KiB, o mesmo limite de antes). Nenhum dado novo vai para o log.
+
+Ajustes:
+- Comentário reescrito no padrão do projeto (porquê, terminando em ponto).
+- Teste reescrito com mais rigor:
+  - usa `t.Context()` em vez de `context.Background()`;
+  - decodifica o JSON do zerolog e exige **exatamente um** evento;
+  - verifica que a mensagem tem o texto do panic, o erro, `Stack:` e o frame `recovery.recoverFunc`;
+  - não usa mensagens de assert, como pede o AGENTS.md.
+
+Testes:
+- `go test -count=1 ./pkg/middlewares/recovery/` ok.
+- `golangci-lint run ./pkg/middlewares/recovery/...`: 0 issues.
