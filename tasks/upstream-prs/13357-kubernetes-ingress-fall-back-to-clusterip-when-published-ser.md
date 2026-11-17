@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +322/-1 em 8 arquivos |
 | Labels | status/2-needs-review, area/provider/k8s/ingress, kind/bug/fix, size/M |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,23 @@ PR base v3.7 (portar para master). Há discussão com usuários e maintainers so
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- A abordagem é melhor que a de #12134: os `externalIPs` continuam publicados quando existem, e o ClusterIP só entra como fallback. Assim o Ingress deixa de ficar sem status, que era o que travava o Argo CD em "Progressing".
+- Limitação: usava só `spec.clusterIP`; em Services dual-stack a segunda família (`spec.clusterIPs[1]`) era ignorada.
+- Risco a documentar (não é bug): quem usa External-DNS com um published Service ClusterIP sem `externalIPs` antes não tinha status e agora vai publicar um IP **interno** do cluster no DNS. A documentação do PR já avisa sobre isso.
+
+**Ajustes**
+
+- Combinado com a ideia de #12134: o fallback usa `spec.clusterIPs` (as duas famílias), cai para `spec.clusterIP` se a lista vier vazia e ignora `""` e `None` (`corev1.ClusterIPNone`).
+- Adaptado à função `serviceIngressStatus` (introduzida na importação de #12281), o que também cobre o `publishedServiceSelector`.
+- Fixture e caso de teste novos para dual-stack; documentação ajustada.
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress/` ok (casos No-ExternalIPs, IPv6, Dual Stack, Headless, Empty).
+- `golangci-lint run ./pkg/provider/kubernetes/ingress/...`: 0 issues.
