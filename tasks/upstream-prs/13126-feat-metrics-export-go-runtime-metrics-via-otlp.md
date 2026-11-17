@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +13/-0 em 3 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/S, area/middleware/metrics, area/otel |
-| Status | pendente |
+| Status | adiado |
 
 ## O que faz
 
@@ -38,3 +38,24 @@ Código pequeno (9 linhas em otel.go), mas traz bump de dependências em go.mod 
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+### Achados
+
+- Adiciona dependência nova `go.opentelemetry.io/contrib/instrumentation/runtime v0.71.0`. É do projeto oficial OpenTelemetry (mesma família de `otelhttp`, já usado), então não é de terceiro desconhecido, mas é uma mudança em `go.mod`/`go.sum`.
+- O módulo não está no cache local, e o brief proíbe baixar qualquer coisa além do diff/metadados: não dá para compilar nem testar aqui.
+- As métricas de runtime ficam sempre ligadas quando OTLP está habilitado, sem opção para desligar: muda o volume exportado para todos os usuários de OTLP, ao contrário do Prometheus, onde o GoCollector é esperado. Seria melhor uma opção explícita (ex.: `metrics.otlp.addRuntimeMetrics`).
+- Sem testes nem documentação; sem review de maintainer.
+
+### Ajustes
+
+Nenhum.
+
+### Testes
+
+Não aplicável.
+
+### Motivo
+
+Adiado: exige baixar uma dependência nova (fora do que o brief permite neste ciclo) e precisa de opt-in antes de importar. Reavaliar fazendo o `go get` de forma controlada, alinhando a versão do contrib com as que já estão no `go.mod`.
