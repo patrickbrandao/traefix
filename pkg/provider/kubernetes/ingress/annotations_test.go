@@ -111,6 +111,43 @@ func Test_parseRouterConfig(t *testing.T) {
 	}
 }
 
+func TestRouterConfigDeepCopy(t *testing.T) {
+	cfg := &RouterConfig{
+		Router: &RouterIng{
+			EntryPoints: []string{"web"},
+			Middlewares: []string{"auth"},
+			TLS: &dynamic.RouterTLSConfig{
+				Options: "default",
+				Domains: []types.Domain{
+					{Main: "example.com", SANs: []string{"www.example.com"}},
+				},
+			},
+			Observability: &dynamic.RouterObservabilityConfig{
+				AccessLogs: new(true),
+			},
+			RespondingTimeouts: &dynamic.RouterRespondingTimeouts{
+				ReadTimeout: new(ptypes.Duration(time.Second)),
+			},
+		},
+	}
+
+	got := cfg.DeepCopy()
+	*got.Router.RespondingTimeouts.ReadTimeout = ptypes.Duration(time.Minute)
+
+	got.Router.EntryPoints[0] = "websecure"
+	got.Router.Middlewares[0] = "ratelimit"
+	got.Router.TLS.Options = "custom"
+	got.Router.TLS.Domains[0].SANs[0] = "api.example.com"
+	*got.Router.Observability.AccessLogs = false
+
+	assert.Equal(t, []string{"web"}, cfg.Router.EntryPoints)
+	assert.Equal(t, []string{"auth"}, cfg.Router.Middlewares)
+	assert.Equal(t, "default", cfg.Router.TLS.Options)
+	assert.Equal(t, []string{"www.example.com"}, cfg.Router.TLS.Domains[0].SANs)
+	assert.True(t, *cfg.Router.Observability.AccessLogs)
+	assert.Equal(t, ptypes.Duration(time.Second), *cfg.Router.RespondingTimeouts.ReadTimeout)
+}
+
 func Test_parseServiceConfig(t *testing.T) {
 	testCases := []struct {
 		desc        string
