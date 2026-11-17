@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +259/-0 em 5 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/middleware, area/tls, area/provider/k8s |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -40,3 +40,22 @@ Base v3.7, precisa de adaptação. Trata o sintoma, não a causa (o nome das opt
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados:
+- Trata o sintoma (o nome das TLS options é resolvido uma vez por conexão, no handshake), não a causa, mas a correção é segura: a resposta 421 passa a fechar a conexão para o cliente refazer o handshake. HTTP/1.1 fecha o TCP, HTTP/2 envia GOAWAY (gracioso, streams em andamento terminam).
+- No HTTP/3 o PR chama `CloseWithError` **antes** de escrever o 421: o `CONNECTION_CLOSE` sai antes da resposta e o cliente recebe só um erro de conexão. Além disso, o fechamento QUIC é abrupto e derruba outros streams da mesma conexão (com coalescing de conexões do navegador, requests de outros hosts que estavam em andamento).
+- Toda resposta 421 do snicheck passa a fechar a conexão, inclusive o caso legítimo de request mal direcionado (coalescing HTTP/2 com TLS options diferentes, ou listeners isolados do Gateway API no fork). Comportamento aceitável: o cliente já teria de abrir outra conexão para esse host.
+- Comentário longo, mais *como* do que *porquê*.
+
+Ajustes:
+- Ordem invertida: o 421 é escrito e enviado com `http.NewResponseController(rw).Flush()` antes de fechar a conexão QUIC, para o cliente receber a resposta.
+- Comentário reduzido ao porquê.
+- Conflito de imports no teste do entry point resolvido.
+
+Risco residual: no HTTP/3 o fechamento continua abrupto para os outros streams da conexão; quic-go não tem shutdown gracioso por conexão.
+
+Testes: `go build ./...` ok; `go test ./pkg/middlewares/snicheck/ ./pkg/tcp/ ./pkg/server/` ok; `golangci-lint` nos pacotes tocados: só 1 aviso `errcheck` pré-existente em `pkg/tcp/proxy.go` (arquivo não tocado).
