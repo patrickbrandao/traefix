@@ -1002,10 +1002,10 @@ The following annotations are supported on `Gateway` resources:
 
 | Annotation | Description |
 |:-----------|:------------|
-| `traefik.io/statusaddress.ip` | IP address to use for this Gateway's status. |
-| `traefik.io/statusaddress.hostname` | Hostname to use for this Gateway's status. |
-| `traefik.io/statusaddress.service.name` | Kubernetes Service name to copy status addresses from. |
-| `traefik.io/statusaddress.service.namespace` | Kubernetes Service namespace to copy status addresses from. |
+| <a id="opt-traefik-iostatusaddress-ip" href="#opt-traefik-iostatusaddress-ip" title="#opt-traefik-iostatusaddress-ip">`traefik.io/statusaddress.ip`</a> | IP address to use for this Gateway's status. |
+| <a id="opt-traefik-iostatusaddress-hostname" href="#opt-traefik-iostatusaddress-hostname" title="#opt-traefik-iostatusaddress-hostname">`traefik.io/statusaddress.hostname`</a> | Hostname to use for this Gateway's status. |
+| <a id="opt-traefik-iostatusaddress-service-name" href="#opt-traefik-iostatusaddress-service-name" title="#opt-traefik-iostatusaddress-service-name">`traefik.io/statusaddress.service.name`</a> | Kubernetes Service name to copy status addresses from. |
+| <a id="opt-traefik-iostatusaddress-service-namespace" href="#opt-traefik-iostatusaddress-service-namespace" title="#opt-traefik-iostatusaddress-service-namespace">`traefik.io/statusaddress.service.namespace`</a> | Kubernetes Service namespace to copy status addresses from. |
 
 When `service.name` is set, the `LoadBalancer` ingress addresses of the referenced `Service` are copied to the `Gateway` status, the same way the static `statusAddress.publishedService` option works.
 If `service.namespace` is omitted, it defaults to the `Gateway`'s own namespace.

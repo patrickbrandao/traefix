@@ -16928,3 +16928,64 @@ func Test_loadListenerSetListeners(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadHTTPRoutes_externalNameService(t *testing.T) {
+	testCases := []struct {
+		desc                      string
+		paths                     []string
+		allowExternalNameServices bool
+		expectedURLs              []string
+	}{
+		{
+			desc:  "flag off",
+			paths: []string{"services.yml", "httproute/with_external_name_http.yml"},
+		},
+		{
+			desc:                      "flag on, port 80",
+			paths:                     []string{"services.yml", "httproute/with_external_name_http.yml"},
+			allowExternalNameServices: true,
+			expectedURLs:              []string{"http://external.domain:80"},
+		},
+		{
+			desc:                      "flag on, port 443 without BackendTLSPolicy",
+			paths:                     []string{"services.yml", "httproute/with_external_name_https.yml"},
+			allowExternalNameServices: true,
+			expectedURLs:              []string{"http://external.domain:443"},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			k8sObjects, gwObjects := readResources(t, test.paths)
+
+			client := newClientImpl(kubefake.NewClientset(k8sObjects...), newGatewaySimpleClientSet(t, gwObjects...))
+
+			eventCh, err := client.WatchAll(nil, make(chan struct{}))
+			require.NoError(t, err)
+			<-eventCh
+
+			p := Provider{
+				EntryPoints:               map[string]Entrypoint{"web": {Address: ":80"}},
+				AllowExternalNameServices: test.allowExternalNameServices,
+				client:                    client,
+			}
+
+			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			require.NoError(t, err)
+
+			var urls []string
+			for _, service := range conf.HTTP.Services {
+				if service.LoadBalancer == nil {
+					continue
+				}
+				for _, server := range service.LoadBalancer.Servers {
+					urls = append(urls, server.URL)
+				}
+			}
+
+			assert.Equal(t, test.expectedURLs, urls)
+		})
+	}
+}
