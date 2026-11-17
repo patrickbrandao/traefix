@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -641,5 +642,143 @@ func TestHTTP3ListenNetwork(t *testing.T) {
 
 			assert.Equal(t, test.want, http3ListenNetwork(test.address))
 		})
+	}
+}
+
+func TestHTTP3ShutdownHonorsGraceTimeOut(t *testing.T) {
+	certContent, err := localhostCert.Read()
+	require.NoError(t, err)
+
+	keyContent, err := localhostKey.Read()
+	require.NoError(t, err)
+
+	tlsCert, err := tls.X509KeyPair(certContent, keyContent)
+	require.NoError(t, err)
+
+	epConfig := &static.EntryPointsTransport{}
+	epConfig.SetDefaults()
+	epConfig.LifeCycle.RequestAcceptGraceTimeout = 0
+	epConfig.LifeCycle.GraceTimeOut = ptypes.Duration(5 * time.Second)
+
+	entryPoint, err := NewTCPEntryPoint(t.Context(), "foo", &static.EntryPoint{
+		Address:          "127.0.0.1:0",
+		Transport:        epConfig,
+		ForwardedHeaders: &static.ForwardedHeaders{},
+		HTTP2:            &static.HTTP2Config{},
+		HTTP3:            &static.HTTP3Config{},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	router, err := tcprouter.NewRouter(nil)
+	require.NoError(t, err)
+
+	// The handler is still writing its response when the shutdown starts.
+	handlerStarted := make(chan struct{})
+	var handlerOnce sync.Once
+	router.AddHTTPTLSConfig("example.com", &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	}, traefiktls.DefaultTLSConfigName)
+	router.SetHTTPSHandler(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		handlerOnce.Do(func() { close(handlerStarted) })
+		time.Sleep(800 * time.Millisecond)
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write([]byte("finished"))
+	}), nil)
+
+	ctx := t.Context()
+	go entryPoint.Start(ctx)
+	entryPoint.SwitchRouter(router)
+
+	// We are racing with the http3Server readiness happening in the goroutine starting the entrypoint.
+	time.Sleep(time.Second)
+
+	udpAddr := entryPoint.http3Server.http3conn.LocalAddr().String()
+
+	certPool := x509.NewCertPool()
+	certPool.AppendCertsFromPEM(certContent)
+
+	newTransport := func() *http3.Transport {
+		transport := &http3.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    certPool,
+				ServerName: "example.com",
+			},
+			Dial: func(ctx context.Context, _ string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+				return quic.DialAddr(ctx, udpAddr, tlsCfg, cfg)
+			},
+		}
+		t.Cleanup(func() { _ = transport.Close() })
+
+		return transport
+	}
+
+	type result struct {
+		body string
+		err  error
+	}
+	results := make(chan result, 1)
+
+	go func() {
+		req, reqErr := http.NewRequest(http.MethodGet, "https://example.com/", http.NoBody)
+		if reqErr != nil {
+			results <- result{err: reqErr}
+			return
+		}
+
+		resp, rtErr := newTransport().RoundTrip(req)
+		if rtErr != nil {
+			results <- result{err: rtErr}
+			return
+		}
+		defer resp.Body.Close()
+
+		body, readErr := io.ReadAll(resp.Body)
+		results <- result{body: string(body), err: readErr}
+	}()
+
+	// Only shut down once the request is actually in flight, otherwise the
+	// server has nothing to wait for and Close would look identical to Shutdown.
+	select {
+	case <-handlerStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the HTTP/3 request never reached the handler")
+	}
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		entryPoint.Shutdown(ctx)
+		close(shutdownDone)
+	}()
+
+	// Once the shutdown has started, new connections must be refused while the in-flight request completes.
+	time.Sleep(100 * time.Millisecond)
+
+	newReqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	newReq, err := http.NewRequestWithContext(newReqCtx, http.MethodGet, "https://example.com/", http.NoBody)
+	require.NoError(t, err)
+
+	newResp, err := newTransport().RoundTrip(newReq)
+	if err == nil {
+		_ = newResp.Body.Close()
+	}
+	require.Error(t, err)
+
+	// Elapsed time is deliberately not asserted: quic-go's Close also waits for
+	// connections to finish closing, so both paths take roughly as long. What
+	// separates them is whether the in-flight request completes or is torn down.
+	select {
+	case res := <-results:
+		require.NoError(t, res.err)
+		assert.Equal(t, "finished", res.body)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the HTTP/3 response never completed")
+	}
+
+	select {
+	case <-shutdownDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the entry point shutdown never returned")
 	}
 }
