@@ -4125,3 +4125,67 @@ func TestLoadServiceUnsupportedStrategy(t *testing.T) {
 	})
 	assert.EqualError(t, err, "load-balancer strategy random is not supported")
 }
+
+func TestIngressEndpointStatus(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		desc     string
+		endpoint *EndpointIngress
+		expected []netv1.IngressLoadBalancerIngress
+	}{
+		{
+			desc:     "empty",
+			endpoint: &EndpointIngress{},
+			expected: []netv1.IngressLoadBalancerIngress{},
+		},
+		{
+			desc:     "single IPv4",
+			endpoint: &EndpointIngress{IP: "192.0.2.1"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}},
+		},
+		{
+			desc:     "multiple IPv4",
+			endpoint: &EndpointIngress{IP: "192.0.2.1, 192.0.2.2"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}, {IP: "192.0.2.2"}},
+		},
+		{
+			desc:     "mixed IPv4 and IPv6",
+			endpoint: &EndpointIngress{IP: "192.0.2.1,2001:db8::1"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}, {IP: "2001:db8::1"}},
+		},
+		{
+			desc:     "duplicate addresses are removed preserving order",
+			endpoint: &EndpointIngress{IP: "192.0.2.1,192.0.2.1,2001:db8::1"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}, {IP: "2001:db8::1"}},
+		},
+		{
+			desc:     "invalid addresses are ignored",
+			endpoint: &EndpointIngress{IP: "192.0.2.1,example.com,2001:db8::1"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}, {IP: "2001:db8::1"}},
+		},
+		{
+			desc:     "hostname only",
+			endpoint: &EndpointIngress{Hostname: "example.com"},
+			expected: []netv1.IngressLoadBalancerIngress{{Hostname: "example.com"}},
+		},
+		{
+			desc:     "single IP and hostname preserve legacy status entry",
+			endpoint: &EndpointIngress{IP: "192.0.2.1", Hostname: "example.com"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1", Hostname: "example.com"}},
+		},
+		{
+			desc:     "multiple IPs and hostname",
+			endpoint: &EndpointIngress{IP: "192.0.2.1,2001:db8::1", Hostname: "example.com"},
+			expected: []netv1.IngressLoadBalancerIngress{{IP: "192.0.2.1"}, {IP: "2001:db8::1"}, {Hostname: "example.com"}},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, test.expected, ingressEndpointStatus(test.endpoint))
+		})
+	}
+}

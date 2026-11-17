@@ -193,7 +193,7 @@ func (p *Provider) applyRouterTransform(ctx context.Context, rt *dynamic.Router,
 
 // EndpointIngress holds the endpoint information for the Kubernetes provider.
 type EndpointIngress struct {
-	IP                       string `description:"IP used for Kubernetes Ingress endpoints." json:"ip,omitempty" toml:"ip,omitempty" yaml:"ip,omitempty"`
+	IP                       string `description:"IP used for Kubernetes Ingress endpoints. It can be a single IP address or a comma-separated list of IP addresses." json:"ip,omitempty" toml:"ip,omitempty" yaml:"ip,omitempty"`
 	Hostname                 string `description:"Hostname used for Kubernetes Ingress endpoints." json:"hostname,omitempty" toml:"hostname,omitempty" yaml:"hostname,omitempty"`
 	PublishedService         string `description:"Published Kubernetes Service to copy status from." json:"publishedService,omitempty" toml:"publishedService,omitempty" yaml:"publishedService,omitempty"`
 	PublishedServiceSelector string `description:"Published Kubernetes Service label selector to copy status from." json:"publishedServiceSelector,omitempty" toml:"publishedServiceSelector,omitempty" yaml:"publishedServiceSelector,omitempty"`
@@ -537,7 +537,13 @@ func (p *Provider) updateIngressStatus(ing *netv1.Ingress, k8sClient Client, nod
 			return errors.New("publishedService, publishedServiceSelector, ip or hostname must be defined")
 		}
 
-		return k8sClient.UpdateIngressStatus(ing, []netv1.IngressLoadBalancerIngress{{IP: p.IngressEndpoint.IP, Hostname: p.IngressEndpoint.Hostname}})
+		status := ingressEndpointStatus(p.IngressEndpoint)
+		// Keep the current status rather than clearing it when every configured IP is invalid.
+		if len(status) == 0 {
+			return fmt.Errorf("no valid ingressEndpoint IP address in %q", p.IngressEndpoint.IP)
+		}
+
+		return k8sClient.UpdateIngressStatus(ing, status)
 	}
 
 	var services []*corev1.Service
@@ -603,6 +609,50 @@ func (p *Provider) updateIngressStatus(ing *netv1.Ingress, k8sClient Client, nod
 	}
 
 	return k8sClient.UpdateIngressStatus(ing, ingressStatus)
+}
+
+// ingressEndpointStatus returns the Ingress status for the static ingressEndpoint IPs and hostname.
+// A single IP keeps the legacy shape, where the IP and the hostname share the same status entry.
+func ingressEndpointStatus(endpoint *EndpointIngress) []netv1.IngressLoadBalancerIngress {
+	var addresses []string
+	for address := range strings.SplitSeq(endpoint.IP, ",") {
+		address = strings.TrimSpace(address)
+		if address == "" || slices.Contains(addresses, address) {
+			continue
+		}
+
+		// An invalid address would make the API server reject the whole status update.
+		if net.ParseIP(address) == nil {
+			log.Error().Str("ip", address).Msg("Ignoring invalid ingressEndpoint IP address")
+			continue
+		}
+
+		addresses = append(addresses, address)
+	}
+
+	if len(addresses) <= 1 {
+		var ip string
+		if len(addresses) == 1 {
+			ip = addresses[0]
+		}
+
+		if ip == "" && endpoint.Hostname == "" {
+			return []netv1.IngressLoadBalancerIngress{}
+		}
+
+		return []netv1.IngressLoadBalancerIngress{{IP: ip, Hostname: endpoint.Hostname}}
+	}
+
+	status := make([]netv1.IngressLoadBalancerIngress, 0, len(addresses)+1)
+	for _, address := range addresses {
+		status = append(status, netv1.IngressLoadBalancerIngress{IP: address})
+	}
+
+	if endpoint.Hostname != "" {
+		status = append(status, netv1.IngressLoadBalancerIngress{Hostname: endpoint.Hostname})
+	}
+
+	return status
 }
 
 // serviceIngressStatus returns the Ingress status derived from the given service.
