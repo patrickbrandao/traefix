@@ -69,8 +69,9 @@ type PoolStrategy struct {
 }
 
 // GetIP checks the list of Forwarded IPs (most recent first) against the
-// Checker pool of IPs. It returns the first IP that is not in the pool, or the
-// empty string otherwise.
+// Checker pool of IPs. It returns the first IP that is not in the pool.
+// When every forwarded IP is in the pool, or there is none, it returns the
+// remote address if it is not in the pool, or the empty string otherwise.
 func (s *PoolStrategy) GetIP(req *http.Request) string {
 	if s.Checker == nil {
 		return ""
@@ -87,6 +88,15 @@ func (s *PoolStrategy) GetIP(req *http.Request) string {
 		if contain, _ := s.Checker.Contains(xffTrimmed); !contain {
 			return xffTrimmed
 		}
+	}
+
+	// The remote address is the hop closest to Traefik: when it is not in the pool, it is the client,
+	// e.g. a direct connection without X-Forwarded-For.
+	// When it is in the pool (a trusted proxy), it must never be used as the client IP,
+	// otherwise every request relayed by that proxy without a usable X-Forwarded-For would be attributed to it.
+	remoteIP := (&RemoteAddrStrategy{}).GetIP(req)
+	if contain, _ := s.Checker.Contains(remoteIP); !contain {
+		return remoteIP
 	}
 
 	return ""
