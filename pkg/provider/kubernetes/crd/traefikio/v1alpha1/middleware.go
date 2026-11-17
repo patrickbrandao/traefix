@@ -31,28 +31,30 @@ type MiddlewareSpec struct {
 	StripPrefixRegex *dynamic.StripPrefixRegex `json:"stripPrefixRegex,omitempty"`
 	ReplacePath      *dynamic.ReplacePath      `json:"replacePath,omitempty"`
 	ReplacePathRegex *dynamic.ReplacePathRegex `json:"replacePathRegex,omitempty"`
+	QueryParameters  *dynamic.QueryParameters  `json:"queryParameters,omitempty"`
 	Chain            *Chain                    `json:"chain,omitempty"`
 	// Deprecated: please use IPAllowList instead.
-	IPWhiteList       *dynamic.IPWhiteList       `json:"ipWhiteList,omitempty"`
-	IPAllowList       *dynamic.IPAllowList       `json:"ipAllowList,omitempty"`
-	Headers           *dynamic.Headers           `json:"headers,omitempty"`
-	EncodedCharacters *dynamic.EncodedCharacters `json:"encodedCharacters,omitempty"`
-	Errors            *ErrorPage                 `json:"errors,omitempty"`
-	RateLimit         *RateLimit                 `json:"rateLimit,omitempty"`
-	RedirectRegex     *dynamic.RedirectRegex     `json:"redirectRegex,omitempty"`
-	RedirectScheme    *dynamic.RedirectScheme    `json:"redirectScheme,omitempty"`
-	BasicAuth         *BasicAuth                 `json:"basicAuth,omitempty"`
-	DigestAuth        *DigestAuth                `json:"digestAuth,omitempty"`
-	ForwardAuth       *ForwardAuth               `json:"forwardAuth,omitempty"`
-	InFlightReq       *dynamic.InFlightReq       `json:"inFlightReq,omitempty"`
-	Buffering         *Buffering                 `json:"buffering,omitempty"`
-	CircuitBreaker    *CircuitBreaker            `json:"circuitBreaker,omitempty"`
-	Compress          *Compress                  `json:"compress,omitempty"`
-	PassTLSClientCert *dynamic.PassTLSClientCert `json:"passTLSClientCert,omitempty"`
-	Retry             *Retry                     `json:"retry,omitempty"`
-	ContentType       *dynamic.ContentType       `json:"contentType,omitempty"`
-	GrpcWeb           *dynamic.GrpcWeb           `json:"grpcWeb,omitempty"`
-	Tap               *Tap                       `json:"tap,omitempty"`
+	IPWhiteList           *dynamic.IPWhiteList           `json:"ipWhiteList,omitempty"`
+	IPAllowList           *dynamic.IPAllowList           `json:"ipAllowList,omitempty"`
+	Headers               *dynamic.Headers               `json:"headers,omitempty"`
+	EncodedCharacters     *dynamic.EncodedCharacters     `json:"encodedCharacters,omitempty"`
+	Errors                *ErrorPage                     `json:"errors,omitempty"`
+	RateLimit             *RateLimit                     `json:"rateLimit,omitempty"`
+	RedirectRegex         *dynamic.RedirectRegex         `json:"redirectRegex,omitempty"`
+	RedirectScheme        *dynamic.RedirectScheme        `json:"redirectScheme,omitempty"`
+	RedirectTrailingSlash *dynamic.RedirectTrailingSlash `json:"redirectTrailingSlash,omitempty"`
+	BasicAuth             *BasicAuth                     `json:"basicAuth,omitempty"`
+	DigestAuth            *DigestAuth                    `json:"digestAuth,omitempty"`
+	ForwardAuth           *ForwardAuth                   `json:"forwardAuth,omitempty"`
+	InFlightReq           *dynamic.InFlightReq           `json:"inFlightReq,omitempty"`
+	Buffering             *Buffering                     `json:"buffering,omitempty"`
+	CircuitBreaker        *CircuitBreaker                `json:"circuitBreaker,omitempty"`
+	Compress              *Compress                      `json:"compress,omitempty"`
+	PassTLSClientCert     *dynamic.PassTLSClientCert     `json:"passTLSClientCert,omitempty"`
+	Retry                 *Retry                         `json:"retry,omitempty"`
+	ContentType           *dynamic.ContentType           `json:"contentType,omitempty"`
+	GrpcWeb               *dynamic.GrpcWeb               `json:"grpcWeb,omitempty"`
+	Tap                   *Tap                           `json:"tap,omitempty"`
 	// Plugin defines the middleware plugin configuration.
 	// More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/overview/#community-middlewares
 	Plugin map[string]apiextensionv1.JSON `json:"plugin,omitempty"`
@@ -121,6 +123,9 @@ type ErrorPage struct {
 	// When nil (not set), all original request headers are forwarded.
 	// Set to an empty list to forward no headers, or list specific headers to forward only those.
 	ErrorRequestHeaders []string `json:"errorRequestHeaders,omitempty"`
+	// ErrorResponseHeaders defines the original backend response headers forwarded to the error page service request.
+	// These headers replace matching request headers. If not set, no response headers are forwarded to the service.
+	ErrorResponseHeaders []string `json:"errorResponseHeaders,omitempty"`
 }
 
 // +k8s:deepcopy-gen=true
@@ -169,6 +174,9 @@ type BasicAuth struct {
 	// RemoveHeader sets the removeHeader option to true to remove the authorization header before forwarding the request to your service.
 	// Default: false.
 	RemoveHeader bool `json:"removeHeader,omitempty"`
+	// AllowCORSPreflight allows the CORS preflight requests (OPTIONS requests with non-empty Origin and Access-Control-Request-Method headers) to pass through without authentication.
+	// Default: false.
+	AllowCORSPreflight bool `json:"allowCORSPreflight,omitempty"`
 	// HeaderField defines a header field to store the authenticated user.
 	// More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/basicauth/#headerfield
 	HeaderField string `json:"headerField,omitempty"`
@@ -199,7 +207,15 @@ type DigestAuth struct {
 // More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/forwardauth/
 type ForwardAuth struct {
 	// Address defines the authentication server address.
+	// It is mutually exclusive with the Service option.
 	Address string `json:"address,omitempty"`
+	// Service defines the reference to a Kubernetes Service that will serve as the authentication server.
+	// It is mutually exclusive with the Address and TLS options: the connection to the service is handled by its ServersTransport.
+	// More info: https://doc.traefik.io/traefik/v3.7/reference/routing-configuration/http/middlewares/forwardauth/#service
+	Service *Service `json:"service,omitempty"`
+	// Path defines the path of the authentication request when using the Service option.
+	// It can also contain a query string. It defaults to the root path.
+	Path string `json:"path,omitempty"`
 	// TrustForwardHeader defines whether to trust (ie: forward) all X-Forwarded-* headers.
 	//
 	// Deprecated: Use forwardedHeaders.trustedIPs at the EntryPoint level instead, and set trustForwardHeader to true on this middleware.
@@ -218,6 +234,8 @@ type ForwardAuth struct {
 	MaxResponseBodySize *int64 `json:"maxResponseBodySize,omitempty"`
 	// AddAuthCookiesToResponse defines the list of cookies to copy from the authentication server response to the response.
 	AddAuthCookiesToResponse []string `json:"addAuthCookiesToResponse,omitempty"`
+	// AddAuthCookiesToResponseRegex defines a regex pattern used to match cookies to copy from the authentication server response to the response.
+	AddAuthCookiesToResponseRegex string `json:"addAuthCookiesToResponseRegex,omitempty"`
 	// HeaderField defines a header field to store the authenticated user.
 	// More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/forwardauth/#headerfield
 	HeaderField string `json:"headerField,omitempty"`
@@ -231,6 +249,13 @@ type ForwardAuth struct {
 	PreserveRequestMethod bool `json:"preserveRequestMethod,omitempty"`
 	// AuthSigninURL specifies the URL to redirect to when the authentication server returns 401 Unauthorized.
 	AuthSigninURL string `json:"authSigninURL,omitempty"`
+	// Timeout defines the maximum duration of the request to the authentication server, including connection time and reading the response body.
+	// The value of timeout should be provided in seconds or as a valid duration format,
+	// see https://pkg.go.dev/time#ParseDuration.
+	// Zero means the default value (30s).
+	// +kubebuilder:validation:Pattern="^([0-9]+(ns|us|µs|ms|s|m|h)?)+$"
+	// +kubebuilder:validation:XIntOrString
+	Timeout *intstr.IntOrString `json:"timeout,omitempty"`
 }
 
 // +k8s:deepcopy-gen=true
@@ -239,6 +264,11 @@ type ForwardAuth struct {
 // TODO: This has to be removed once the CAOptional option is removed.
 type ClientTLSWithCAOptional struct {
 	ClientTLS `json:",inline"`
+
+	// CAConfigMap is the name of a ConfigMap in the Middleware namespace containing the CA to validate the server certificate.
+	// The CA certificate is extracted from key `tls.ca` or `ca.crt`.
+	// CAConfigMap and CASecret are mutually exclusive.
+	CAConfigMap string `json:"caConfigMap,omitempty"`
 
 	// Deprecated: TLS client authentication is a server side option (see https://github.com/golang/go/blob/740a490f71d026bb7d2d13cb8fa2d6d6e0572b70/src/crypto/tls/common.go#L634).
 	CAOptional *bool `json:"caOptional,omitempty"`
@@ -313,6 +343,10 @@ type Redis struct {
 	// +kubebuilder:validation:Pattern="^([0-9]+(ns|us|µs|ms|s|m|h)?)+$"
 	// +kubebuilder:validation:XIntOrString
 	DialTimeout *intstr.IntOrString `json:"dialTimeout,omitempty"`
+	// DenyOnError controls the middleware behavior when Redis is unavailable or returns an error.
+	// When true (the default), the request is rejected with a 500 status code.
+	// When false, the error is logged and the request is forwarded to the next handler (fail-open).
+	DenyOnError *bool `json:"denyOnError,omitempty"`
 }
 
 // +k8s:deepcopy-gen=true
@@ -348,6 +382,10 @@ type Compress struct {
 	Encodings []string `json:"encodings,omitempty"`
 	// DefaultEncoding specifies the default encoding if the `Accept-Encoding` header is not in the request or contains a wildcard (`*`).
 	DefaultEncoding *string `json:"defaultEncoding,omitempty"`
+	// ExcludeRequestContentType defines whether the request Content-Type header is also compared to the excluded content types.
+	// Requests with a matching Content-Type are passed through without compression.
+	// Default: true.
+	ExcludeRequestContentType *bool `json:"excludeRequestContentType,omitempty"`
 }
 
 // +k8s:deepcopy-gen=true

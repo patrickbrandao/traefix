@@ -3,6 +3,7 @@ package ratelimiter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/middlewares"
 	"github.com/traefik/traefik/v3/pkg/middlewares/observability"
+	"github.com/traefik/traefik/v3/pkg/proxy/httputil"
 	"github.com/vulcand/oxy/v2/utils"
 	"golang.org/x/time/rate"
 )
@@ -20,6 +22,8 @@ import (
 const (
 	typeName   = "RateLimiter"
 	maxSources = 65536
+	// maxTTL is the longest bucket TTL, in seconds.
+	maxTTL = math.MaxInt32
 )
 
 type limiter interface {
@@ -37,6 +41,7 @@ type rateLimiter struct {
 	sourceMatcher utils.SourceExtractor
 	next          http.Handler
 	logger        *zerolog.Logger
+	denyOnError   bool
 
 	limiter limiter
 }
@@ -99,6 +104,14 @@ func New(ctx context.Context, next http.Handler, config dynamic.RateLimit, name 
 	} else if rtl > 0 {
 		ttl += int(1 / rtl)
 	}
+	// An expired bucket is recreated full,
+	// so never expire a bucket before it would have refilled completely.
+	// Otherwise, a client pausing between bursts would get the missing tokens for free.
+	if rtl > 0 {
+		// Bounded so that converting the TTL to a time.Duration cannot overflow.
+		refill := min(math.Ceil(float64(burst)/rtl), maxTTL)
+		ttl = max(ttl, int(refill))
+	}
 	var limiter limiter
 	if config.Redis != nil {
 		limiter, err = newRedisLimiter(ctx, rate.Limit(rtl), burst, maxDelay, ttl, config, logger)
@@ -112,6 +125,12 @@ func New(ctx context.Context, next http.Handler, config dynamic.RateLimit, name 
 		}
 	}
 
+	// The in-memory limiter keeps failing closed, as it did before this option existed.
+	denyOnError := dynamic.RedisDefaultDenyOnError
+	if config.Redis != nil && config.Redis.DenyOnError != nil {
+		denyOnError = *config.Redis.DenyOnError
+	}
+
 	return &rateLimiter{
 		logger:        logger,
 		name:          name,
@@ -120,6 +139,7 @@ func New(ctx context.Context, next http.Handler, config dynamic.RateLimit, name 
 		next:          next,
 		sourceMatcher: sourceMatcher,
 		limiter:       limiter,
+		denyOnError:   denyOnError,
 	}, nil
 }
 
@@ -149,6 +169,19 @@ func (rl *rateLimiter) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	rlSource := fmt.Sprintf("%s:%s", rl.name, source)
 	delay, err := rl.limiter.Allow(ctx, rlSource)
 	if err != nil {
+		// A client going away cancels the Redis call: that is not a Redis failure.
+		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+			observability.SetStatusErrorf(ctx, "Context canceled")
+			http.Error(rw, httputil.StatusClientClosedRequestText, httputil.StatusClientClosedRequest)
+			return
+		}
+
+		if !rl.denyOnError {
+			rl.logger.Error().Err(err).Msg("Could not insert/update bucket, forwarding the request without rate limiting")
+			rl.next.ServeHTTP(rw, req)
+			return
+		}
+
 		rl.logger.Error().Err(err).Msg("Could not insert/update bucket")
 		observability.SetStatusErrorf(ctx, "Could not insert/update bucket")
 		http.Error(rw, "Could not insert/update bucket", http.StatusInternalServerError)
@@ -166,13 +199,17 @@ func (rl *rateLimiter) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	select {
-	case <-ctx.Done():
-		observability.SetStatusErrorf(ctx, "Context canceled")
-		http.Error(rw, "context canceled", http.StatusInternalServerError)
-		return
+	// Only wait when there is an actual delay: with a zero delay, selecting on ctx.Done()
+	// would reject requests whose client already went away even though they are allowed.
+	if *delay > 0 {
+		select {
+		case <-ctx.Done():
+			observability.SetStatusErrorf(ctx, "Context canceled")
+			http.Error(rw, httputil.StatusClientClosedRequestText, httputil.StatusClientClosedRequest)
+			return
 
-	case <-time.After(*delay):
+		case <-time.After(*delay):
+		}
 	}
 
 	rl.next.ServeHTTP(rw, req)

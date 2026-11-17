@@ -1,9 +1,11 @@
 package retry
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
@@ -20,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
+	proxyhttputil "github.com/traefik/traefik/v3/pkg/proxy/httputil"
 	"github.com/traefik/traefik/v3/pkg/testhelpers"
 )
 
@@ -274,6 +277,23 @@ func TestRetryOnStatusWhenProxyNotReached(t *testing.T) {
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, 2, callCount)
 	assert.Equal(t, 1, retryListener.timesCalled)
+}
+
+func TestRetryCanceledContext(t *testing.T) {
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		proxyhttputil.ErrorHandler(rw, req, req.Context().Err())
+	})
+
+	retry, err := New(t.Context(), WrapHandler(next), dynamic.Retry{Attempts: 3}, &countingRetryListener{}, "traefikTest")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	recorder := httptest.NewRecorder()
+	retry.ServeHTTP(recorder, testhelpers.MustNewRequest(http.MethodGet, "http://test", http.NoBody).WithContext(ctx))
+
+	assert.Equal(t, proxyhttputil.StatusClientClosedRequest, recorder.Code)
 }
 
 func TestRetryWithFlush(t *testing.T) {
@@ -959,4 +979,107 @@ func TestRetryWebsocketDelayedFlush(t *testing.T) {
 	time.Sleep(time.Second)
 
 	assert.Equal(t, int32(1), backendCallCount.Load(), "an upgraded request must not be replayed")
+}
+
+// A swallowed attempt must stay invisible to the client:
+// flushing it would commit an implicit 200 while the retry loop is still running.
+func TestRetryDoesNotFlushASwallowedAttempt(t *testing.T) {
+	var attempts atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 1 {
+			rw.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = rw.Write([]byte("first-attempt-body"))
+			_ = http.NewResponseController(rw).Flush()
+
+			return
+		}
+
+		rw.Header().Set("X-Attempt", "two")
+		rw.WriteHeader(http.StatusTeapot)
+		_, _ = rw.Write([]byte("second-attempt-body"))
+	}))
+	t.Cleanup(backend.Close)
+
+	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		resp, err := backend.Client().Get(backend.URL)
+		if !assert.NoError(t, err) {
+			return
+		}
+		defer resp.Body.Close()
+
+		maps.Copy(rw.Header(), resp.Header)
+		rw.WriteHeader(resp.StatusCode)
+
+		body, err := io.ReadAll(resp.Body)
+		assert.NoError(t, err)
+
+		_, _ = rw.Write(body)
+		_ = http.NewResponseController(rw).Flush()
+	})
+
+	retry, err := New(t.Context(), next, dynamic.Retry{Attempts: 2, Status: []string{"503"}}, &countingRetryListener{}, "traefikTest")
+	require.NoError(t, err)
+
+	front := httptest.NewServer(retry)
+	t.Cleanup(front.Close)
+
+	resp, err := front.Client().Get(front.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// The body is drained before asserting, as a leaked flush would release the response while the second attempt runs.
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(2), attempts.Load())
+	assert.Equal(t, http.StatusTeapot, resp.StatusCode)
+	assert.Equal(t, "two", resp.Header.Get("X-Attempt"))
+	assert.Equal(t, "second-attempt-body", string(body))
+}
+
+// Only non-final attempts go through the retry responseWriter,
+// so this checks that a first attempt outside the retriable statuses still streams.
+func TestRetryFlushesAnAttemptItIsNotSwallowing(t *testing.T) {
+	firstChunkRead := make(chan struct{})
+
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write([]byte("FULL "))
+		assert.NoError(t, http.NewResponseController(rw).Flush())
+
+		// The rest is only written once the client got the flushed chunk.
+		select {
+		case <-firstChunkRead:
+		case <-req.Context().Done():
+			return
+		}
+
+		_, _ = rw.Write([]byte("DATA"))
+	})
+
+	retry, err := New(t.Context(), next, dynamic.Retry{Attempts: 2, Status: []string{"503"}}, &countingRetryListener{}, "traefikTest")
+	require.NoError(t, err)
+
+	front := httptest.NewServer(retry)
+	t.Cleanup(front.Close)
+
+	client := front.Client()
+	client.Timeout = 5 * time.Second
+
+	resp, err := client.Get(front.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	buf := make([]byte, 5)
+	_, err = io.ReadFull(resp.Body, buf)
+	require.NoError(t, err)
+	assert.Equal(t, "FULL ", string(buf))
+
+	close(firstChunkRead)
+
+	rest, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "DATA", string(rest))
 }

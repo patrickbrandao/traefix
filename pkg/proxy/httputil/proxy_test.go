@@ -1,6 +1,7 @@
 package httputil
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/traefik/traefik/v3/pkg/middlewares/accesslog"
 	"github.com/traefik/traefik/v3/pkg/testhelpers"
 )
 
@@ -329,4 +331,144 @@ func TestBidirectionalStreamEndedByBackend(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("The end of the stream was not forwarded to the client")
 	}
+}
+
+func TestErrorHandlerWithContext_OriginError(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		err      error
+		status   int
+		expected string
+	}{
+		{
+			desc:     "io.EOF",
+			err:      io.EOF,
+			status:   http.StatusBadGateway,
+			expected: "EOF",
+		},
+		{
+			desc:     "url.Error does not leak the request URL",
+			err:      &url.Error{Op: "Get", URL: "http://backend/path?token=secret", Err: errors.New("connection refused")},
+			status:   http.StatusBadGateway,
+			expected: "connection refused",
+		},
+		{
+			desc:     "control characters are replaced",
+			err:      errors.New("client tried to switch to invalid protocol \"a\nb\""),
+			status:   http.StatusInternalServerError,
+			expected: "client tried to switch to invalid protocol \"a b\"",
+		},
+		{
+			desc:   "client closed request",
+			err:    context.Canceled,
+			status: StatusClientClosedRequest,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			logData := &accesslog.LogData{Core: accesslog.CoreLogData{}}
+			ctx := context.WithValue(t.Context(), accesslog.DataTableKey, logData)
+
+			rw := httptest.NewRecorder()
+			ErrorHandlerWithContext(ctx, rw, test.err)
+
+			assert.Equal(t, test.status, rw.Code)
+
+			val, ok := logData.Core[accesslog.OriginError]
+			if test.expected == "" {
+				assert.False(t, ok)
+				return
+			}
+			assert.Equal(t, test.expected, val)
+		})
+	}
+}
+
+func TestErrorHandlerWithContext_OriginErrorLength(t *testing.T) {
+	logData := &accesslog.LogData{Core: accesslog.CoreLogData{}}
+	ctx := context.WithValue(t.Context(), accesslog.DataTableKey, logData)
+
+	ErrorHandlerWithContext(ctx, httptest.NewRecorder(), errors.New(strings.Repeat("a", 2*maxOriginErrorLength)))
+
+	assert.Len(t, logData.Core[accesslog.OriginError], maxOriginErrorLength)
+}
+
+func TestErrorHandlerWithContext_noLogData(t *testing.T) {
+	rw := httptest.NewRecorder()
+	assert.NotPanics(t, func() {
+		ErrorHandlerWithContext(t.Context(), rw, io.EOF)
+	})
+	assert.Equal(t, http.StatusBadGateway, rw.Code)
+}
+
+func Test_ComputeStatusCode(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		err      error
+		expected int
+	}{
+		{
+			desc:     "EOF",
+			err:      io.EOF,
+			expected: http.StatusBadGateway,
+		},
+		{
+			desc:     "context canceled",
+			err:      context.Canceled,
+			expected: StatusClientClosedRequest,
+		},
+		{
+			desc:     "unknown error",
+			err:      errors.New("random error"),
+			expected: http.StatusInternalServerError,
+		},
+		{
+			desc:     "invalid byte in chunk length",
+			err:      chunkedBodyError(t, "X\r\n\r\n"),
+			expected: http.StatusBadRequest,
+		},
+		{
+			desc:     "empty hex number for chunk length",
+			err:      chunkedBodyError(t, "\r\n"),
+			expected: http.StatusBadRequest,
+		},
+		{
+			desc:     "invalid CR in chunked line",
+			err:      chunkedBodyError(t, "3\rabc\r\n"),
+			expected: http.StatusBadRequest,
+		},
+		{
+			desc:     "chunked line ends with bare LF",
+			err:      chunkedBodyError(t, "3\nabc"),
+			expected: http.StatusBadRequest,
+		},
+		{
+			desc:     "malformed chunked encoding",
+			err:      chunkedBodyError(t, "1\r\nAB\r\n"),
+			expected: http.StatusBadRequest,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, test.expected, ComputeStatusCode(test.err))
+		})
+	}
+}
+
+// chunkedBodyError returns the error produced by the net/http chunked reader
+// when decoding the given malformed body, matching what a request with an
+// invalid chunked body yields at proxy time.
+func chunkedBodyError(t *testing.T, body string) error {
+	t.Helper()
+
+	_, err := io.ReadAll(httputil.NewChunkedReader(strings.NewReader(body)))
+	require.Error(t, err)
+
+	return err
 }

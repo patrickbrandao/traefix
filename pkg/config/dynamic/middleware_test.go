@@ -2,10 +2,48 @@ package dynamic
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/traefik/paerser/file"
+	ptypes "github.com/traefik/paerser/types"
 )
+
+func TestForwardAuth_defaultTimeout(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		content  string
+		expected ptypes.Duration
+	}{
+		{
+			desc:     "unset",
+			content:  "http:\n  middlewares:\n    auth:\n      forwardAuth:\n        address: http://auth\n",
+			expected: ForwardAuthDefaultTimeout,
+		},
+		{
+			desc:     "set",
+			content:  "http:\n  middlewares:\n    auth:\n      forwardAuth:\n        address: http://auth\n        timeout: 2m\n",
+			expected: ptypes.Duration(2 * time.Minute),
+		},
+		{
+			desc:     "disabled",
+			content:  "http:\n  middlewares:\n    auth:\n      forwardAuth:\n        address: http://auth\n        timeout: 0\n",
+			expected: 0,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Configuration{}
+			require.NoError(t, file.DecodeContent(test.content, ".yaml", cfg))
+
+			assert.Equal(t, test.expected, cfg.HTTP.Middlewares["auth"].ForwardAuth.Timeout)
+		})
+	}
+}
 
 func Test_GetStrategy_ipv6Subnet(t *testing.T) {
 	testCases := []struct {

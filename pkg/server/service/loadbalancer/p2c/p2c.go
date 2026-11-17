@@ -145,7 +145,7 @@ func (b *Balancer) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			b.handlersMu.RUnlock()
 			if ok {
 				if rewrite {
-					if err := b.sticky.WriteStickyCookie(rw, h.Name); err != nil {
+					if err := b.sticky.WriteStickyCookie(rw, req, h.Name); err != nil {
 						log.Error().Err(err).Msg("Writing sticky cookie")
 					}
 				}
@@ -167,7 +167,7 @@ func (b *Balancer) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	if b.sticky != nil {
-		if err := b.sticky.WriteStickyCookie(rw, server.name); err != nil {
+		if err := b.sticky.WriteStickyCookie(rw, req, server.name); err != nil {
 			log.Error().Err(err).Msg("Error while writing sticky cookie")
 		}
 	}
@@ -196,13 +196,20 @@ func (b *Balancer) nextServer() (*namedHandler, error) {
 	// We kept the same representation (map) as in the WRR strategy to improve maintainability.
 	// However, with the P2C strategy, we only need a slice of healthy servers.
 	b.handlersMu.RLock()
-	var healthy []*namedHandler
+	var healthy, healthyFenced []*namedHandler
 	for _, h := range b.handlers {
 		if _, ok := b.status[h.name]; ok {
-			if _, fenced := b.fenced[h.name]; !fenced {
+			if _, fenced := b.fenced[h.name]; fenced {
+				healthyFenced = append(healthyFenced, h)
+			} else {
 				healthy = append(healthy, h)
 			}
 		}
+	}
+	// Fenced (terminating yet still serving) handlers only get new requests when no other healthy handler is left,
+	// like kube-proxy does, so that single replica or Recreate rollouts do not answer 503 during the termination.
+	if len(healthy) == 0 {
+		healthy = healthyFenced
 	}
 	b.handlersMu.RUnlock()
 

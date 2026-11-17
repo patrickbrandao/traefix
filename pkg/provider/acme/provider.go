@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v5/acme"
+	"github.com/go-acme/lego/v5/acme/api"
 	"github.com/go-acme/lego/v5/certcrypto"
 	"github.com/go-acme/lego/v5/certificate"
 	"github.com/go-acme/lego/v5/challenge"
@@ -40,6 +41,12 @@ import (
 	"github.com/traefik/traefik/v3/pkg/version"
 	"k8s.io/utils/ptr"
 )
+
+// minRenewalInfoRetryAfter prevents a too short Retry-After from the ACME server to trigger checks in a loop.
+// A renewal suggested by ARI that keeps failing is also retried at this pace at most,
+// which keeps Traefik away from the ACME server rate limits.
+// It never delays checks beyond the renew interval, which can be shorter for short-lived certificates.
+const minRenewalInfoRetryAfter = time.Hour
 
 const resolverSuffix = ".acme"
 
@@ -105,9 +112,10 @@ type EAB struct {
 
 // DNSChallenge contains DNS challenge configuration.
 type DNSChallenge struct {
-	Provider    string      `description:"Use a DNS-01 based challenge provider rather than HTTPS." json:"provider,omitempty" toml:"provider,omitempty" yaml:"provider,omitempty" export:"true"`
-	Resolvers   []string    `description:"Use following DNS servers to resolve the FQDN authority." json:"resolvers,omitempty" toml:"resolvers,omitempty" yaml:"resolvers,omitempty"`
-	Propagation Propagation `description:"DNS propagation checks configuration" json:"propagation,omitempty" toml:"propagation,omitempty" yaml:"propagation,omitempty"  label:"allowEmpty" file:"allowEmpty" export:"true"`
+	Provider     string      `description:"Use a DNS-01 based challenge provider rather than HTTPS." json:"provider,omitempty" toml:"provider,omitempty" yaml:"provider,omitempty" export:"true"`
+	Resolvers    []string    `description:"Use following DNS servers to resolve the FQDN authority." json:"resolvers,omitempty" toml:"resolvers,omitempty" yaml:"resolvers,omitempty"`
+	NetworkStack string      `description:"The network stack used to query DNS servers (ipv4only, ipv6only, both)." json:"networkStack,omitempty" toml:"networkStack,omitempty" yaml:"networkStack,omitempty"`
+	Propagation  Propagation `description:"DNS propagation checks configuration" json:"propagation,omitempty" toml:"propagation,omitempty" yaml:"propagation,omitempty"  label:"allowEmpty" file:"allowEmpty" export:"true"`
 
 	// Deprecated: please use Propagation.DelayBeforeChecks instead.
 	DelayBeforeCheck ptypes.Duration `description:"(Deprecated) Assume DNS propagates after a delay in seconds rather than finding and querying nameservers." json:"delayBeforeCheck,omitempty" toml:"delayBeforeCheck,omitempty" yaml:"delayBeforeCheck,omitempty" export:"true"`
@@ -188,6 +196,12 @@ func (p *Provider) Init() error {
 		return errors.New("clientTimeout must be at least clientResponseHeaderTimeout")
 	}
 
+	if p.DNSChallenge != nil {
+		if _, err := parseNetworkStack(p.DNSChallenge.NetworkStack); err != nil {
+			return err
+		}
+	}
+
 	var err error
 	p.account, err = p.Store.GetAccount(p.ResolverName)
 	if err != nil {
@@ -260,16 +274,15 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 	logger.Debug().Msgf("Attempt to renew certificates %q before expiry and check every %q",
 		renewPeriod, renewInterval)
 
-	p.renewCertificates(ctx, renewPeriod)
-
-	ticker := time.NewTicker(renewInterval)
+	timer := time.NewTimer(p.renewCertificates(ctx, renewPeriod, renewInterval))
 	pool.GoCtx(func(ctxPool context.Context) {
+		defer timer.Stop()
+
 		for {
 			select {
-			case <-ticker.C:
-				p.renewCertificates(ctx, renewPeriod)
+			case <-timer.C:
+				timer.Reset(p.renewCertificates(ctx, renewPeriod, renewInterval))
 			case <-ctxPool.Done():
-				ticker.Stop()
 				return
 			}
 		}
@@ -347,8 +360,16 @@ func (p *Provider) getClient() (*lego.Client, error) {
 	if p.DNSChallenge != nil && len(p.DNSChallenge.Provider) > 0 {
 		logger.Debug().Msgf("Using DNS Challenge provider: %s", p.DNSChallenge.Provider)
 
-		if len(p.DNSChallenge.Resolvers) > 0 {
-			opts := &dns01.Options{RecursiveNameservers: p.DNSChallenge.Resolvers}
+		if len(p.DNSChallenge.Resolvers) > 0 || p.DNSChallenge.NetworkStack != "" {
+			networkStack, err := parseNetworkStack(p.DNSChallenge.NetworkStack)
+			if err != nil {
+				return nil, err
+			}
+
+			// NewOptions keeps the lego defaults read from the environment (e.g. TCP only).
+			opts := dns01.NewOptions()
+			opts.RecursiveNameservers = p.DNSChallenge.Resolvers
+			opts.NetworkStack = networkStack
 
 			dns01.SetDefaultClient(dns01.NewClient(opts))
 		}
@@ -909,23 +930,60 @@ func (p *Provider) buildMessage() dynamic.Message {
 	return conf
 }
 
-func (p *Provider) renewCertificates(ctx context.Context, renewPeriod time.Duration) {
+// renewCertificates renews the certificates that need it, and returns the duration to wait before the next check.
+func (p *Provider) renewCertificates(ctx context.Context, renewPeriod, renewInterval time.Duration) time.Duration {
 	logger := log.Ctx(ctx)
 
 	logger.Info().Msg("Testing certificate renew...")
 
 	p.certificatesMu.RLock()
+	stored := slices.Clone(p.certificates)
+	p.certificatesMu.RUnlock()
 
+	nextCheck := renewInterval
+
+	// The client is retrieved once: when it cannot be built (e.g. ACME server unreachable),
+	// retrying for each certificate would only multiply the timeouts.
+	var (
+		ariClient       *lego.Client
+		ariClientErr    error
+		ariClientLoaded bool
+	)
+
+	// Renewal information is fetched outside the lock, as it requires a request to the ACME server for each certificate.
 	var certificates []*CertAndStore
-	for _, cert := range p.certificates {
+	for _, cert := range stored {
 		crt, err := getX509Certificate(ctx, &cert.Certificate)
 		// If there's an error, we assume the cert is broken, and needs update
 		if err != nil || crt == nil || crt.NotAfter.Before(time.Now().Add(renewPeriod)) {
 			certificates = append(certificates, cert)
+			continue
+		}
+
+		if !ariClientLoaded {
+			ariClient, ariClientErr = p.getClient()
+			ariClientLoaded = true
+
+			if ariClientErr != nil {
+				logger.Debug().Err(ariClientErr).Msg("Unable to get ACME client to fetch renewal information")
+			}
+		}
+
+		if ariClientErr != nil {
+			continue
+		}
+
+		suggested, retryAfter := checkRenewalInfo(ctx, ariClient, crt)
+		if suggested {
+			certificates = append(certificates, cert)
+		}
+
+		// The suggested window can change before it starts, e.g. after a mass revocation,
+		// so the renewal information is fetched again as soon as the ACME server allows it.
+		if retryAfter > 0 {
+			nextCheck = min(nextCheck, max(retryAfter, minRenewalInfoRetryAfter))
 		}
 	}
-
-	p.certificatesMu.RUnlock()
 
 	for _, cert := range certificates {
 		client, err := p.getClient()
@@ -958,6 +1016,7 @@ func (p *Provider) renewCertificates(ctx context.Context, renewPeriod time.Durat
 			Profile:          p.Profile,
 			PreferredChain:   p.PreferredChain,
 			EnableCommonName: !p.DisableCommonName,
+			UseARICertID:     true,
 		}
 
 		renewedCert, err := client.Certificate.Renew(ctx, res, opts)
@@ -976,6 +1035,36 @@ func (p *Provider) renewCertificates(ctx context.Context, renewPeriod time.Durat
 			logger.Error().Err(err).Msg("Error adding certificate for domain")
 		}
 	}
+
+	return nextCheck
+}
+
+// checkRenewalInfo reports whether the ACME server suggests renewing the certificate now,
+// through ACME Renewal Information (RFC 9773), e.g. ahead of a mass revocation.
+// It also returns the duration the ACME server asks to wait before fetching the renewal information again.
+// This duration is 0 when the ACME server does not provide one or when the renewal information cannot be fetched,
+// so 0 is never a real Retry-After value, and the caller falls back on the renew interval.
+func checkRenewalInfo(ctx context.Context, client *lego.Client, crt *x509.Certificate) (bool, time.Duration) {
+	logger := log.Ctx(ctx)
+
+	info, err := client.Certificate.GetRenewalInfo(ctx, crt)
+	if err != nil {
+		if !errors.Is(err, api.ErrNoARI) {
+			logger.Warn().Err(err).Strs("domains", crt.DNSNames).Msg("Unable to fetch ACME renewal information")
+		}
+		return false, 0
+	}
+
+	// A zero sleep duration defers a renewal time selected in the future to a later check,
+	// so the renewal happens at the first check after it.
+	if info.ShouldRenewAt(time.Now(), 0) == nil {
+		return false, info.RetryAfter
+	}
+
+	logger.Info().Strs("domains", crt.DNSNames).Str("explanationURL", info.ExplanationURL).
+		Msg("ACME renewal information suggests renewing the certificate")
+
+	return true, info.RetryAfter
 }
 
 // Get provided certificate which check a domains list (Main and SANs)
@@ -1131,4 +1220,17 @@ func isDomainAlreadyChecked(domainToCheck string, existentDomains []string) bool
 		}
 	}
 	return false
+}
+
+func parseNetworkStack(networkStack string) (challenge.NetworkStack, error) {
+	switch networkStack {
+	case "ipv4only", "ipv4":
+		return challenge.IPv4Only, nil
+	case "ipv6only", "ipv6":
+		return challenge.IPv6Only, nil
+	case "", "both":
+		return challenge.DualStack, nil
+	default:
+		return challenge.DualStack, fmt.Errorf("unknown DNS challenge network stack %q, expected one of: ipv4only, ipv6only, both", networkStack)
+	}
 }

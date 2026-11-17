@@ -35,6 +35,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/middlewares/ipwhitelist"
 	"github.com/traefik/traefik/v3/pkg/middlewares/observability"
 	"github.com/traefik/traefik/v3/pkg/middlewares/passtlsclientcert"
+	"github.com/traefik/traefik/v3/pkg/middlewares/queryparameters"
 	"github.com/traefik/traefik/v3/pkg/middlewares/ratelimiter"
 	"github.com/traefik/traefik/v3/pkg/middlewares/redirect"
 	"github.com/traefik/traefik/v3/pkg/middlewares/replacepath"
@@ -225,7 +226,7 @@ func (b *Builder) buildConstructor(ctx context.Context, middlewareName string) (
 			return nil, badConf
 		}
 		middleware = func(next http.Handler) (http.Handler, error) {
-			return auth.NewForward(ctx, next, *config.ForwardAuth, middlewareName)
+			return auth.NewForward(ctx, next, *config.ForwardAuth, b.serviceBuilder, middlewareName)
 		}
 	}
 
@@ -332,6 +333,16 @@ func (b *Builder) buildConstructor(ctx context.Context, middlewareName string) (
 		}
 	}
 
+	// RedirectTrailingSlash
+	if config.RedirectTrailingSlash != nil {
+		if middleware != nil {
+			return nil, badConf
+		}
+		middleware = func(next http.Handler) (http.Handler, error) {
+			return redirect.NewRedirectTrailingSlash(ctx, next, *config.RedirectTrailingSlash, middlewareName)
+		}
+	}
+
 	// ReplacePath
 	if config.ReplacePath != nil {
 		if middleware != nil {
@@ -349,6 +360,16 @@ func (b *Builder) buildConstructor(ctx context.Context, middlewareName string) (
 		}
 		middleware = func(next http.Handler) (http.Handler, error) {
 			return replacepathregex.New(ctx, next, *config.ReplacePathRegex, middlewareName)
+		}
+	}
+
+	// QueryParameters
+	if config.QueryParameters != nil {
+		if middleware != nil {
+			return nil, badConf
+		}
+		middleware = func(next http.Handler) (http.Handler, error) {
+			return queryparameters.New(ctx, next, *config.QueryParameters, middlewareName)
 		}
 	}
 

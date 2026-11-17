@@ -29,6 +29,7 @@ type Prometheus struct {
 	EntryPoint           string            `description:"EntryPoint" json:"entryPoint,omitempty" toml:"entryPoint,omitempty" yaml:"entryPoint,omitempty" export:"true"`
 	ManualRouting        bool              `description:"Manual routing" json:"manualRouting,omitempty" toml:"manualRouting,omitempty" yaml:"manualRouting,omitempty" export:"true"`
 	HeaderLabels         map[string]string `description:"Defines the extra labels for the requests_total metrics, and for each of them, the request header containing the value for this label." json:"headerLabels,omitempty" toml:"headerLabels,omitempty" yaml:"headerLabels,omitempty" export:"true"`
+	ResponseHeaderLabels map[string]string `description:"Defines the extra labels for the requests_total metrics, and for each of them, the response header containing the value for this label." json:"responseHeaderLabels,omitempty" toml:"responseHeaderLabels,omitempty" yaml:"responseHeaderLabels,omitempty" export:"true"`
 }
 
 // SetDefaults sets the default values.
@@ -117,6 +118,7 @@ type OTLP struct {
 	AddServicesLabels    bool              `description:"Enable metrics on services." json:"addServicesLabels,omitempty" toml:"addServicesLabels,omitempty" yaml:"addServicesLabels,omitempty" export:"true"`
 	ExplicitBoundaries   []float64         `description:"Boundaries for latency metrics." json:"explicitBoundaries,omitempty" toml:"explicitBoundaries,omitempty" yaml:"explicitBoundaries,omitempty" export:"true"`
 	PushInterval         types.Duration    `description:"Period between calls to collect a checkpoint." json:"pushInterval,omitempty" toml:"pushInterval,omitempty" yaml:"pushInterval,omitempty" export:"true"`
+	Temporality          string            `description:"Defines the default temporality for metrics (cumulative, delta, or lowmemory)." json:"temporality,omitempty" toml:"temporality,omitempty" yaml:"temporality,omitempty" export:"true"`
 	ServiceName          string            `description:"Defines the service name resource attribute." json:"serviceName,omitempty" toml:"serviceName,omitempty" yaml:"serviceName,omitempty" export:"true"`
 	ResourceAttributes   map[string]string `description:"Defines additional resource attributes (key:value)." json:"resourceAttributes,omitempty" toml:"resourceAttributes,omitempty" yaml:"resourceAttributes,omitempty" export:"true"`
 }

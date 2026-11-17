@@ -107,6 +107,8 @@
           timeout = "42s"
           hostname = "foobar"
           followRedirects = true
+          body = "foobar"
+          maxConcurrency = 42
           [http.services.Service03.loadBalancer.healthCheck.headers]
             name0 = "foobar"
             name1 = "foobar"
@@ -160,6 +162,7 @@
         usersFile = "foobar"
         realm = "foobar"
         removeHeader = true
+        allowCORSPreflight = true
         headerField = "foobar"
     [http.middlewares.Middleware03]
       [http.middlewares.Middleware03.buffering]
@@ -187,6 +190,7 @@
         minResponseBodyBytes = 42
         encodings = ["foobar", "foobar"]
         defaultEncoding = "foobar"
+        excludeRequestContentType = true
     [http.middlewares.Middleware07]
       [http.middlewares.Middleware07.contentType]
         autoDetect = true
@@ -203,23 +207,28 @@
         service = "foobar"
         query = "foobar"
         errorRequestHeaders = ["foobar", "foobar"]
+        errorResponseHeaders = ["foobar", "foobar"]
         [http.middlewares.Middleware09.errors.statusRewrites]
           name0 = 42
           name1 = 42
     [http.middlewares.Middleware10]
       [http.middlewares.Middleware10.forwardAuth]
         address = "foobar"
+        service = "foobar"
+        path = "foobar"
         trustForwardHeader = true
         authResponseHeaders = ["foobar", "foobar"]
         authResponseHeadersRegex = "foobar"
         authRequestHeaders = ["foobar", "foobar"]
         addAuthCookiesToResponse = ["foobar", "foobar"]
+        addAuthCookiesToResponseRegex = "foobar"
         headerField = "foobar"
         forwardBody = true
         maxBodySize = 42
         maxResponseBodySize = 42
         preserveLocationHeader = true
         preserveRequestMethod = true
+        timeout = "42s"
         [http.middlewares.Middleware10.forwardAuth.tls]
           ca = "foobar"
           cert = "foobar"
@@ -267,6 +276,20 @@
         [http.middlewares.Middleware12.headers.customResponseHeaders]
           name0 = "foobar"
           name1 = "foobar"
+        [http.middlewares.Middleware12.headers.replaceRequestHeadersRegex]
+          [http.middlewares.Middleware12.headers.replaceRequestHeadersRegex.name0]
+            regex = "foobar"
+            replacement = "foobar"
+          [http.middlewares.Middleware12.headers.replaceRequestHeadersRegex.name1]
+            regex = "foobar"
+            replacement = "foobar"
+        [http.middlewares.Middleware12.headers.replaceResponseHeadersRegex]
+          [http.middlewares.Middleware12.headers.replaceResponseHeadersRegex.name0]
+            regex = "foobar"
+            replacement = "foobar"
+          [http.middlewares.Middleware12.headers.replaceResponseHeadersRegex.name1]
+            regex = "foobar"
+            replacement = "foobar"
         [http.middlewares.Middleware12.headers.sslProxyHeaders]
           name0 = "foobar"
           name1 = "foobar"
@@ -351,6 +374,10 @@
           readTimeout = "42s"
           writeTimeout = "42s"
           dialTimeout = "42s"
+          masterName = "foobar"
+          sentinelUsername = "foobar"
+          sentinelPassword = "foobar"
+          denyOnError = true
           [http.middlewares.Middleware18.rateLimit.redis.tls]
             ca = "foobar"
             cert = "foobar"
@@ -366,6 +393,10 @@
         scheme = "foobar"
         port = "foobar"
         permanent = true
+    [http.middlewares.Middleware20a]
+      [http.middlewares.Middleware20a.redirectTrailingSlash]
+        mode = "add"
+        permanent = true
     [http.middlewares.Middleware21]
       [http.middlewares.Middleware21.replacePath]
         path = "foobar"
@@ -373,6 +404,15 @@
       [http.middlewares.Middleware22.replacePathRegex]
         regex = "foobar"
         replacement = "foobar"
+    [http.middlewares.Middleware22a]
+      [http.middlewares.Middleware22a.queryParameters]
+        delete = ["foobar", "foobar"]
+        [http.middlewares.Middleware22a.queryParameters.set]
+          name0 = "foobar"
+          name1 = "foobar"
+        [http.middlewares.Middleware22a.queryParameters.add]
+          name0 = "foobar"
+          name1 = "foobar"
     [http.middlewares.Middleware23]
       [http.middlewares.Middleware23.retry]
         attempts = 42
@@ -394,6 +434,7 @@
       maxVersion = "foobar"
       maxIdleConnsPerHost = 42
       disableHTTP2 = true
+      disableCompression = true
       peerCertURI = "foobar"
 
       [[http.serversTransports.ServersTransport0.certificates]]
@@ -423,6 +464,7 @@
       maxVersion = "foobar"
       maxIdleConnsPerHost = 42
       disableHTTP2 = true
+      disableCompression = true
       peerCertURI = "foobar"
 
       [[http.serversTransports.ServersTransport1.certificates]]
@@ -493,10 +535,12 @@
         [[tcp.services.TCPService01.loadBalancer.servers]]
           address = "foobar"
           tls = true
+          weight = 42
 
         [[tcp.services.TCPService01.loadBalancer.servers]]
           address = "foobar"
           tls = true
+          weight = 42
         [tcp.services.TCPService01.loadBalancer.proxyProtocol]
           version = 42
     [tcp.services.TCPService02]

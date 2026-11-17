@@ -107,11 +107,12 @@ func variableValue(rawVariable, variable string, req *http.Request, responseHead
 		}
 		return h, nil
 
+	// Unlike $uri, the NGINX $request_uri is the client URI, unaffected by rewrites.
 	case requestURI:
-		return req.URL.RequestURI(), nil
+		return OriginalRequestURI(req), nil
 
 	case escapedRequestURI:
-		return url.QueryEscape(req.URL.RequestURI()), nil
+		return url.QueryEscape(OriginalRequestURI(req)), nil
 
 	case scheme:
 		if req.TLS != nil {

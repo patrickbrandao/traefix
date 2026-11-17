@@ -42,7 +42,7 @@ The section below describe how to configure Traefik logs using the static config
 | <a id="opt-log-maxSize" href="#opt-log-maxSize" title="#opt-log-maxSize">`log.maxSize`</a> | Maximum size in megabytes of the log file before it gets rotated. | 100MB      | No      |
 | <a id="opt-log-maxAge" href="#opt-log-maxAge" title="#opt-log-maxAge">`log.maxAge`</a> | Maximum number of days to retain old log files based on the timestamp encoded in their filename.<br /> A day is defined as 24 hours and may not exactly correspond to calendar days due to daylight savings, leap seconds, etc.<br />By default files are not removed based on their age.  |   0   | No      |
 | <a id="opt-log-maxBackups" href="#opt-log-maxBackups" title="#opt-log-maxBackups">`log.maxBackups`</a> | Maximum number of old log files to retain.<br />The default is to retain all old log files. |  0  | No      |
-| <a id="opt-log-compress" href="#opt-log-compress" title="#opt-log-compress">`log.compress`</a> | Compress log files in gzip after rotation. Compression is always enabled when log rotation is active; this field has no effect. | false | No      |
+| <a id="opt-log-compress" href="#opt-log-compress" title="#opt-log-compress">`log.compress`</a> | Compress log files in gzip after rotation. | true | No      |
 
 ### OpenTelemetry
 
@@ -174,6 +174,11 @@ accessLog:
     queryParameters:
       # Drop all query parameters
       defaultMode: drop
+  anonymization:
+    # Truncate client IPv4 addresses to their /24 network
+    ipv4Subnet: 24
+    # Truncate client IPv6 addresses to their /48 network
+    ipv6Subnet: 48
 ```
 
 ```toml tab="File (TOML)"
@@ -200,6 +205,10 @@ accessLog:
 
     [accessLog.fields.queryParameters]
       defaultMode = "drop"
+
+  [accessLog.anonymization]
+    ipv4Subnet = 24
+    ipv6Subnet = 48
 ```
 
 ```sh tab="CLI"
@@ -215,6 +224,8 @@ accessLog:
 --accesslog.fields.headers.names.User-Agent=redact
 --accesslog.fields.headers.names.Authorization=drop
 --accesslog.fields.queryparameters.defaultmode=drop
+--accesslog.anonymization.ipv4subnet=24
+--accesslog.anonymization.ipv6subnet=48
 ```
 
 ### Configuration Options
@@ -228,6 +239,7 @@ The section below describes how to configure Traefik access logs using the stati
 | <a id="opt-accesslog-format" href="#opt-accesslog-format" title="#opt-accesslog-format">`accesslog.format`</a> | By default, logs are written using the Traefik Common Log Format (CLF).<br />Available formats: [`common`](#traefik-clf-format-fields) (Traefik extended CLF), [`genericCLF`](#generic-clf-format-fields) (standard CLF compatible with analyzers), or [`json`](#json-format-fields).<br />If the given format is unsupported, the default (`common`) is used instead. | "common" | No      |
 | <a id="opt-accesslog-bufferingSize" href="#opt-accesslog-bufferingSize" title="#opt-accesslog-bufferingSize">`accesslog.bufferingSize`</a> | To process access logs asynchronously, set `bufferingSize` to a value greater than zero.<br />The value specifies the capacity, in log lines, of the in-memory queue.<br />Traefik writes queued log lines continuously and does not wait for the queue to become full.<br />A larger queue reduces the chance that access logging blocks requests under load. | 0 | No      |
 | <a id="opt-accesslog-addInternals" href="#opt-accesslog-addInternals" title="#opt-accesslog-addInternals">`accesslog.addInternals`</a> | Enables access logs for internal resources (e.g.: `ping@internal`). | false  | No      |
+| <a id="opt-accesslog-sampleRate" href="#opt-accesslog-sampleRate" title="#opt-accesslog-sampleRate">`accesslog.sampleRate`</a> | Defines the proportion of access logs sent to the OpenTelemetry Collector, between 0.0 and 1.0. Only applies when `accesslog.otlp` is configured. See [sampleRate](#samplerate) for details. | 1.0 | No      |
 | <a id="opt-accesslog-filters-statusCodes" href="#opt-accesslog-filters-statusCodes" title="#opt-accesslog-filters-statusCodes">`accesslog.filters.statusCodes`</a> | Limit the access logs to requests with a status codes in the specified range. | [ ]      | No      |
 | <a id="opt-accesslog-filters-retryAttempts" href="#opt-accesslog-filters-retryAttempts" title="#opt-accesslog-filters-retryAttempts">`accesslog.filters.retryAttempts`</a> | Keep the access logs when at least one retry has happened. | false      | No      |
 | <a id="opt-accesslog-filters-minDuration" href="#opt-accesslog-filters-minDuration" title="#opt-accesslog-filters-minDuration">`accesslog.filters.minDuration`</a> | Keep access logs when requests take longer than the specified duration (provided in seconds or as a valid duration format, see [time.ParseDuration](https://golang.org/pkg/time/#ParseDuration)).  |  0   | No      |
@@ -235,7 +247,13 @@ The section below describes how to configure Traefik access logs using the stati
 | <a id="opt-accesslog-fields-names" href="#opt-accesslog-fields-names" title="#opt-accesslog-fields-names">`accesslog.fields.names`</a> | Set the fields list to display in the access logs (format `name:mode`).<br /> Available fields list [here](#json-format-fields). |  [ ]    | No      |
 | <a id="opt-accesslog-fields-headers-defaultMode" href="#opt-accesslog-fields-headers-defaultMode" title="#opt-accesslog-fields-headers-defaultMode">`accesslog.fields.headers.defaultMode`</a> | Mode to apply by default to the access logs headers (`keep`, `redact` or `drop`).  | drop | No      |
 | <a id="opt-accesslog-fields-headers-names" href="#opt-accesslog-fields-headers-names" title="#opt-accesslog-fields-headers-names">`accesslog.fields.headers.names`</a> | Set the headers list to display in the access logs (format `name:mode`). |   [ ]   | No      |
+| <a id="opt-accesslog-maxSize" href="#opt-accesslog-maxSize" title="#opt-accesslog-maxSize">`accesslog.maxSize`</a> | Maximum size in megabytes of the access log file before it gets rotated. | 100MB      | No      |
+| <a id="opt-accesslog-maxAge" href="#opt-accesslog-maxAge" title="#opt-accesslog-maxAge">`accesslog.maxAge`</a> | Maximum number of days to retain old access log files based on the timestamp encoded in their filename.<br /> A day is defined as 24 hours and may not exactly correspond to calendar days due to daylight savings, leap seconds, etc.<br />By default files are not removed based on their age.  |   0   | No      |
+| <a id="opt-accesslog-maxBackups" href="#opt-accesslog-maxBackups" title="#opt-accesslog-maxBackups">`accesslog.maxBackups`</a> | Maximum number of old access log files to retain.<br />The default is to retain all old log files. |  0  | No      |
+| <a id="opt-accesslog-compress" href="#opt-accesslog-compress" title="#opt-accesslog-compress">`accesslog.compress`</a> | Compress access log files in gzip after rotation. | false | No      |
 | <a id="opt-accesslog-fields-queryParameters-defaultMode" href="#opt-accesslog-fields-queryParameters-defaultMode" title="#opt-accesslog-fields-queryParameters-defaultMode">`accesslog.fields.queryParameters.defaultMode`</a> | Mode to apply by default to the access logs query parameters (`keep` or `drop`) | keep | No      |
+| <a id="opt-accesslog-anonymization-ipv4Subnet" href="#opt-accesslog-anonymization-ipv4Subnet" title="#opt-accesslog-anonymization-ipv4Subnet">`accesslog.anonymization.ipv4Subnet`</a> | Truncate client IPv4 addresses in the access logs to the given prefix length (`1`-`32`).<br />`0` disables IPv4 truncation. Applies to the `ClientAddr` and `ClientHost` fields (including a `ClientHost` taken from `X-Forwarded-For`), and to the `X-Forwarded-For`, `X-Real-Ip` and `Forwarded` request headers when they are kept. | 24 | No      |
+| <a id="opt-accesslog-anonymization-ipv6Subnet" href="#opt-accesslog-anonymization-ipv6Subnet" title="#opt-accesslog-anonymization-ipv6Subnet">`accesslog.anonymization.ipv6Subnet`</a> | Truncate client IPv6 addresses in the access logs to the given prefix length (`1`-`128`).<br />`0` disables IPv6 truncation. Applies to the `ClientAddr` and `ClientHost` fields (including a `ClientHost` taken from `X-Forwarded-For`), and to the `X-Forwarded-For`, `X-Real-Ip` and `Forwarded` request headers when they are kept. | 48 | No      |
 
 ### OpenTelemetry
 
@@ -332,6 +350,18 @@ Traefik also supports the `OTEL_RESOURCE_ATTRIBUTES` env variable to set up the 
     Note that this automatic detection can fail, like if the Traefik pod is running in host network mode.
     In this case, you should provide the attributes with the option or the env variable.
 
+#### sampleRate
+
+The `sampleRate` option controls the proportion of access logs sent to the OpenTelemetry Collector, specified between 0.0 and 1.0.
+
+This option only applies when `accesslog.otlp` is configured, and is independent of [`tracing.sampleRate`](tracing.md#samplerate).
+
+The OpenTelemetry Logs SDK does not expose a sampler, unlike the tracing SDK.
+Traefik therefore samples access logs randomly: each access log has a probability equal to `sampleRate` of being sent.
+A value of `0.0` is treated as unset: every access log is sent.
+Sampling is independent of tracing, so the access logs of a given trace may be partially sampled, and a request can appear in the traces while being absent from the access logs, and vice versa.
+When consistent log/trace correlation is required, prefer filtering logs in the OpenTelemetry Collector.
+
 ### Traefik CLF format fields
 
 It's the default format provided by Traefik.
@@ -385,6 +415,7 @@ Below the fields displayed with the generic CLF format:
 | <a id="opt-OriginDuration" href="#opt-OriginDuration" title="#opt-OriginDuration">`OriginDuration`</a> | The time taken (in nanoseconds) by the origin server ('upstream') to return its response.                                                                                                                                                                                                                                                                                             |
 | <a id="opt-OriginContentSize" href="#opt-OriginContentSize" title="#opt-OriginContentSize">`OriginContentSize`</a> | The content length specified by the origin server, or 0 if unspecified.                                                                                                                                                                                                                                                                                                               |
 | <a id="opt-OriginStatus" href="#opt-OriginStatus" title="#opt-OriginStatus">`OriginStatus`</a> | The HTTP status code resulting from proxying the request to a backend: either the one returned by that backend, or the one computed when the server could not be reached (`502`, `504`, ...). See [Origin vs. Downstream Status](../../../observe/logs-and-access-logs.md#origin-vs-downstream-status). |
+| <a id="opt-OriginError" href="#opt-OriginError" title="#opt-OriginError">`OriginError`</a> | The error message when forwarding the request to the backend fails (for example, `connection refused` or `i/o timeout`). Absent when forwarding succeeds or when the client closes the request. With retries, it keeps the error of the last failed attempt, even when a later attempt succeeds. |
 | <a id="opt-DownstreamStatus" href="#opt-DownstreamStatus" title="#opt-DownstreamStatus">`DownstreamStatus`</a> | The HTTP status code sent **to the client**, after the middleware chain has run. See [Origin vs. Downstream Status](../../../observe/logs-and-access-logs.md#origin-vs-downstream-status).                                                                                                                                                                         |
 | <a id="opt-DownstreamContentSize" href="#opt-DownstreamContentSize" title="#opt-DownstreamContentSize">`DownstreamContentSize`</a> | The number of bytes in the response entity returned to the client. This is in addition to the "Content-Length" header, which may be present in the origin response.                                                                                                                                                                                                                   |
 | <a id="opt-RequestCount" href="#opt-RequestCount" title="#opt-RequestCount">`RequestCount`</a> | The number of requests received since the Traefik instance started.                                                                                                                                                                                                                                                                                                                   |
@@ -404,12 +435,15 @@ Below the fields displayed with the generic CLF format:
 
 ### Log Rotation
 
-Traefik does not rotate the access log file.
-When Traefik receives a USR1 signal, it closes and opens again the access log file.
-This lets an external program, such as `logrotate`, rotate the access log file.
+Traefik rotates the Traefik log file with the options [`log.maxSize`](#opt-log-maxSize), [`log.maxAge`](#opt-log-maxAge), [`log.maxBackups`](#opt-log-maxBackups), and [`log.compress`](#opt-log-compress).
+Traefik rotates the access log file with the options [`accesslog.maxSize`](#opt-accesslog-maxSize), [`accesslog.maxAge`](#opt-accesslog-maxAge), [`accesslog.maxBackups`](#opt-accesslog-maxBackups), and [`accesslog.compress`](#opt-accesslog-compress).
+When none of these access log options is set, Traefik does not rotate the access log file.
 
-The USR1 signal has no effect on the Traefik log file.
-Traefik rotates the Traefik log file with the options [`log.maxSize`](#opt-log-maxSize), [`log.maxAge`](#opt-log-maxAge), and [`log.maxBackups`](#opt-log-maxBackups).
+When Traefik receives a USR1 signal:
+
+- A log file that Traefik rotates is rotated at once: Traefik renames the current file with a timestamp and opens a new one.
+- An access log file that Traefik does not rotate is closed and opened again.
+  This lets an external program, such as `logrotate`, rotate the access log file.
 
 !!! warning
     This does not work on Windows due to the lack of USR signals.

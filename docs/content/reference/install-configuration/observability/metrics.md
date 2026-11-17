@@ -70,6 +70,7 @@ metrics:
 | <a id="opt-metrics-otlp-addServicesLabels" href="#opt-metrics-otlp-addServicesLabels" title="#opt-metrics-otlp-addServicesLabels">`metrics.otlp.addServicesLabels`</a> | Enable metrics on services.                                                                                                                                      | true                                               | No       |
 | <a id="opt-metrics-otlp-explicitBoundaries" href="#opt-metrics-otlp-explicitBoundaries" title="#opt-metrics-otlp-explicitBoundaries">`metrics.otlp.explicitBoundaries`</a> | Explicit boundaries for Histogram data points.<br /> Only applies to explicit bucket histogram exports.                                                          | ".005, .01, .025, .05, .075, .1, .25, .5, .75, 1, 2.5, 5, 7.5, 10" | No       |
 | <a id="opt-metrics-otlp-pushInterval" href="#opt-metrics-otlp-pushInterval" title="#opt-metrics-otlp-pushInterval">`metrics.otlp.pushInterval`</a> | Interval at which metrics are sent to the OpenTelemetry Collector.                                                                                               | 10s                                                | No       |
+| <a id="opt-metrics-otlp-temporality" href="#opt-metrics-otlp-temporality" title="#opt-metrics-otlp-temporality">`metrics.otlp.temporality`</a> | Defines the temporality for metrics. Supported values: `cumulative`, `delta`, `lowmemory`. When empty, the SDK default (cumulative) is used.                     | "cumulative"                                       | No       |
 | <a id="opt-metrics-otlp-http" href="#opt-metrics-otlp-http" title="#opt-metrics-otlp-http">`metrics.otlp.http`</a> | This instructs the exporter to send the metrics to the OpenTelemetry Collector using HTTP.<br /> Setting the sub-options with their default values.              | null/false                                         | No       |
 | <a id="opt-metrics-otlp-http-endpoint" href="#opt-metrics-otlp-http-endpoint" title="#opt-metrics-otlp-http-endpoint">`metrics.otlp.http.endpoint`</a> | URL of the OpenTelemetry Collector to send metrics to.<br /> Format="`<scheme>://<host>:<port><path>`"                                                           | "https://localhost:4318"                 | Yes      |
 | <a id="opt-metrics-otlp-http-headers" href="#opt-metrics-otlp-http-headers" title="#opt-metrics-otlp-http-headers">`metrics.otlp.http.headers`</a> | Additional headers sent with metrics by the exporter to the OpenTelemetry Collector.                                                                             | -                                                  | No       |
@@ -235,6 +236,7 @@ metrics:
 | <a id="opt-metrics-prometheus-manualRouting" href="#opt-metrics-prometheus-manualRouting" title="#opt-metrics-prometheus-manualRouting">`metrics.prometheus.manualRouting`</a> | Set to _true_, it disables the default internal router in order to allow creating a custom router for the `prometheus@internal` service. | false    | No      |
 | <a id="opt-metrics-prometheus-entryPoint" href="#opt-metrics-prometheus-entryPoint" title="#opt-metrics-prometheus-entryPoint">`metrics.prometheus.entryPoint`</a> | Traefik Entrypoint name used to expose metrics. | "traefik"     | No      |
 | <a id="opt-metrics-prometheus-headerLabels" href="#opt-metrics-prometheus-headerLabels" title="#opt-metrics-prometheus-headerLabels">`metrics.prometheus.headerLabels`</a> | Defines extra labels extracted from request headers for the `requests_total` metrics.<br />More information [here](#headerlabels). |       | Yes      |
+| <a id="opt-metrics-prometheus-responseHeaderLabels" href="#opt-metrics-prometheus-responseHeaderLabels" title="#opt-metrics-prometheus-responseHeaderLabels">`metrics.prometheus.responseHeaderLabels`</a> | Defines extra labels extracted from response headers for the `requests_total` metrics.<br />More information [here](#responseheaderlabels). |       | Yes      |
 
 ##### headerLabels
 
@@ -272,6 +274,61 @@ curl -H "User-Agent: foobar" http://localhost
 
 ```bash tab="Metric"
 traefik_entrypoint_requests_total\{code="200",entrypoint="web",method="GET",protocol="http",useragent="foobar"\} 1
+```
+
+##### responseHeaderLabels
+
+Defines the extra labels for the `requests_total` metrics, and for each of them, the response header containing the value for this label.
+If the header is not present in the response it will be added nonetheless with an empty value.
+The label must be a valid label name for Prometheus metrics, otherwise, the Prometheus metrics provider will fail to serve any Traefik-related metric.
+A label already defined in `headerLabels` is ignored.
+
+!!! warning "Cardinality"
+
+    Each distinct header value creates a new time series kept in memory.
+    Only use response headers with a small, bounded set of values (for example, `X-Cache-Status`), never headers carrying identifiers, dates, or user data.
+
+###### Configuration Example
+
+Here is an example of the entryPoint `requests_total` metric with an additional "content_type" label extracted from the response Content-Type header.
+
+When configuring the label in Static Configuration:
+
+```yaml tab="Configuration"
+# static_configuration.yaml
+metrics:
+  prometheus:
+    responseHeaderLabels:
+      content_type: Content-Type
+```
+
+```bash tab="Request"
+curl http://localhost
+```
+
+```bash tab="Metric"
+traefik_entrypoint_requests_total\{code="200",content_type="application/json",entrypoint="web",method="GET",protocol="http"\} 1
+```
+
+###### Combining Request and Response Headers
+
+You can use both `headerLabels` and `responseHeaderLabels` together to capture information from both request and response headers:
+
+```yaml tab="Configuration"
+# static_configuration.yaml
+metrics:
+  prometheus:
+    headerLabels:
+      useragent: User-Agent
+    responseHeaderLabels:
+      content_type: Content-Type
+      cache_status: X-Cache-Status
+```
+
+This produces metrics with labels from both request and response headers:
+
+```bash tab="Metric"
+traefik_entrypoint_requests_total\{cache_status="HIT",code="200",content_type="application/json",entrypoint="web",method="GET",protocol="http",useragent="curl/7.68.0"\} 1
 ```
 
 ### StatsD
@@ -372,7 +429,7 @@ Traefik Proxy follows [official OpenTelemetry semantic conventions v1.23.1](http
 
 | Metric     | Type      | [Labels](#labels)       | Description   |
 |----------|-----------|-------------------------|------------------|
-| <a id="opt-http-server-request-duration" href="#opt-http-server-request-duration" title="#opt-http-server-request-duration">`http.server.request.duration`</a> | Histogram | `error.type`, `http.request.method`, `http.response.status_code`, `network.protocol.name`, `server.address`, `server.port`, `url.scheme` | Duration of HTTP server requests  |
+| <a id="opt-http-server-request-duration" href="#opt-http-server-request-duration" title="#opt-http-server-request-duration">`http.server.request.duration`</a> | Histogram | `error.type`, `http.request.method`, `http.response.status_code`, `http.route`, `network.protocol.name`, `server.address`, `server.port`, `url.scheme` | Duration of HTTP server requests  |
 
 ##### Labels
 
@@ -383,6 +440,7 @@ Here is a comprehensive list of labels that are provided by the metrics:
 | <a id="opt-error-type" href="#opt-error-type" title="#opt-error-type">`error.type`</a> | Describes a class of error the operation ended with          | "500"         |
 | <a id="opt-http-request-method" href="#opt-http-request-method" title="#opt-http-request-method">`http.request.method`</a> | HTTP request method                                          | "GET"         |
 | <a id="opt-http-response-status-code" href="#opt-http-response-status-code" title="#opt-http-response-status-code">`http.response.status_code`</a> | HTTP response status code                                    | "200"         |
+| <a id="opt-http-route" href="#opt-http-route" title="#opt-http-route">`http.route`</a> | Rule of the router that matched the request, only set when a router matches the request | ``PathPrefix(`/search`)`` |
 | <a id="opt-network-protocol-name" href="#opt-network-protocol-name" title="#opt-network-protocol-name">`network.protocol.name`</a> | OSI application layer or non-OSI equivalent                  | "http/1.1"    |
 | <a id="opt-network-protocol-version" href="#opt-network-protocol-version" title="#opt-network-protocol-version">`network.protocol.version`</a> | Version of the protocol specified in `network.protocol.name` | "1.1"         |
 | <a id="opt-server-address" href="#opt-server-address" title="#opt-server-address">`server.address`</a> | Name of the local HTTP server that received the request      | "example.com" |
@@ -535,6 +593,7 @@ On top of the official OpenTelemetry semantic conventions, Traefik provides its 
     | <a id="opt-traefik-service-request-duration-seconds" href="#opt-traefik-service-request-duration-seconds" title="#opt-traefik-service-request-duration-seconds">`traefik_service_request_duration_seconds`</a> | Histogram | `code`, `method`, `protocol`, `service` | Request processing duration histogram on a service.         |
     | <a id="opt-traefik-service-retries-total" href="#opt-traefik-service-retries-total" title="#opt-traefik-service-retries-total">`traefik_service_retries_total`</a> | Count     | `service`                               | The count of requests retries on a service.                 |
     | <a id="opt-traefik-service-server-up" href="#opt-traefik-service-server-up" title="#opt-traefik-service-server-up">`traefik_service_server_up`</a> | Gauge     | `service`, `url`                        | Current service's server status, 0 for a down or 1 for up. Only for services configured with healthcheck. |
+    | <a id="opt-traefik-service-inflight-requests" href="#opt-traefik-service-inflight-requests" title="#opt-traefik-service-inflight-requests">`traefik_service_inflight_requests`</a> | Gauge     | `method`, `protocol`, `service`         | The current number of in-flight requests on a service. For upgraded connections (WebSocket/SSE) this includes the session lifetime. |
     | <a id="opt-traefik-service-requests-bytes-total" href="#opt-traefik-service-requests-bytes-total" title="#opt-traefik-service-requests-bytes-total">`traefik_service_requests_bytes_total`</a> | Count     | `code`, `method`, `protocol`, `service` | The total size of requests in bytes received by a service.  |
     | <a id="opt-traefik-service-responses-bytes-total" href="#opt-traefik-service-responses-bytes-total" title="#opt-traefik-service-responses-bytes-total">`traefik_service_responses_bytes_total`</a> | Count     | `code`, `method`, `protocol`, `service` | The total size of responses in bytes returned by a service. |
     
@@ -547,6 +606,7 @@ On top of the official OpenTelemetry semantic conventions, Traefik provides its 
     | <a id="opt-traefik-service-request-duration-seconds-2" href="#opt-traefik-service-request-duration-seconds-2" title="#opt-traefik-service-request-duration-seconds-2">`traefik_service_request_duration_seconds`</a> | Histogram | `code`, `method`, `protocol`, `service` | Request processing duration histogram on a service.         |
     | <a id="opt-traefik-service-retries-total-2" href="#opt-traefik-service-retries-total-2" title="#opt-traefik-service-retries-total-2">`traefik_service_retries_total`</a> | Count     | `service`                               | The count of requests retries on a service.                 |
     | <a id="opt-traefik-service-server-up-2" href="#opt-traefik-service-server-up-2" title="#opt-traefik-service-server-up-2">`traefik_service_server_up`</a> | Gauge     | `service`, `url`                        | Current service's server status, 0 for a down or 1 for up. Only for services configured with healthcheck. |
+    | <a id="opt-traefik-service-inflight-requests-2" href="#opt-traefik-service-inflight-requests-2" title="#opt-traefik-service-inflight-requests-2">`traefik_service_inflight_requests`</a> | Gauge     | `method`, `protocol`, `service`         | The current number of in-flight requests on a service. For upgraded connections (WebSocket/SSE) this includes the session lifetime. |
     | <a id="opt-traefik-service-requests-bytes-total-2" href="#opt-traefik-service-requests-bytes-total-2" title="#opt-traefik-service-requests-bytes-total-2">`traefik_service_requests_bytes_total`</a> | Count     | `code`, `method`, `protocol`, `service` | The total size of requests in bytes received by a service.  |
     | <a id="opt-traefik-service-responses-bytes-total-2" href="#opt-traefik-service-responses-bytes-total-2" title="#opt-traefik-service-responses-bytes-total-2">`traefik_service_responses_bytes_total`</a> | Count     | `code`, `method`, `protocol`, `service` | The total size of responses in bytes returned by a service. |
 
@@ -559,6 +619,7 @@ On top of the official OpenTelemetry semantic conventions, Traefik provides its 
     | <a id="opt-service-request-duration-seconds" href="#opt-service-request-duration-seconds" title="#opt-service-request-duration-seconds">`service.request.duration.seconds`</a> | Histogram | `code`, `method`, `protocol`, `service` | Request processing duration histogram on a service.         |
     | <a id="opt-service-retries-total" href="#opt-service-retries-total" title="#opt-service-retries-total">`service.retries.total`</a> | Count     | `service`                               | The count of requests retries on a service.                 |
     | <a id="opt-service-server-up" href="#opt-service-server-up" title="#opt-service-server-up">`service.server.up`</a> | Gauge     | `service`, `url`                        | Current service's server status, 0 for a down or 1 for up. Only for services configured with healthcheck. |
+    | <a id="opt-service-inflight-requests" href="#opt-service-inflight-requests" title="#opt-service-inflight-requests">`service.inflight.requests`</a> | Gauge     | `method`, `protocol`, `service`         | The current number of in-flight requests on a service. For upgraded connections (WebSocket/SSE) this includes the session lifetime. |
     | <a id="opt-service-requests-bytes-total" href="#opt-service-requests-bytes-total" title="#opt-service-requests-bytes-total">`service.requests.bytes.total`</a> | Count     | `code`, `method`, `protocol`, `service` | The total size of requests in bytes received by a service.  |
     | <a id="opt-service-responses-bytes-total" href="#opt-service-responses-bytes-total" title="#opt-service-responses-bytes-total">`service.responses.bytes.total`</a> | Count     | `code`, `method`, `protocol`, `service` | The total size of responses in bytes returned by a service. |
 
@@ -571,6 +632,7 @@ On top of the official OpenTelemetry semantic conventions, Traefik provides its 
     | <a id="opt-traefik-service-request-duration-seconds-3" href="#opt-traefik-service-request-duration-seconds-3" title="#opt-traefik-service-request-duration-seconds-3">`traefik.service.request.duration.seconds`</a> | Histogram | `code`, `method`, `protocol`, `service` | Request processing duration histogram on a service.         |
     | <a id="opt-traefik-service-retries-total-3" href="#opt-traefik-service-retries-total-3" title="#opt-traefik-service-retries-total-3">`traefik.service.retries.total`</a> | Count     | `service`                               | The count of requests retries on a service.                 |
     | <a id="opt-traefik-service-server-up-3" href="#opt-traefik-service-server-up-3" title="#opt-traefik-service-server-up-3">`traefik.service.server.up`</a> | Gauge     | `service`, `url`                        | Current service's server status, 0 for a down or 1 for up. Only for services configured with healthcheck. |
+    | <a id="opt-traefik-service-inflight-requests-3" href="#opt-traefik-service-inflight-requests-3" title="#opt-traefik-service-inflight-requests-3">`traefik.service.inflight.requests`</a> | Gauge     | `method`, `protocol`, `service`         | The current number of in-flight requests on a service. For upgraded connections (WebSocket/SSE) this includes the session lifetime. |
     | <a id="opt-traefik-service-requests-bytes-total-3" href="#opt-traefik-service-requests-bytes-total-3" title="#opt-traefik-service-requests-bytes-total-3">`traefik.service.requests.bytes.total`</a> | Count     | `code`, `method`, `protocol`, `service` | The total size of requests in bytes received by a service.  |
     | <a id="opt-traefik-service-responses-bytes-total-3" href="#opt-traefik-service-responses-bytes-total-3" title="#opt-traefik-service-responses-bytes-total-3">`traefik.service.responses.bytes.total`</a> | Count     | `code`, `method`, `protocol`, `service` | The total size of responses in bytes returned by a service. |
 
@@ -583,6 +645,7 @@ On top of the official OpenTelemetry semantic conventions, Traefik provides its 
     | <a id="opt-prefix-service-request-duration-seconds" href="#opt-prefix-service-request-duration-seconds" title="#opt-prefix-service-request-duration-seconds">`{prefix}.service.request.duration.seconds`</a> | Histogram | `code`, `method`, `protocol`, `service` | Request processing duration histogram on a service.         |
     | <a id="opt-prefix-service-retries-total" href="#opt-prefix-service-retries-total" title="#opt-prefix-service-retries-total">`{prefix}.service.retries.total`</a> | Count     | `service`                               | The count of requests retries on a service.                 |
     | <a id="opt-prefix-service-server-up" href="#opt-prefix-service-server-up" title="#opt-prefix-service-server-up">`{prefix}.service.server.up`</a> | Gauge     | `service`, `url`                        | Current service's server status, 0 for a down or 1 for up. Only for services configured with healthcheck. |
+    | <a id="opt-prefix-service-inflight-requests" href="#opt-prefix-service-inflight-requests" title="#opt-prefix-service-inflight-requests">`{prefix}.service.inflight.requests`</a> | Gauge     | `method`, `protocol`, `service`         | The current number of in-flight requests on a service. For upgraded connections (WebSocket/SSE) this includes the session lifetime. |
     | <a id="opt-prefix-service-requests-bytes-total" href="#opt-prefix-service-requests-bytes-total" title="#opt-prefix-service-requests-bytes-total">`{prefix}.service.requests.bytes.total`</a> | Count     | `code`, `method`, `protocol`, `service` | The total size of requests in bytes received by a service.  |
     | <a id="opt-prefix-service-responses-bytes-total" href="#opt-prefix-service-responses-bytes-total" title="#opt-prefix-service-responses-bytes-total">`{prefix}.service.responses.bytes.total`</a> | Count     | `code`, `method`, `protocol`, `service` | The total size of responses in bytes returned by a service. |
 

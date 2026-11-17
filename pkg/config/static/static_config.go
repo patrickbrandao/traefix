@@ -181,12 +181,13 @@ type TLSClientConfig struct {
 
 // API holds the API configuration.
 type API struct {
-	BasePath           string `description:"Defines the base path where the API and Dashboard will be exposed." json:"basePath,omitempty" toml:"basePath,omitempty" yaml:"basePath,omitempty" export:"true"`
-	Insecure           bool   `description:"Activate API directly on the entryPoint named traefik." json:"insecure,omitempty" toml:"insecure,omitempty" yaml:"insecure,omitempty" export:"true"`
-	Dashboard          bool   `description:"Activate dashboard." json:"dashboard,omitempty" toml:"dashboard,omitempty" yaml:"dashboard,omitempty" export:"true"`
-	Debug              bool   `description:"Enable additional endpoints for debugging and profiling." json:"debug,omitempty" toml:"debug,omitempty" yaml:"debug,omitempty" export:"true"`
-	DisableDashboardAd bool   `description:"Disable ad in the dashboard." json:"disableDashboardAd,omitempty" toml:"disableDashboardAd,omitempty" yaml:"disableDashboardAd,omitempty" export:"true"`
-	DashboardName      string `description:"Custom name for the dashboard." json:"dashboardName,omitempty" toml:"dashboardName,omitempty" yaml:"dashboardName,omitempty" export:"true"`
+	BasePath                 string `description:"Defines the base path where the API and Dashboard will be exposed." json:"basePath,omitempty" toml:"basePath,omitempty" yaml:"basePath,omitempty" export:"true"`
+	Insecure                 bool   `description:"Activate API directly on the entryPoint named traefik." json:"insecure,omitempty" toml:"insecure,omitempty" yaml:"insecure,omitempty" export:"true"`
+	Dashboard                bool   `description:"Activate dashboard." json:"dashboard,omitempty" toml:"dashboard,omitempty" yaml:"dashboard,omitempty" export:"true"`
+	Debug                    bool   `description:"Enable additional endpoints for debugging and profiling." json:"debug,omitempty" toml:"debug,omitempty" yaml:"debug,omitempty" export:"true"`
+	DisableDashboardAd       bool   `description:"Disable ad in the dashboard." json:"disableDashboardAd,omitempty" toml:"disableDashboardAd,omitempty" yaml:"disableDashboardAd,omitempty" export:"true"`
+	DashboardName            string `description:"Custom name for the dashboard." json:"dashboardName,omitempty" toml:"dashboardName,omitempty" yaml:"dashboardName,omitempty" export:"true"`
+	HideMiddlewareParameters *bool  `description:"Redact the sensitive middleware parameters (plugin configuration values and credentials) in the API and the dashboard." json:"hideMiddlewareParameters,omitempty" toml:"hideMiddlewareParameters,omitempty" yaml:"hideMiddlewareParameters,omitempty" export:"true"`
 	// TODO: Re-enable statistics
 	// Statistics      *types.Statistics `description:"Enable more detailed statistics." json:"statistics,omitempty" toml:"statistics,omitempty" yaml:"statistics,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 }
@@ -196,6 +197,7 @@ func (a *API) SetDefaults() {
 	a.BasePath = "/"
 	a.Dashboard = true
 	a.DashboardName = ""
+	a.HideMiddlewareParameters = new(true)
 }
 
 // RespondingTimeouts contains timeout configurations for incoming requests to the Traefik instance.
@@ -367,7 +369,8 @@ func (c *Configuration) SetEffectiveConfiguration() {
 	if c.Providers.KubernetesGateway != nil {
 		entryPoints := make(map[string]gateway.Entrypoint)
 		for epName, entryPoint := range c.EntryPoints {
-			entryPoints[epName] = gateway.Entrypoint{Address: entryPoint.GetAddress(), HasHTTPTLSConf: entryPoint.HTTP.TLS != nil}
+			protocol, _ := entryPoint.GetProtocol()
+			entryPoints[epName] = gateway.Entrypoint{Address: entryPoint.GetAddress(), Protocol: protocol, HasHTTPTLSConf: entryPoint.HTTP.TLS != nil}
 		}
 
 		if c.Providers.KubernetesCRD != nil {
@@ -538,6 +541,12 @@ func (c *Configuration) ValidateConfiguration() error {
 
 		if c.AccessLog.OTLP.GRPC != nil && c.AccessLog.OTLP.GRPC.TLS != nil && c.AccessLog.OTLP.GRPC.Insecure {
 			return errors.New("access logs OTLP GRPC: TLS and Insecure options are mutually exclusive")
+		}
+	}
+
+	if c.AccessLog != nil {
+		if c.AccessLog.SampleRate < 0 || c.AccessLog.SampleRate > 1 {
+			return errors.New("access logs: sampleRate must be between 0.0 and 1.0")
 		}
 	}
 

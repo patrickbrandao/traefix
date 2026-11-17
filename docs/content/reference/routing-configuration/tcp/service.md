@@ -76,6 +76,7 @@ labels:
 | <a id="opt-servers" href="#opt-servers" title="#opt-servers">`servers`</a> |  Servers declare a single instance of your program.  | "" |
 | <a id="opt-servers-address" href="#opt-servers-address" title="#opt-servers-address">`servers.address`</a> |   The address option (IP:Port) point to a specific instance. | "" |
 | <a id="opt-servers-tls" href="#opt-servers-tls" title="#opt-servers-tls">`servers.tls`</a> | The `tls` option determines whether to use TLS when dialing with the backend. | false |
+| <a id="opt-servers-weight" href="#opt-servers-weight" title="#opt-servers-weight">`servers.weight`</a> | The `weight` option sets the weight of the server for the weighted round-robin load balancing. A server with a weight of `0` receives no connections. | 1 |
 | <a id="opt-serversTransport" href="#opt-serversTransport" title="#opt-serversTransport">`serversTransport`</a> | `serversTransport` allows referencing a TCP [ServersTransport](./serverstransport.md) configuration for the communication between Traefik and your servers. If no serversTransport is specified, the default@internal will be used. |  "" |
 | <a id="opt-healthCheck" href="#opt-healthCheck" title="#opt-healthCheck">`healthCheck`</a> | Configures health check to remove unhealthy servers from the load balancing rotation. See [HealthCheck](#health-check) for details. | | No |
 

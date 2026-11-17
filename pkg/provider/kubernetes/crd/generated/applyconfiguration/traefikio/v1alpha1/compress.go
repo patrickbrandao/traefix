@@ -45,6 +45,10 @@ type CompressApplyConfiguration struct {
 	Encodings []string `json:"encodings,omitempty"`
 	// DefaultEncoding specifies the default encoding if the `Accept-Encoding` header is not in the request or contains a wildcard (`*`).
 	DefaultEncoding *string `json:"defaultEncoding,omitempty"`
+	// ExcludeRequestContentType defines whether the request Content-Type header is also compared to the excluded content types.
+	// Requests with a matching Content-Type are passed through without compression.
+	// Default: true.
+	ExcludeRequestContentType *bool `json:"excludeRequestContentType,omitempty"`
 }
 
 // CompressApplyConfiguration constructs a declarative configuration of the Compress type for use with
@@ -96,5 +100,13 @@ func (b *CompressApplyConfiguration) WithEncodings(values ...string) *CompressAp
 // If called multiple times, the DefaultEncoding field is set to the value of the last call.
 func (b *CompressApplyConfiguration) WithDefaultEncoding(value string) *CompressApplyConfiguration {
 	b.DefaultEncoding = &value
+	return b
+}
+
+// WithExcludeRequestContentType sets the ExcludeRequestContentType field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ExcludeRequestContentType field is set to the value of the last call.
+func (b *CompressApplyConfiguration) WithExcludeRequestContentType(value bool) *CompressApplyConfiguration {
+	b.ExcludeRequestContentType = &value
 	return b
 }

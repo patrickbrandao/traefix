@@ -2,13 +2,16 @@ package healthcheck
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +23,7 @@ import (
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
@@ -57,10 +61,12 @@ type ServiceHealthChecker struct {
 	interval          time.Duration
 	unhealthyInterval time.Duration
 	timeout           time.Duration
+	maxConcurrency    int
 
 	metrics metricsHealthCheck
 
-	client *http.Client
+	client    *http.Client
+	tlsConfig *tls.Config
 
 	healthyTargets   chan target
 	unhealthyTargets chan target
@@ -68,7 +74,7 @@ type ServiceHealthChecker struct {
 	serviceName string
 }
 
-func NewServiceHealthChecker(ctx context.Context, metrics metricsHealthCheck, config *dynamic.ServerHealthCheck, service StatusSetter, info *runtime.ServiceInfo, transport http.RoundTripper, targets map[string]*url.URL, serviceName string) *ServiceHealthChecker {
+func NewServiceHealthChecker(ctx context.Context, metrics metricsHealthCheck, config *dynamic.ServerHealthCheck, service StatusSetter, info *runtime.ServiceInfo, transport http.RoundTripper, tlsConfig *tls.Config, targets map[string]*url.URL, serviceName string) *ServiceHealthChecker {
 	logger := log.Ctx(ctx)
 
 	interval := time.Duration(config.Interval)
@@ -94,6 +100,13 @@ func NewServiceHealthChecker(ctx context.Context, metrics metricsHealthCheck, co
 	if timeout <= 0 {
 		logger.Error().Msg("Health check timeout smaller than zero, default value will be used instead.")
 		timeout = time.Duration(dynamic.DefaultHealthCheckTimeout)
+	}
+
+	// Checks stay sequential by default, as they always were, so that a service
+	// with many servers does not start sending bursts of probes after an upgrade.
+	maxConcurrency := config.MaxConcurrency
+	if maxConcurrency <= 0 {
+		maxConcurrency = 1
 	}
 
 	client := &http.Client{
@@ -122,30 +135,42 @@ func NewServiceHealthChecker(ctx context.Context, metrics metricsHealthCheck, co
 		interval:          interval,
 		unhealthyInterval: unhealthyInterval,
 		timeout:           timeout,
+		maxConcurrency:    maxConcurrency,
 		healthyTargets:    healthyTargets,
 		unhealthyTargets:  unhealthyTargets,
 		serviceName:       serviceName,
 		client:            client,
+		tlsConfig:         tlsConfig,
 		metrics:           metrics,
 	}
 }
 
 func (shc *ServiceHealthChecker) Launch(ctx context.Context) {
-	go shc.healthcheck(ctx, shc.unhealthyTargets, shc.unhealthyInterval)
+	// Waits for both loops, so that no check started by the unhealthy loop
+	// outlives Launch when the configuration is reloaded.
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	wg.Go(func() {
+		shc.healthcheck(ctx, shc.unhealthyTargets, shc.unhealthyInterval)
+	})
 
 	shc.healthcheck(ctx, shc.healthyTargets, shc.interval)
 }
 
 func (shc *ServiceHealthChecker) healthcheck(ctx context.Context, targets chan target, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	// Fire immediately so DOWN servers are identified on the first check rather
+	// than after waiting one full interval. Without this, every configuration
+	// reload opens a window (up to interval long) where all servers appear UP.
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
-		case <-ticker.C:
+		case <-timer.C:
 			// We collect the targets to check once for all,
 			// to avoid rechecking a target that has been moved during the health check.
 			var targetsToCheck []target
@@ -161,51 +186,78 @@ func (shc *ServiceHealthChecker) healthcheck(ctx context.Context, targets chan t
 				}
 			}
 
-			// Now we can check the targets.
-			for _, target := range targetsToCheck {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
+			shc.checkTargets(ctx, targetsToCheck)
 
-				up := true
-				serverUpMetricValue := float64(1)
-
-				if err := shc.executeHealthCheck(ctx, shc.config, target.targetURL); err != nil {
-					// The context is canceled when the dynamic configuration is refreshed.
-					if errors.Is(err, context.Canceled) {
-						return
-					}
-
-					log.Ctx(ctx).Warn().
-						Str("targetURL", target.targetURL.String()).
-						Err(err).
-						Msg("Health check failed.")
-
-					up = false
-					serverUpMetricValue = float64(0)
-				}
-
-				shc.balancer.SetStatus(ctx, target.name, up)
-
-				var statusStr string
-				if up {
-					statusStr = runtime.StatusUp
-					shc.healthyTargets <- target
-				} else {
-					statusStr = runtime.StatusDown
-					shc.unhealthyTargets <- target
-				}
-
-				shc.info.UpdateServerStatus(target.targetURL.String(), statusStr)
-
-				shc.metrics.ServiceServerUpGauge().
-					With("service", shc.serviceName, "url", target.targetURL.String()).
-					Set(serverUpMetricValue)
-			}
+			timer.Reset(interval)
 		}
 	}
+}
+
+// checkTargets checks the given targets, with at most maxConcurrency checks in flight.
+// It only returns once all the checks it started are done, so that no check
+// outlives the health checker when the configuration is reloaded.
+func (shc *ServiceHealthChecker) checkTargets(ctx context.Context, targets []target) {
+	sem := make(chan struct{}, shc.maxConcurrency)
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	for _, target := range targets {
+		select {
+		case <-ctx.Done():
+			return
+		case sem <- struct{}{}:
+		}
+
+		// The select above picks randomly when both cases are ready.
+		if ctx.Err() != nil {
+			<-sem
+			return
+		}
+
+		wg.Go(func() {
+			defer func() { <-sem }()
+
+			shc.checkTarget(ctx, target)
+		})
+	}
+}
+
+func (shc *ServiceHealthChecker) checkTarget(ctx context.Context, target target) {
+	up := true
+	serverUpMetricValue := float64(1)
+
+	if err := shc.executeHealthCheck(ctx, shc.config, target.targetURL); err != nil {
+		// The context is canceled when the dynamic configuration is refreshed.
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+
+		log.Ctx(ctx).Warn().
+			Str("targetURL", target.targetURL.String()).
+			Err(err).
+			Msg("Health check failed.")
+
+		up = false
+		serverUpMetricValue = float64(0)
+	}
+
+	shc.balancer.SetStatus(ctx, target.name, up)
+
+	var statusStr string
+	if up {
+		statusStr = runtime.StatusUp
+		shc.healthyTargets <- target
+	} else {
+		statusStr = runtime.StatusDown
+		shc.unhealthyTargets <- target
+	}
+
+	shc.info.UpdateServerStatus(target.targetURL.String(), statusStr)
+
+	shc.metrics.ServiceServerUpGauge().
+		With("service", shc.serviceName, "url", target.targetURL.String()).
+		Set(serverUpMetricValue)
 }
 
 func (shc *ServiceHealthChecker) executeHealthCheck(ctx context.Context, config *dynamic.ServerHealthCheck, target *url.URL) error {
@@ -275,7 +327,12 @@ func (shc *ServiceHealthChecker) newRequest(ctx context.Context, target *url.URL
 		u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(shc.config.Port))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, shc.config.Method, u.String(), http.NoBody)
+	var body io.Reader = http.NoBody
+	if shc.config.Body != "" {
+		body = strings.NewReader(shc.config.Body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, shc.config.Method, u.String(), body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
@@ -301,11 +358,17 @@ func (shc *ServiceHealthChecker) checkHealthGRPC(ctx context.Context, serverURL 
 
 	serverAddr := net.JoinHostPort(serverURL.Hostname(), port)
 
-	var opts []grpc.DialOption
-	switch shc.config.Scheme {
-	case "http", "h2c", "":
-		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	scheme := shc.config.Scheme
+	if scheme == "" {
+		scheme = serverURL.Scheme
 	}
+
+	transportCredentials := insecure.NewCredentials()
+	if scheme == "https" {
+		transportCredentials = credentials.NewTLS(shc.tlsConfig)
+	}
+
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(transportCredentials)}
 
 	conn, err := grpc.DialContext(ctx, serverAddr, opts...)
 	if err != nil {

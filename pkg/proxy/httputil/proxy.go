@@ -10,11 +10,14 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/traefik/traefik/v3/pkg/middlewares/accesslog"
 	"github.com/traefik/traefik/v3/pkg/observability/logs"
 	"golang.org/x/net/http/httpguts"
 )
@@ -61,7 +64,7 @@ func buildSingleHostProxy(target *url.URL, passHostHeader bool, preservePath boo
 		ErrorHandler:  ErrorHandler,
 	}
 
-	return newH2CUpgradeHandler(proxy)
+	return newH2CUpgradeHandler(newTLSUpgradeHandler(proxy))
 }
 
 func rewriteRequestBuilder(target *url.URL, passHostHeader bool, preservePath bool) func(*httputil.ProxyRequest) {
@@ -199,10 +202,45 @@ func ErrorHandlerWithContext(ctx context.Context, w http.ResponseWriter, err err
 		logger.Debug().Err(err).Msgf("%d %s", statusCode, statusText(statusCode))
 	}
 
+	// Populate the access log OriginError field, unless the client closed the request.
+	if statusCode != StatusClientClosedRequest {
+		if table := accesslog.GetLogDataTable(ctx); table != nil {
+			table.Core[accesslog.OriginError] = originErrorMessage(err)
+		}
+	}
+
 	w.WriteHeader(statusCode)
 	if _, werr := w.Write([]byte(statusText(statusCode))); werr != nil {
 		logger.Debug().Err(werr).Msg("Error while writing status code")
 	}
+}
+
+// maxOriginErrorLength bounds the OriginError access log field, as some error messages
+// embed values sent by the client (e.g. the requested Upgrade protocol).
+const maxOriginErrorLength = 512
+
+// originErrorMessage returns the error message for the OriginError access log field.
+// A *url.Error is unwrapped because its message embeds the full request URL, query string included,
+// which would bypass the access log query parameters redaction. Control characters are replaced
+// so that client-controlled values cannot forge lines in non-JSON log outputs.
+func originErrorMessage(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		err = urlErr.Err
+	}
+
+	msg := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, err.Error())
+
+	if len(msg) > maxOriginErrorLength {
+		msg = strings.ToValidUTF8(msg[:maxOriginErrorLength], "")
+	}
+
+	return msg
 }
 
 func statusText(statusCode int) string {
@@ -227,6 +265,26 @@ func isTLSConfigError(err error) bool {
 	return ok
 }
 
+// invalidChunkedBodyErrors are the messages of the net/http chunked reader
+// errors raised while decoding a malformed chunked request body. They are
+// unexported (net/http/internal/chunked.go), so they can only be matched by
+// message.
+var invalidChunkedBodyErrors = []string{
+	"invalid byte in chunk length",
+	"empty hex number for chunk length",
+	"http chunk length too large",
+	"malformed chunked encoding",
+	"invalid CR in chunked line",
+	"chunked line ends with bare LF",
+	"chunked encoding contains too much non-data",
+}
+
+// isInvalidChunkedBodyError reports whether err was raised while decoding a
+// malformed chunked request body, which is a client fault.
+func isInvalidChunkedBodyError(err error) bool {
+	return slices.Contains(invalidChunkedBodyErrors, err.Error())
+}
+
 // ComputeStatusCode computes the HTTP status code according to the given error.
 func ComputeStatusCode(err error) int {
 	switch {
@@ -234,6 +292,8 @@ func ComputeStatusCode(err error) int {
 		return http.StatusBadGateway
 	case errors.Is(err, context.Canceled):
 		return StatusClientClosedRequest
+	case isInvalidChunkedBodyError(err):
+		return http.StatusBadRequest
 	default:
 		if netErr, ok := errors.AsType[net.Error](err); ok {
 			if netErr.Timeout() {

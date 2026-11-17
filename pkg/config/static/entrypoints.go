@@ -100,7 +100,8 @@ type HTTPConfig struct {
 	TLS                   *TLSConfig         `description:"Default TLS configuration for the routers linked to the entry point." json:"tls,omitempty" toml:"tls,omitempty" yaml:"tls,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 	EncodedCharacters     *EncodedCharacters `description:"Defines which encoded characters are allowed in the request path." json:"encodedCharacters,omitempty" toml:"encodedCharacters,omitempty" yaml:"encodedCharacters,omitempty" export:"true"`
 	EncodeQuerySemicolons bool               `description:"Defines whether request query semicolons should be URLEncoded." json:"encodeQuerySemicolons,omitempty" toml:"encodeQuerySemicolons,omitempty" yaml:"encodeQuerySemicolons,omitempty" export:"true"`
-	SanitizePath          *bool              `description:"Defines whether to enable request path sanitization (removal of /./, /../ and multiple slash sequences)." json:"sanitizePath,omitempty" toml:"sanitizePath,omitempty" yaml:"sanitizePath,omitempty" export:"true"`
+	SanitizePath          *bool              `description:"Defines whether to enable request path sanitization (removal of /./, /../ and, unless mergeSlashes is false, multiple slash sequences)." json:"sanitizePath,omitempty" toml:"sanitizePath,omitempty" yaml:"sanitizePath,omitempty" export:"true"`
+	MergeSlashes          *bool              `description:"Defines whether to merge consecutive slashes in request paths (e.g. // to /). Only applies when sanitizePath is enabled." json:"mergeSlashes,omitempty" toml:"mergeSlashes,omitempty" yaml:"mergeSlashes,omitempty" export:"true"`
 	MaxHeaderBytes        int                `description:"Maximum size of request headers in bytes." json:"maxHeaderBytes,omitempty" toml:"maxHeaderBytes,omitempty" yaml:"maxHeaderBytes,omitempty" export:"true"`
 	MaxHeaderValueCount   int                `description:"Maximum number of request header values." json:"maxHeaderValueCount,omitempty" toml:"maxHeaderValueCount,omitempty" yaml:"maxHeaderValueCount,omitempty" export:"true"`
 	AliasHeadersStrategy  string             `description:"Defines the strategy to handle the requests carrying a header whose name aliases another header name (keep, delete, and reject)." json:"aliasHeadersStrategy,omitempty" toml:"aliasHeadersStrategy,omitempty" yaml:"aliasHeadersStrategy,omitempty" export:"true"`
@@ -114,6 +115,7 @@ type HTTPConfig struct {
 // SetDefaults sets the default values.
 func (h *HTTPConfig) SetDefaults() {
 	h.SanitizePath = new(true)
+	h.MergeSlashes = new(true)
 	h.MaxHeaderBytes = http.DefaultMaxHeaderBytes
 	h.MaxHeaderValueCount = http.DefaultMaxHeaderValueCount
 }
@@ -141,9 +143,11 @@ func (ec *EncodedCharacters) SetDefaults() {
 
 // HTTP2Config is the HTTP2 configuration of an entry point.
 type HTTP2Config struct {
-	MaxConcurrentStreams      int32 `description:"Specifies the number of concurrent streams per connection that each client is allowed to initiate." json:"maxConcurrentStreams,omitempty" toml:"maxConcurrentStreams,omitempty" yaml:"maxConcurrentStreams,omitempty" export:"true"`
-	MaxDecoderHeaderTableSize int32 `description:"Specifies the maximum size of the HTTP2 HPACK header table on the decoding (receiving from client) side." json:"maxDecoderHeaderTableSize,omitempty" toml:"maxDecoderHeaderTableSize,omitempty" yaml:"maxDecoderHeaderTableSize,omitempty" export:"true"`
-	MaxEncoderHeaderTableSize int32 `description:"Specifies the maximum size of the HTTP2 HPACK header table on the encoding (sending to client) side." json:"maxEncoderHeaderTableSize,omitempty" toml:"maxEncoderHeaderTableSize,omitempty" yaml:"maxEncoderHeaderTableSize,omitempty" export:"true"`
+	MaxConcurrentStreams          int32 `description:"Specifies the number of concurrent streams per connection that each client is allowed to initiate." json:"maxConcurrentStreams,omitempty" toml:"maxConcurrentStreams,omitempty" yaml:"maxConcurrentStreams,omitempty" export:"true"`
+	MaxDecoderHeaderTableSize     int32 `description:"Specifies the maximum size of the HTTP2 HPACK header table on the decoding (receiving from client) side." json:"maxDecoderHeaderTableSize,omitempty" toml:"maxDecoderHeaderTableSize,omitempty" yaml:"maxDecoderHeaderTableSize,omitempty" export:"true"`
+	MaxEncoderHeaderTableSize     int32 `description:"Specifies the maximum size of the HTTP2 HPACK header table on the encoding (sending to client) side." json:"maxEncoderHeaderTableSize,omitempty" toml:"maxEncoderHeaderTableSize,omitempty" yaml:"maxEncoderHeaderTableSize,omitempty" export:"true"`
+	MaxReceiveBufferPerConnection int32 `description:"Specifies the maximum size of the HTTP2 receive window per connection, in bytes." json:"maxReceiveBufferPerConnection,omitempty" toml:"maxReceiveBufferPerConnection,omitempty" yaml:"maxReceiveBufferPerConnection,omitempty" export:"true"`
+	MaxReceiveBufferPerStream     int32 `description:"Specifies the maximum size of the HTTP2 receive window per stream, in bytes." json:"maxReceiveBufferPerStream,omitempty" toml:"maxReceiveBufferPerStream,omitempty" yaml:"maxReceiveBufferPerStream,omitempty" export:"true"`
 }
 
 // SetDefaults sets the default values.
@@ -155,7 +159,8 @@ func (c *HTTP2Config) SetDefaults() {
 
 // HTTP3Config is the HTTP3 configuration of an entry point.
 type HTTP3Config struct {
-	AdvertisedPort int `description:"UDP port to advertise, on which HTTP/3 is available." json:"advertisedPort,omitempty" toml:"advertisedPort,omitempty" yaml:"advertisedPort,omitempty" export:"true"`
+	AdvertisedPort    int `description:"UDP port to advertise, on which HTTP/3 is available." json:"advertisedPort,omitempty" toml:"advertisedPort,omitempty" yaml:"advertisedPort,omitempty" export:"true"`
+	InitialPacketSize int `description:"Initial size (and lower limit) in bytes of the QUIC packets sent, between 1200 and 1452. Defaults to the QUIC library value." json:"initialPacketSize,omitempty" toml:"initialPacketSize,omitempty" yaml:"initialPacketSize,omitempty" export:"true"`
 }
 
 // Redirections is a set of redirection for an entry point.

@@ -41,6 +41,9 @@ type BasicAuthApplyConfiguration struct {
 	// RemoveHeader sets the removeHeader option to true to remove the authorization header before forwarding the request to your service.
 	// Default: false.
 	RemoveHeader *bool `json:"removeHeader,omitempty"`
+	// AllowCORSPreflight allows the CORS preflight requests (OPTIONS requests with non-empty Origin and Access-Control-Request-Method headers) to pass through without authentication.
+	// Default: false.
+	AllowCORSPreflight *bool `json:"allowCORSPreflight,omitempty"`
 	// HeaderField defines a header field to store the authenticated user.
 	// More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/basicauth/#headerfield
 	HeaderField *string `json:"headerField,omitempty"`
@@ -73,6 +76,14 @@ func (b *BasicAuthApplyConfiguration) WithRealm(value string) *BasicAuthApplyCon
 // If called multiple times, the RemoveHeader field is set to the value of the last call.
 func (b *BasicAuthApplyConfiguration) WithRemoveHeader(value bool) *BasicAuthApplyConfiguration {
 	b.RemoveHeader = &value
+	return b
+}
+
+// WithAllowCORSPreflight sets the AllowCORSPreflight field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the AllowCORSPreflight field is set to the value of the last call.
+func (b *BasicAuthApplyConfiguration) WithAllowCORSPreflight(value bool) *BasicAuthApplyConfiguration {
+	b.AllowCORSPreflight = &value
 	return b
 }
 

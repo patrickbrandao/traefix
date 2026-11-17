@@ -206,6 +206,7 @@ spec:
 
 | Field      | Description        | Default | Required |
 |:-----------|:------------------------------------------------------------|:--------|:---------|
+| <a id="opt-onlyLeaf" href="#opt-onlyLeaf" title="#opt-onlyLeaf">`onlyLeaf`</a> | Controls whether the middleware sends all the provided certificates or sends a lone leaf certificate.<br /> More information [here](#onlyleaf). | false      | No      |
 | <a id="opt-pem" href="#opt-pem" title="#opt-pem">`pem`</a> | Fills the `X-Forwarded-Tls-Client-Cert` header with the certificate information.<br /> More information [here](#pem). | false      | No      |
 | <a id="opt-info-serialNumber" href="#opt-info-serialNumber" title="#opt-info-serialNumber">`info.serialNumber`</a> | Add the `Serial Number` of the certificate.<br /> More information about `info` [here](#info). | false | No |
 | <a id="opt-info-notAfter" href="#opt-info-notAfter" title="#opt-info-notAfter">`info.notAfter`</a> | Add the `Not After` information from the `Validity` part. <br /> More information about `info` [here](#info). | false | No |
@@ -228,6 +229,21 @@ spec:
 | <a id="opt-info-issuer-commonName" href="#opt-info-issuer-commonName" title="#opt-info-issuer-commonName">`info.issuer.commonName`</a> |Add the `commonName` information into the issuer.<br /> The data is taken from the issuer part with the `CN` key. <br />More information about `info` [here](#info). | false      | No      |
 | <a id="opt-info-issuer-serialNumber" href="#opt-info-issuer-serialNumber" title="#opt-info-issuer-serialNumber">`info.issuer.serialNumber`</a> |Add the `serialNumber` information into the issuer.<br /> The data is taken from the issuer part with the `SN` key. <br />More information about `info` [here](#info). | false      | No      |
 | <a id="opt-info-issuer-domainComponent" href="#opt-info-issuer-domainComponent" title="#opt-info-issuer-domainComponent">`info.issuer.domainComponent`</a> | Add the `domainComponent` information into the issuer.<br /> The data is taken from the issuer part with the `DC` key. <br />More information about `info` [here](#info). | false      | No      |
+
+### onlyLeaf
+
+The `onlyLeaf` option controls whether the middleware forwards every certificate sent by the client, separated by a `,`, or only the client leaf certificate.
+It applies to both the [`pem`](#pem) and the [`info`](#info) options.
+
+If `true`, only the leaf certificate (the first certificate presented during the TLS handshake) is forwarded.
+If `false` (default), all the certificates sent by the client are forwarded, separated by a `,`.
+
+!!! warning "Certificates other than the leaf are not necessarily verified"
+
+    The client can send additional certificates alongside its leaf certificate,
+    and the ones that are not part of the verified chain are not checked by Traefik.
+    When the backend relies on the forwarded certificate to identify the client, enable `onlyLeaf`
+    so that only the certificate actually verified during the handshake is forwarded.
 
 ### pem
 

@@ -187,6 +187,7 @@ func TestOTelAccessLogWithBodyAndDualOutput(t *testing.T) {
 				Format:     test.format,
 				DualOutput: test.dualOutput,
 				FilePath:   test.filePath,
+				SampleRate: 1.0,
 				OTLP: &otypes.OTelLog{
 					ServiceName:        "test",
 					ResourceAttributes: map[string]string{"resource": "attribute"},
@@ -252,6 +253,156 @@ func TestOTelAccessLogWithBodyAndDualOutput(t *testing.T) {
 				test.outLoggerCheckFn(t, logHandler.logger)
 			}
 		})
+	}
+}
+
+func TestAccessLogSampling(t *testing.T) {
+	tests := []struct {
+		desc       string
+		sampleRate float64
+		wantExport bool
+	}{
+		{
+			desc:       "tiny sample rate drops access logs",
+			sampleRate: 1e-12,
+			wantExport: false,
+		},
+		{
+			desc:       "unset sample rate exports all access logs",
+			sampleRate: 0,
+			wantExport: true,
+		},
+		{
+			desc:       "sample rate one exports all access logs",
+			sampleRate: 1,
+			wantExport: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			logCh := make(chan string, 1)
+			collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				logCh <- "exported"
+			}))
+			t.Cleanup(collector.Close)
+
+			config := &otypes.AccessLog{
+				Format:     CommonFormat,
+				SampleRate: test.sampleRate,
+				OTLP: &otypes.OTelLog{
+					ServiceName: "test",
+					HTTP: &otypes.OTelHTTP{
+						Endpoint: collector.URL,
+					},
+				},
+			}
+			logHandler, err := NewHandler(t.Context(), config)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, logHandler.Close())
+			})
+
+			req := &http.Request{
+				Header: map[string][]string{},
+				URL:    &url.URL{Path: "/health"},
+			}
+
+			chain := alice.New()
+			chain = chain.Append(capture.Wrap)
+
+			// Injection of the observability variables in the request context.
+			chain = chain.Append(func(next http.Handler) (http.Handler, error) {
+				return observability.WithObservabilityHandler(next, observability.Observability{
+					AccessLogsEnabled: true,
+				}), nil
+			})
+
+			chain = chain.Append(logHandler.AliceConstructor())
+			handler, err := chain.Then(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				rw.WriteHeader(http.StatusOK)
+			}))
+			require.NoError(t, err)
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+
+			select {
+			case <-logCh:
+				if !test.wantExport {
+					t.Fatal("Access log exported despite sampling")
+				}
+
+			case <-time.After(2 * time.Second):
+				if test.wantExport {
+					t.Fatal("Access log not exported")
+				}
+			}
+		})
+	}
+}
+
+func TestOTelAccessLogFlushedOnClose(t *testing.T) {
+	// Buffered: the export runs inside Close, an unbuffered send would deadlock.
+	logCh := make(chan string, 1)
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gzr, err := gzip.NewReader(r.Body)
+		require.NoError(t, err)
+
+		body, err := io.ReadAll(gzr)
+		require.NoError(t, err)
+
+		req := plogotlp.NewExportRequest()
+		err = req.UnmarshalProto(body)
+		require.NoError(t, err)
+
+		marshalledReq, err := json.Marshal(req)
+		require.NoError(t, err)
+
+		logCh <- string(marshalledReq)
+	}))
+	t.Cleanup(collector.Close)
+
+	config := &otypes.AccessLog{
+		Format: JSONFormat,
+		OTLP: &otypes.OTelLog{
+			ServiceName: "test",
+			HTTP: &otypes.OTelHTTP{
+				Endpoint: collector.URL,
+			},
+		},
+	}
+	logHandler, err := NewHandler(t.Context(), config)
+	require.NoError(t, err)
+
+	chain := alice.New(capture.Wrap)
+	chain = chain.Append(func(next http.Handler) (http.Handler, error) {
+		return observability.WithObservabilityHandler(next, observability.Observability{
+			AccessLogsEnabled: true,
+		}), nil
+	})
+	chain = chain.Append(logHandler.AliceConstructor())
+
+	handler, err := chain.Then(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+	}))
+	require.NoError(t, err)
+
+	req := &http.Request{Header: map[string][]string{}, URL: &url.URL{Path: "/health"}}
+	handler.ServeHTTP(httptest.NewRecorder(), req.WithContext(t.Context()))
+
+	// The batch processor only exports every second.
+	// Closing now, only a Shutdown can still flush the record.
+	require.NoError(t, logHandler.Close())
+
+	// No wait: Shutdown exports synchronously.
+	// Waiting would let the periodic export pass the test instead.
+	select {
+	case log := <-logCh:
+		assert.Regexp(t, `{"key":"DownstreamStatus","value":{"intValue":"200"}}`, log)
+
+	default:
+		t.Error("AccessLog not exported on Close")
 	}
 }
 
@@ -322,6 +473,47 @@ func TestLogRotation(t *testing.T) {
 
 	close(halfDone)
 	close(writeDone)
+}
+
+func TestLogRotation_builtin(t *testing.T) {
+	dir := t.TempDir()
+	fileName := filepath.Join(dir, "access.log")
+
+	config := &otypes.AccessLog{FilePath: fileName, Format: CommonFormat, MaxBackups: 2}
+	logHandler, err := NewHandler(t.Context(), config)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, logHandler.Close())
+	})
+
+	assert.FileExists(t, fileName)
+
+	handler, err := alice.New(capture.Wrap).
+		Append(func(next http.Handler) (http.Handler, error) {
+			return observability.WithObservabilityHandler(next, observability.Observability{AccessLogsEnabled: true}), nil
+		}).
+		Append(logHandler.AliceConstructor()).
+		Then(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			rw.WriteHeader(http.StatusOK)
+		}))
+	require.NoError(t, err)
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://localhost", nil))
+	require.NoError(t, logHandler.Rotate())
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://localhost", nil))
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 2)
+	assert.Equal(t, 1, lineCount(t, fileName))
+}
+
+func TestNewHandler_builtinRotationUnwritablePath(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
+
+	_, err := NewHandler(t.Context(), &otypes.AccessLog{FilePath: filepath.Join(blocker, "access.log"), MaxSize: 1})
+	require.Error(t, err)
 }
 
 func lineCount(t *testing.T, fileName string) int {
@@ -576,6 +768,18 @@ func assertFloat64NotZero() func(t *testing.T, actual any) {
 	}
 }
 
+func assertTimeHasMillisecondPrecision() func(t *testing.T, actual any) {
+	return func(t *testing.T, actual any) {
+		t.Helper()
+
+		s, _ := actual.(string)
+		assert.Contains(t, s, ".")
+
+		_, err := time.Parse(jsonLogTimeFormat, s)
+		assert.NoError(t, err)
+	}
+}
+
 func TestLoggerJSON(t *testing.T) {
 	testCases := []struct {
 		desc     string
@@ -619,7 +823,7 @@ func TestLoggerJSON(t *testing.T) {
 				Duration:                  assertFloat64NotZero(),
 				Overhead:                  assertFloat64NotZero(),
 				RetryAttempts:             assertFloat64(float64(testRetryAttempts)),
-				"time":                    assertNotEmpty(),
+				"time":                    assertTimeHasMillisecondPrecision(),
 				"StartLocal":              assertNotEmpty(),
 				"StartUTC":                assertNotEmpty(),
 			},
@@ -659,7 +863,7 @@ func TestLoggerJSON(t *testing.T) {
 				Duration:                  assertFloat64NotZero(),
 				Overhead:                  assertFloat64NotZero(),
 				RetryAttempts:             assertFloat64(float64(testRetryAttempts)),
-				"time":                    assertNotEmpty(),
+				"time":                    assertTimeHasMillisecondPrecision(),
 				"StartLocal":              assertNotEmpty(),
 				"StartUTC":                assertNotEmpty(),
 				TraceID:                   assertString("01000000000000000000000000000000"),
@@ -703,7 +907,7 @@ func TestLoggerJSON(t *testing.T) {
 				Duration:                   assertFloat64NotZero(),
 				Overhead:                   assertFloat64NotZero(),
 				RetryAttempts:              assertFloat64(float64(testRetryAttempts)),
-				"time":                     assertNotEmpty(),
+				"time":                     assertTimeHasMillisecondPrecision(),
 				"StartLocal":               assertNotEmpty(),
 				"StartUTC":                 assertNotEmpty(),
 				KubernetesIngressNamespace: assertString("test-namespace"),
@@ -751,7 +955,7 @@ func TestLoggerJSON(t *testing.T) {
 				TLSClientSubject:          assertString("CN=foobar"),
 				TLSVersion:                assertString("1.3"),
 				TLSCipher:                 assertString("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"),
-				"time":                    assertNotEmpty(),
+				"time":                    assertTimeHasMillisecondPrecision(),
 				StartLocal:                assertNotEmpty(),
 				StartUTC:                  assertNotEmpty(),
 			},
@@ -768,7 +972,7 @@ func TestLoggerJSON(t *testing.T) {
 			expected: map[string]func(t *testing.T, value any){
 				"level":                   assertString("info"),
 				"msg":                     assertString(""),
-				"time":                    assertNotEmpty(),
+				"time":                    assertTimeHasMillisecondPrecision(),
 				"downstream_Content-Type": assertString("text/plain; charset=utf-8"),
 				RequestRefererHeader:      assertString(testReferer),
 				RequestUserAgentHeader:    assertString(testUserAgent),
@@ -789,7 +993,7 @@ func TestLoggerJSON(t *testing.T) {
 			expected: map[string]func(t *testing.T, value any){
 				"level": assertString("info"),
 				"msg":   assertString(""),
-				"time":  assertNotEmpty(),
+				"time":  assertTimeHasMillisecondPrecision(),
 			},
 		},
 		{
@@ -807,7 +1011,7 @@ func TestLoggerJSON(t *testing.T) {
 			expected: map[string]func(t *testing.T, value any){
 				"level":                   assertString("info"),
 				"msg":                     assertString(""),
-				"time":                    assertNotEmpty(),
+				"time":                    assertTimeHasMillisecondPrecision(),
 				"downstream_Content-Type": assertString("REDACTED"),
 				RequestRefererHeader:      assertString("REDACTED"),
 				RequestUserAgentHeader:    assertString("REDACTED"),
@@ -835,7 +1039,7 @@ func TestLoggerJSON(t *testing.T) {
 				RequestHost:          assertString(testHostname),
 				"level":              assertString("info"),
 				"msg":                assertString(""),
-				"time":               assertNotEmpty(),
+				"time":               assertTimeHasMillisecondPrecision(),
 				RequestRefererHeader: assertString(testReferer),
 			},
 		},
@@ -861,7 +1065,7 @@ func TestLoggerJSON(t *testing.T) {
 				RequestHost:          assertString(testHostname),
 				"level":              assertString("info"),
 				"msg":                assertString(""),
-				"time":               assertNotEmpty(),
+				"time":               assertTimeHasMillisecondPrecision(),
 				RequestRefererHeader: assertString(testReferer),
 			},
 		},
@@ -904,7 +1108,7 @@ func TestLoggerJSON(t *testing.T) {
 				Duration:                  assertFloat64NotZero(),
 				Overhead:                  assertFloat64NotZero(),
 				RetryAttempts:             assertFloat64(float64(testRetryAttempts)),
-				"time":                    assertNotEmpty(),
+				"time":                    assertTimeHasMillisecondPrecision(),
 				"StartLocal":              assertNotEmpty(),
 				"StartUTC":                assertNotEmpty(),
 			},
@@ -948,7 +1152,7 @@ func TestLoggerJSON(t *testing.T) {
 				Duration:                  assertFloat64NotZero(),
 				Overhead:                  assertFloat64NotZero(),
 				RetryAttempts:             assertFloat64(float64(testRetryAttempts)),
-				"time":                    assertNotEmpty(),
+				"time":                    assertTimeHasMillisecondPrecision(),
 				"StartLocal":              assertNotEmpty(),
 				"StartUTC":                assertNotEmpty(),
 			},
@@ -1011,7 +1215,7 @@ func TestLogger_AbortedRequest(t *testing.T) {
 		Duration:                       assertFloat64NotZero(),
 		Overhead:                       assertFloat64NotZero(),
 		RetryAttempts:                  assertFloat64(float64(0)),
-		"time":                         assertNotEmpty(),
+		"time":                         assertTimeHasMillisecondPrecision(),
 		StartLocal:                     assertNotEmpty(),
 		StartUTC:                       assertNotEmpty(),
 		"downstream_Content-Type":      assertString("text/plain"),
@@ -1651,4 +1855,109 @@ func (s *mockSpan) SetName(_ string) {}
 
 func (s *mockSpan) TracerProvider() trace.TracerProvider {
 	return nil
+}
+
+func TestLoggerJSON_OriginError(t *testing.T) {
+	testCases := []struct {
+		desc            string
+		originError     string
+		setOriginError  bool
+		wantOriginError any
+	}{
+		{
+			desc:            "OriginError populated",
+			originError:     "connection refused",
+			setOriginError:  true,
+			wantOriginError: "connection refused",
+		},
+		{
+			desc:            "OriginError empty string",
+			originError:     "",
+			setOriginError:  true,
+			wantOriginError: "",
+		},
+		{
+			desc:            "OriginError absent",
+			setOriginError:  false,
+			wantOriginError: nil,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			logFilePath := filepath.Join(t.TempDir(), logFileNameSuffix)
+			config := &otypes.AccessLog{FilePath: logFilePath, Format: JSONFormat}
+
+			logger, err := NewHandler(t.Context(), config)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				err := logger.Close()
+				require.NoError(t, err)
+			})
+
+			req := &http.Request{
+				Header: map[string][]string{
+					"User-Agent": {testUserAgent},
+					"Referer":    {testReferer},
+				},
+				Proto:      testProto,
+				Host:       testHostname,
+				Method:     testMethod,
+				RemoteAddr: fmt.Sprintf("%s:%d", testHostname, testPort),
+				URL: &url.URL{
+					User: url.UserPassword(testUsername, ""),
+					Path: testPath,
+				},
+				Body: io.NopCloser(bytes.NewReader([]byte("bar"))),
+			}
+
+			chain := alice.New()
+			chain = chain.Append(capture.Wrap)
+			chain = chain.Append(func(next http.Handler) (http.Handler, error) {
+				return observability.WithObservabilityHandler(next, observability.Observability{
+					AccessLogsEnabled: true,
+				}), nil
+			})
+			chain = chain.Append(logger.AliceConstructor())
+
+			handler, err := chain.Then(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+				logData := GetLogData(r)
+				require.NotNil(t, logData)
+
+				logData.Core[RouterName] = testRouterName
+				logData.Core[ServiceURL] = testServiceName
+				logData.Core[OriginStatus] = testStatus
+				logData.Core[OriginContentSize] = testContentSize
+				logData.Core[RetryAttempts] = testRetryAttempts
+				logData.Core[StartUTC] = testStart.UTC()
+				logData.Core[StartLocal] = testStart.Local()
+
+				if test.setOriginError {
+					logData.Core[OriginError] = test.originError
+				}
+
+				rw.WriteHeader(testStatus)
+				_, _ = rw.Write([]byte(testContent))
+			}))
+			require.NoError(t, err)
+
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+
+			logData, err := os.ReadFile(logFilePath)
+			require.NoError(t, err)
+
+			jsonData := make(map[string]any)
+			err = json.Unmarshal(logData, &jsonData)
+			require.NoError(t, err)
+
+			if test.wantOriginError != nil {
+				assert.Equal(t, test.wantOriginError, jsonData[OriginError])
+			} else {
+				_, exists := jsonData[OriginError]
+				assert.False(t, exists)
+			}
+		})
+	}
 }

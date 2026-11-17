@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -24,13 +25,69 @@ import (
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/config/static"
 	"github.com/traefik/traefik/v3/pkg/middlewares/requestdecorator"
+	"github.com/traefik/traefik/v3/pkg/middlewares/snicheck"
 	"github.com/traefik/traefik/v3/pkg/proxy/fast"
 	tcprouter "github.com/traefik/traefik/v3/pkg/server/router/tcp"
 	"github.com/traefik/traefik/v3/pkg/server/service"
 	"github.com/traefik/traefik/v3/pkg/tcp"
 	"github.com/traefik/traefik/v3/pkg/tls/generate"
 	"golang.org/x/net/http2"
+	"golang.org/x/time/rate"
 )
+
+func TestAcceptTCPWithKeepAlive(t *testing.T) {
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	var clients []net.Conn
+	for range 3 {
+		client, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		clients = append(clients, client)
+	}
+	t.Cleanup(func() {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+	})
+
+	var logs bytes.Buffer
+	logger := zerolog.New(&logs).Level(zerolog.WarnLevel)
+	failures := &keepAliveFailures{logger: &logger, warnings: rate.Sometimes{First: 1, Interval: time.Minute}}
+
+	var failed []*net.TCPConn
+	accepted, err := acceptTCPWithKeepAlive(listener.AcceptTCP, func(conn *net.TCPConn) error {
+		if len(failed) < 2 {
+			failed = append(failed, conn)
+			return syscall.ECONNRESET
+		}
+		return configureTCPKeepAlive(conn)
+	}, failures)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = accepted.Close() })
+
+	require.Len(t, failed, 2)
+	for _, conn := range failed {
+		assert.NotSame(t, conn, accepted)
+		// A closed TCPConn rejects operations rather than retaining the accepted socket.
+		assert.ErrorIs(t, conn.SetKeepAlive(true), net.ErrClosed)
+	}
+
+	// Only the first failure is reported as a warning, the next ones are rate limited.
+	assert.Equal(t, 1, strings.Count(logs.String(), "Closed accepted connections whose TCP keep-alive could not be set"))
+	assert.Equal(t, int64(1), failures.dropped.Load())
+}
+
+func TestAcceptTCPWithKeepAlive_listenerError(t *testing.T) {
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	require.NoError(t, listener.Close())
+
+	logger := zerolog.Nop()
+	_, err = acceptTCPWithKeepAlive(listener.AcceptTCP, configureTCPKeepAlive, &keepAliveFailures{logger: &logger})
+	require.ErrorIs(t, err, net.ErrClosed)
+}
 
 func TestShutdownHijacked(t *testing.T) {
 	router, err := tcprouter.NewRouter(nil)
@@ -396,6 +453,117 @@ func TestKeepAliveH2c(t *testing.T) {
 	require.Contains(t, err.Error(), "use of closed network connection")
 }
 
+// fakeTLSHandler simulates the "TLS options name" ConnContext wiring that a real TLS
+// entry point performs (see server_entrypoint_tcp.go), so that snicheck can be driven
+// through a plain-TCP test entry point while still observing a stale TLS options name.
+func fakeTLSHandler(connTLSOptionsName string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		req.TLS = &tls.ConnectionState{ServerName: "example.com"}
+		req = req.WithContext(tcp.AddTLSOptionsNameInContext(req.Context(), connTLSOptionsName))
+		next.ServeHTTP(rw, req)
+	})
+}
+
+// TestSNICheckClosesStaleConnectionHTTP1 asserts that, over a real HTTP/1.1 connection,
+// snicheck rejecting a request over stale TLS options actually results in the underlying
+// TCP connection being closed by the server, and not merely in the response carrying a
+// "Connection: close" header that a client could choose to ignore.
+func TestSNICheckClosesStaleConnectionHTTP1(t *testing.T) {
+	epConfig := &static.EntryPointsTransport{}
+	epConfig.SetDefaults()
+
+	entryPoint, err := NewTCPEntryPoint(t.Context(), "", &static.EntryPoint{
+		Address:          ":0",
+		Transport:        epConfig,
+		ForwardedHeaders: &static.ForwardedHeaders{},
+		HTTP2:            &static.HTTP2Config{},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	router, err := tcprouter.NewRouter(nil)
+	require.NoError(t, err)
+
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+	})
+	router.SetHTTPHandler(fakeTLSHandler("default", snicheck.New("router-name", "tls-strict@file", next)))
+
+	conn, err := startEntrypoint(t, entryPoint, router)
+	require.NoError(t, err)
+
+	http.DefaultClient.Transport = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return conn, nil
+		},
+	}
+
+	resp, err := http.Get("http://" + entryPoint.listener.Addr().String())
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusMisdirectedRequest, resp.StatusCode)
+	assert.True(t, resp.Close, "server must mark the response as closing the connection")
+	err = resp.Body.Close()
+	require.NoError(t, err)
+
+	// The connection was closed by the server, so writing to it (and reading a response
+	// back) must fail: there is no live peer left, rather than a client merely choosing
+	// to honor "Connection: close" on its next request.
+	_, err = conn.Write([]byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"))
+	if err == nil {
+		buf := make([]byte, 1)
+		_, err = conn.Read(buf)
+	}
+	require.Error(t, err)
+}
+
+// TestSNICheckClosesStaleConnectionHTTP2 mirrors TestSNICheckClosesStaleConnectionHTTP1
+// for HTTP/2: it asserts that a stale TLS options name causes the server to tear down
+// the connection via a GOAWAY frame, matching the mechanism TestKeepAliveH2c already
+// relies on for the keep-alive middleware.
+func TestSNICheckClosesStaleConnectionHTTP2(t *testing.T) {
+	epConfig := &static.EntryPointsTransport{}
+	epConfig.SetDefaults()
+
+	entryPoint, err := NewTCPEntryPoint(t.Context(), "", &static.EntryPoint{
+		Address:          ":0",
+		Transport:        epConfig,
+		ForwardedHeaders: &static.ForwardedHeaders{},
+		HTTP2:            &static.HTTP2Config{},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	router, err := tcprouter.NewRouter(nil)
+	require.NoError(t, err)
+
+	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+	})
+	router.SetHTTPHandler(fakeTLSHandler("default", snicheck.New("router-name", "tls-strict@file", next)))
+
+	conn, err := startEntrypoint(t, entryPoint, router)
+	require.NoError(t, err)
+
+	http2Transport := &http2.Transport{
+		AllowHTTP: true,
+		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+			return conn, nil
+		},
+	}
+
+	client := &http.Client{Transport: http2Transport}
+
+	resp, err := client.Get("http://" + entryPoint.listener.Addr().String())
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusMisdirectedRequest, resp.StatusCode)
+	err = resp.Body.Close()
+	require.NoError(t, err)
+
+	// As in TestKeepAliveH2c, a GOAWAY-closed HTTP/2 connection surfaces as this specific
+	// "connection closed" error on the next request over the same (now dead) transport.
+	_, err = client.Get("http://" + entryPoint.listener.Addr().String())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "use of closed network connection")
+}
+
 func Test_denyOpaque(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -530,6 +698,146 @@ func Test_denyFragment(t *testing.T) {
 			handler.ServeHTTP(res, req)
 
 			assert.Equal(t, test.wantStatus, res.Code)
+		})
+	}
+}
+
+func TestRemoveDotSegments(t *testing.T) {
+	tests := []struct {
+		desc     string
+		input    string
+		expected string
+	}{
+		// RFC 3986 Section 5.4 reference examples (using base path components).
+		// These are the exact test vectors from the RFC.
+		{desc: "RFC 5.4: normal /a/b/c/./../../g", input: "/a/b/c/./../../g", expected: "/a/g"},
+		{desc: "RFC 5.4: mid/content=5/../6", input: "mid/content=5/../6", expected: "mid/6"},
+		{desc: "RFC 5.4: /../../../g", input: "/../../../g", expected: "/g"},
+		{desc: "RFC 5.4: /a/b/../../../../g", input: "/a/b/../../../../g", expected: "/g"},
+		{desc: "RFC 5.4: /./g", input: "/./g", expected: "/g"},
+		{desc: "RFC 5.4: /../g", input: "/../g", expected: "/g"},
+		{desc: "RFC 5.4: /a/b/../../../g", input: "/a/b/../../../g", expected: "/g"},
+		{desc: "RFC 5.4: /a/b/c/../d", input: "/a/b/c/../d", expected: "/a/b/d"},
+		{desc: "RFC 5.4: /a/b/c/../../d", input: "/a/b/c/../../d", expected: "/a/d"},
+		{desc: "RFC 5.4: /a/b/c/../../../d", input: "/a/b/c/../../../d", expected: "/d"},
+		{desc: "RFC 5.4: /a/b/c/../../../../d", input: "/a/b/c/../../../../d", expected: "/d"},
+		{desc: "RFC 5.4: /./a/b", input: "/./a/b", expected: "/a/b"},
+
+		// Empty segment preservation (the core feature).
+		{desc: "double slash preserved", input: "/a//b", expected: "/a//b"},
+		{desc: "triple slash preserved", input: "/a///b", expected: "/a///b"},
+		{desc: "leading double slash preserved", input: "//a/b", expected: "//a/b"},
+		{desc: "trailing double slash preserved", input: "/a/b//", expected: "/a/b//"},
+
+		// Mixed dot-segments and empty segments.
+		{desc: "dotdot across empty segment", input: "/a/..//b", expected: "//b"},
+		{desc: "dot in empty segment context", input: "//a/./b", expected: "//a/b"},
+		{desc: "complex mixed", input: "/a/b/../..///c", expected: "///c"},
+		{desc: "dotdot with trailing empty", input: "/a/../b//", expected: "/b//"},
+
+		// Root escaping.
+		{desc: "root escape single", input: "/../b", expected: "/b"},
+		{desc: "root escape double", input: "/../../b", expected: "/b"},
+
+		// Trailing slash handling.
+		{desc: "trailing slash after dotdot", input: "/a/b/../", expected: "/a/"},
+		{desc: "trailing slash after dot", input: "/a/b/./", expected: "/a/b/"},
+
+		// Edge cases.
+		{desc: "empty string", input: "", expected: ""},
+		{desc: "single slash", input: "/", expected: "/"},
+		{desc: "dot only", input: "/.", expected: "/"},
+		{desc: "dotdot only", input: "/..", expected: "/"},
+		{desc: "star request-target", input: "*", expected: "*"},
+		{desc: "bare dot", input: ".", expected: ""},
+		{desc: "bare dotdot", input: "..", expected: ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			result := removeDotSegments(test.input)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
+func TestSanitizeDotSegments(t *testing.T) {
+	tests := []struct {
+		desc                string
+		rawPath             string
+		expectedPath        string
+		expectedEscapedPath string
+	}{
+		{
+			desc:                "basic dot-segment removal",
+			rawPath:             "/a/../b",
+			expectedPath:        "/b",
+			expectedEscapedPath: "/b",
+		},
+		{
+			desc:                "preserves empty segments",
+			rawPath:             "/a//b",
+			expectedPath:        "/a//b",
+			expectedEscapedPath: "/a//b",
+		},
+		{
+			desc:                "preserves encoded characters",
+			rawPath:             "/a/../b/foo%20bar",
+			expectedPath:        "/b/foo bar",
+			expectedEscapedPath: "/b/foo%20bar",
+		},
+		{
+			desc:                "encoded slash is not a segment separator",
+			rawPath:             "/a%2Fb/../c",
+			expectedPath:        "/c",
+			expectedEscapedPath: "/c",
+		},
+		{
+			desc:                "encoded slash is preserved",
+			rawPath:             "/a/./b%2Fc//d",
+			expectedPath:        "/a/b/c//d",
+			expectedEscapedPath: "/a/b%2Fc//d",
+		},
+		{
+			desc:                "dot-dot segment with path parameter",
+			rawPath:             "/public/..;/admin",
+			expectedPath:        "/admin",
+			expectedEscapedPath: "/admin",
+		},
+		{
+			desc:                "dot segment with path parameter",
+			rawPath:             "/public/.;foo/admin",
+			expectedPath:        "/public/admin",
+			expectedEscapedPath: "/public/admin",
+		},
+		{
+			desc:                "empty segment with path parameter",
+			rawPath:             "/public/;foo/admin",
+			expectedPath:        "/public//admin",
+			expectedEscapedPath: "/public//admin",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			var gotPath, gotEscapedPath, gotRequestURI string
+			handler := sanitizeDotSegments(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				gotEscapedPath = r.URL.EscapedPath()
+				gotRequestURI = r.RequestURI
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "http://foo"+test.rawPath+"?q=1", http.NoBody)
+
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+
+			assert.Equal(t, test.expectedPath, gotPath)
+			assert.Equal(t, test.expectedEscapedPath, gotEscapedPath)
+			assert.Equal(t, test.expectedEscapedPath+"?q=1", gotRequestURI)
 		})
 	}
 }
@@ -960,10 +1268,188 @@ func TestPathOperations(t *testing.T) {
 	}
 }
 
+// TestPathOperationsMergeSlashesDisabled tests the behavior when MergeSlashes is disabled
+// but SanitizePath is enabled — dot-segments should be resolved while empty path segments are preserved.
+func TestPathOperationsMergeSlashesDisabled(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = ln.Close()
+	})
+
+	configuration := &static.EntryPoint{}
+	configuration.SetDefaults()
+	configuration.HTTP.MergeSlashes = new(false)
+
+	configuration.HTTP.EncodedCharacters = &static.EncodedCharacters{
+		AllowEncodedSlash:   true,
+		AllowEncodedPercent: true,
+	}
+
+	server, err := newHTTPServer(t.Context(), ln, configuration, false, requestdecorator.New(nil))
+	require.NoError(t, err)
+
+	server.Switcher.UpdateHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Path", r.URL.Path)
+		w.Header().Set("RawPath", r.URL.EscapedPath())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	go func() {
+		_ = server.Server.Serve(ln)
+	}()
+
+	client := http.Client{
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: 1 * time.Second,
+		},
+	}
+
+	tests := []struct {
+		desc           string
+		rawPath        string
+		expectedPath   string
+		expectedRaw    string
+		expectedStatus int
+	}{
+		{
+			desc:           "double slashes preserved",
+			rawPath:        "/a//b",
+			expectedPath:   "/a//b",
+			expectedRaw:    "/a//b",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			desc:           "dot-segments still resolved",
+			rawPath:        "/a/../b",
+			expectedPath:   "/b",
+			expectedRaw:    "/b",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			desc:           "dot-segments resolved with double slashes preserved",
+			rawPath:        "/a/..//b",
+			expectedPath:   "//b",
+			expectedRaw:    "//b",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			desc:           "traversal attempt still blocked",
+			rawPath:        "/../../secret",
+			expectedPath:   "/secret",
+			expectedRaw:    "/secret",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			desc:           "encoded traversal still resolved",
+			rawPath:        "/a/%2E%2E/%2E%2E/b/",
+			expectedPath:   "/b/",
+			expectedRaw:    "/b/",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			desc:           "triple slashes preserved with normalization",
+			rawPath:        "/a/../b/%41%42%43///",
+			expectedPath:   "/b/ABC///",
+			expectedRaw:    "/b/ABC///",
+			expectedStatus: http.StatusOK,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			req, err := http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+test.rawPath, http.NoBody)
+			require.NoError(t, err)
+
+			res, err := client.Do(req)
+			require.NoError(t, err)
+
+			assert.Equal(t, test.expectedStatus, res.StatusCode)
+			assert.Equal(t, test.expectedPath, res.Header.Get("Path"))
+			assert.Equal(t, test.expectedRaw, res.Header.Get("RawPath"))
+		})
+	}
+}
+
+// TestSanitizePathConfigMatrix tests all 4 combinations of SanitizePath x MergeSlashes.
+func TestSanitizePathConfigMatrix(t *testing.T) {
+	tests := []struct {
+		desc         string
+		sanitize     bool
+		merge        bool
+		inputPath    string
+		expectedPath string
+	}{
+		// SanitizePath=true, MergeSlashes=true (default) — full sanitization.
+		{desc: "both true: dotdot resolved", sanitize: true, merge: true, inputPath: "/a/../b", expectedPath: "/b"},
+		{desc: "both true: slashes merged", sanitize: true, merge: true, inputPath: "/a//b", expectedPath: "/a/b"},
+
+		// SanitizePath=true, MergeSlashes=false — dot-segments only.
+		{desc: "sanitize only: dotdot resolved", sanitize: true, merge: false, inputPath: "/a/../b", expectedPath: "/b"},
+		{desc: "sanitize only: slashes preserved", sanitize: true, merge: false, inputPath: "/a//b", expectedPath: "/a//b"},
+
+		// SanitizePath=false, MergeSlashes=true — no processing (MergeSlashes gated behind SanitizePath).
+		{desc: "sanitize false merge true: no change dotdot", sanitize: false, merge: true, inputPath: "/a/../b", expectedPath: "/a/../b"},
+		{desc: "sanitize false merge true: no change slashes", sanitize: false, merge: true, inputPath: "/a//b", expectedPath: "/a//b"},
+
+		// SanitizePath=false, MergeSlashes=false — no processing.
+		{desc: "both false: no change dotdot", sanitize: false, merge: false, inputPath: "/a/../b", expectedPath: "/a/../b"},
+		{desc: "both false: no change slashes", sanitize: false, merge: false, inputPath: "/a//b", expectedPath: "/a//b"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_ = ln.Close()
+			})
+
+			configuration := &static.EntryPoint{}
+			configuration.SetDefaults()
+			configuration.HTTP.SanitizePath = new(test.sanitize)
+			configuration.HTTP.MergeSlashes = new(test.merge)
+
+			server, err := newHTTPServer(t.Context(), ln, configuration, false, requestdecorator.New(nil))
+			require.NoError(t, err)
+
+			server.Switcher.UpdateHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Path", r.URL.Path)
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			go func() {
+				_ = server.Server.Serve(ln)
+			}()
+
+			client := http.Client{
+				Transport: &http.Transport{
+					ResponseHeaderTimeout: 1 * time.Second,
+				},
+			}
+
+			req, err := http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+test.inputPath, http.NoBody)
+			require.NoError(t, err)
+
+			res, err := client.Do(req)
+			require.NoError(t, err)
+
+			assert.Equal(t, http.StatusOK, res.StatusCode)
+			assert.Equal(t, test.expectedPath, res.Header.Get("Path"))
+		})
+	}
+}
+
 func TestHTTP2Config(t *testing.T) {
 	expectedMaxConcurrentStreams := 42
 	expectedEncoderTableSize := 128
 	expectedDecoderTableSize := 256
+	expectedReceiveBufferPerConnection := 33554432
+	expectedReceiveBufferPerStream := 16777216
 
 	// Create a listener for the server.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -978,6 +1464,8 @@ func TestHTTP2Config(t *testing.T) {
 	configuration.HTTP2.MaxConcurrentStreams = int32(expectedMaxConcurrentStreams)
 	configuration.HTTP2.MaxEncoderHeaderTableSize = int32(expectedEncoderTableSize)
 	configuration.HTTP2.MaxDecoderHeaderTableSize = int32(expectedDecoderTableSize)
+	configuration.HTTP2.MaxReceiveBufferPerConnection = int32(expectedReceiveBufferPerConnection)
+	configuration.HTTP2.MaxReceiveBufferPerStream = int32(expectedReceiveBufferPerStream)
 
 	// Create the HTTP server using newHTTPServer.
 	server, err := newHTTPServer(t.Context(), ln, configuration, false, requestdecorator.New(nil))
@@ -989,6 +1477,62 @@ func TestHTTP2Config(t *testing.T) {
 	assert.Equal(t, expectedMaxConcurrentStreams, httpServer.HTTP2.MaxConcurrentStreams)
 	assert.Equal(t, expectedEncoderTableSize, httpServer.HTTP2.MaxEncoderHeaderTableSize)
 	assert.Equal(t, expectedDecoderTableSize, httpServer.HTTP2.MaxDecoderHeaderTableSize)
+	assert.Equal(t, expectedReceiveBufferPerConnection, httpServer.HTTP2.MaxReceiveBufferPerConnection)
+	assert.Equal(t, expectedReceiveBufferPerStream, httpServer.HTTP2.MaxReceiveBufferPerStream)
+}
+
+func TestHTTP2ReceiveBufferValidation(t *testing.T) {
+	testCases := []struct {
+		desc          string
+		perConnection int32
+		perStream     int32
+		expectedError string
+	}{
+		{
+			desc: "defaults",
+		},
+		{
+			desc:          "per connection minimum",
+			perConnection: 65535,
+		},
+		{
+			desc:          "per connection below minimum",
+			perConnection: 65534,
+			expectedError: "max receive buffer per connection value must be zero or at least 65535 bytes",
+		},
+		{
+			desc:          "per connection negative",
+			perConnection: -1,
+			expectedError: "max receive buffer per connection value must be zero or at least 65535 bytes",
+		},
+		{
+			desc:          "per stream negative",
+			perStream:     -1,
+			expectedError: "max receive buffer per stream value must be greater than or equal to zero",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = ln.Close() })
+
+			configuration := &static.EntryPoint{}
+			configuration.SetDefaults()
+			configuration.HTTP2.MaxReceiveBufferPerConnection = test.perConnection
+			configuration.HTTP2.MaxReceiveBufferPerStream = test.perStream
+
+			_, err = newHTTPServer(t.Context(), ln, configuration, false, requestdecorator.New(nil))
+			if test.expectedError != "" {
+				require.EqualError(t, err, test.expectedError)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
 
 // TestRequestTargetForms tests the handling of the request target forms through the whole entrypoint handler chain,

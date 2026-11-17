@@ -24,6 +24,10 @@ In production, it should be at least secured by authentication and authorization
     It's recommended to NOT publicly exposing the API's port, keeping it restricted to internal networks
     (as in the [principle of least privilege](https://en.wikipedia.org/wiki/Principle_of_least_privilege), applied to networks).
 
+Middleware parameters, including plugin configuration such as credentials resolved from secrets, can contain sensitive data.
+By default, the `/api/http/middlewares`, `/api/tcp/middlewares` and `/api/rawdata` endpoints (and the dashboard) redact this information: plugin parameter names are kept but their values are hidden, and credentials such as Basic Auth users are masked.
+Set [`api.hideMiddlewareParameters`](#opt-api-hideMiddlewareParameters) to `false` to expose the raw values instead.
+
 ## Configuration Example
 
 Enable the dashboard:
@@ -174,6 +178,7 @@ enabling the dashboard [here](https://github.com/traefik/traefik-helm-chart/blob
 | <a id="opt-api-dashboard" href="#opt-api-dashboard" title="#opt-api-dashboard">`api.dashboard`</a> | Enable dashboard. | true      | No      |
 | <a id="opt-api-debug" href="#opt-api-debug" title="#opt-api-debug">`api.debug`</a> | Enable additional endpoints for debugging and profiling. | false      | No      |
 | <a id="opt-api-disableDashboardAd" href="#opt-api-disableDashboardAd" title="#opt-api-disableDashboardAd">`api.disableDashboardAd`</a> | Disable the advertisement from the dashboard. | false      | No      |
+| <a id="opt-api-hideMiddlewareParameters" href="#opt-api-hideMiddlewareParameters" title="#opt-api-hideMiddlewareParameters">`api.hideMiddlewareParameters`</a> | Redact the sensitive middleware parameters (plugin configuration values and credentials) in the API and the dashboard. | true      | No      |
 | <a id="opt-api-insecure" href="#opt-api-insecure" title="#opt-api-insecure">`api.insecure`</a> | Enable the API and the dashboard on the entryPoint named traefik.<br/>Please note that this mode is incompatible with the custom API [base path option](#opt-api-basePath).| false      | No      |
 
 ## Endpoints

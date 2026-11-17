@@ -54,6 +54,16 @@ To learn more about how to add a new plugin to a Traefik instance, please refer 
 | <a id="opt-settings-mounts" href="#opt-settings-mounts" title="#opt-settings-mounts">`settings.mounts`</a> | Directory to mount to the wasm guest. | []string | No |
 | <a id="opt-settings-useUnsafe" href="#opt-settings-useUnsafe" title="#opt-settings-useUnsafe">`settings.useUnsafe`</a> | Allow the plugin to use unsafe and syscall packages. | bool | No |
 
+### Registry Unavailability
+
+When the plugin registry is unreachable or fails (network error, `5xx` or `429` response) at startup,
+Traefik reuses the plugin archive downloaded during a previous start, if one is available in the plugins storage.
+
+The cached archive is only reused when its integrity can be verified:
+its hash must match the configured `hash` option, or, when `hash` is not set,
+the hash recorded the last time the registry validated the archive.
+Any other answer of the registry (for example, an unknown or revoked version) keeps the installation failing.
+
 ## Local Plugins
 
 Local plugins allow you to use plugins from a local directory, without publishing them to the Traefik plugin catalog.
@@ -85,6 +95,33 @@ experimental:
 | <a id="opt-settings-envs-2" href="#opt-settings-envs-2" title="#opt-settings-envs-2">`settings.envs`</a> | Environment variables to forward to the wasm guest. | []string | No |
 | <a id="opt-settings-mounts-2" href="#opt-settings-mounts-2" title="#opt-settings-mounts-2">`settings.mounts`</a> | Directory to mount to the wasm guest. | []string | No |
 | <a id="opt-settings-useUnsafe-2" href="#opt-settings-useUnsafe-2" title="#opt-settings-useUnsafe-2">`settings.useUnsafe`</a> | Allow the plugin to use unsafe and syscall packages. | bool | No |
+
+
+## Plugin Logging
+
+### Yaegi Middleware Plugins
+
+Yaegi middleware plugins can import `github.com/traefik/traefik/v3/pkg/middlewares` and call `middlewares.GetLogger(ctx, name, "example")` in their `New` function.
+Use the context and middleware name passed to `New`, and replace `"example"` with your plugin's middleware type.
+The returned logger includes `middlewareName` and `middlewareType` fields and writes through Traefik's configured log output and format.
+
+Use `logger.Debug()`, `logger.Info()`, `logger.Warn()`, or `logger.Error()` to select a level, then add fields and call `Msg`:
+
+```text
+logger := middlewares.GetLogger(ctx, name, "example")
+logger.Info().Str("operation", "initialize").Msg("Plugin ready")
+```
+
+Capture the logger in your handler closure to log requests.
+The configured Traefik log level filters plugin messages.
+Existing standard output and standard error capture keeps its debug and error levels respectively.
+
+### Wasm Middleware Plugins
+
+Wasm plugins use the HTTP-Wasm host `log` function to select a log level and send a message.
+Traefik sends those messages through the middleware logger with the configured log output and format.
+The HTTP-Wasm log function accepts a message string; it does not provide separate structured fields.
+Wasm plugins cannot import the Yaegi middleware logger bridge.
 
 ## Runtime Version
 

@@ -93,8 +93,18 @@ func runCmd(staticConfiguration *static.Configuration) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if err := setupLogger(ctx, staticConfiguration); err != nil {
+	rotateTraefikLog, logCloser, err := setupLogger(ctx, staticConfiguration)
+	if err != nil {
 		return fmt.Errorf("setting up logger: %w", err)
+	}
+
+	if logCloser != nil {
+		// Deferred before svr.Close, so logs emitted during the server shutdown still get exported.
+		defer func() {
+			if err := logCloser.Close(); err != nil {
+				log.Error().Err(err).Msg("Unable to shutdown OpenTelemetry logger provider")
+			}
+		}()
 	}
 
 	http.DefaultTransport.(*http.Transport).Proxy = http.ProxyFromEnvironment
@@ -130,7 +140,7 @@ func runCmd(staticConfiguration *static.Configuration) error {
 
 	stats(staticConfiguration)
 
-	svr, err := setupServer(staticConfiguration)
+	svr, err := setupServer(staticConfiguration, rotateTraefikLog)
 	if err != nil {
 		return err
 	}
@@ -178,7 +188,7 @@ func runCmd(staticConfiguration *static.Configuration) error {
 	return nil
 }
 
-func setupServer(staticConfiguration *static.Configuration) (*server.Server, error) {
+func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog func() error) (*server.Server, error) {
 	providerAggregator := aggregator.NewProviderAggregator(*staticConfiguration.Providers)
 
 	ctx := context.Background()
@@ -222,7 +232,7 @@ func setupServer(staticConfiguration *static.Configuration) (*server.Server, err
 	metricsRegistry := metrics.NewMultiRegistry(metricRegistries)
 	accessLog := setupAccessLog(ctx, staticConfiguration.AccessLog)
 	tracer, tracerCloser := setupTracing(ctx, staticConfiguration.Tracing)
-	observabilityMgr := middleware.NewObservabilityMgr(*staticConfiguration, metricsRegistry, semConvMetricRegistry, accessLog, tracer, tracerCloser)
+	observabilityMgr := middleware.NewObservabilityMgr(*staticConfiguration, metricsRegistry, semConvMetricRegistry, accessLog, tracer, tracerCloser, rotateTraefikLog)
 
 	// Entrypoints
 
@@ -335,6 +345,8 @@ func setupServer(staticConfiguration *static.Configuration) (*server.Server, err
 		tlsManager.UpdateConfigs(ctx, conf.TLS.Stores, conf.TLS.Options, conf.TLS.Certificates)
 
 		gauge := metricsRegistry.TLSCertsNotAfterTimestampGauge()
+		// Certificates removed from the configuration would otherwise keep being reported.
+		metrics.ResetTLSCertificateMetrics()
 		for _, certificate := range tlsManager.GetServerCertificates() {
 			appendCertMetric(gauge, certificate)
 		}

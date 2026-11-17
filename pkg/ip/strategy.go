@@ -69,8 +69,9 @@ type PoolStrategy struct {
 }
 
 // GetIP checks the list of Forwarded IPs (most recent first) against the
-// Checker pool of IPs. It returns the first IP that is not in the pool, or the
-// empty string otherwise.
+// Checker pool of IPs. It returns the first IP that is not in the pool.
+// When every forwarded IP is in the pool, or there is none, it returns the
+// remote address if it is not in the pool, or the empty string otherwise.
 func (s *PoolStrategy) GetIP(req *http.Request) string {
 	if s.Checker == nil {
 		return ""
@@ -89,7 +90,44 @@ func (s *PoolStrategy) GetIP(req *http.Request) string {
 		}
 	}
 
+	// The remote address is the hop closest to Traefik: when it is not in the pool, it is the client,
+	// e.g. a direct connection without X-Forwarded-For.
+	// When it is in the pool (a trusted proxy), it must never be used as the client IP,
+	// otherwise every request relayed by that proxy without a usable X-Forwarded-For would be attributed to it.
+	remoteIP := (&RemoteAddrStrategy{}).GetIP(req)
+	if contain, _ := s.Checker.Contains(remoteIP); !contain {
+		return remoteIP
+	}
+
 	return ""
+}
+
+// MaskIP truncates ip to the prefix length configured for its address family.
+// It returns ip unchanged on a parse failure or when the matching subnet is <= 0.
+func MaskIP(ip string, ipv4Subnet, ipv6Subnet int) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+
+	// Normalize 4-in-6 addresses so the family detection below is accurate.
+	addr = addr.Unmap()
+
+	subnet := ipv4Subnet
+	if addr.Is6() {
+		subnet = ipv6Subnet
+	}
+
+	if subnet <= 0 {
+		return ip
+	}
+
+	prefix, err := addr.Prefix(subnet)
+	if err != nil {
+		return ip
+	}
+
+	return prefix.Addr().String()
 }
 
 // getIPv6SubnetIP returns the IPv6 subnet IP.

@@ -5,8 +5,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/traefik/traefik/v3/pkg/observability/types"
 	"github.com/traefik/traefik/v3/pkg/ping"
 	"github.com/traefik/traefik/v3/pkg/provider/acme"
+	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/gateway"
 	ingressnginx "github.com/traefik/traefik/v3/pkg/provider/kubernetes/ingress-nginx"
 )
 
@@ -223,6 +225,7 @@ func TestConfiguration_SetEffectiveConfiguration(t *testing.T) {
 					ForwardedHeaders: &ForwardedHeaders{},
 					HTTP: HTTPConfig{
 						SanitizePath:        new(true),
+						MergeSlashes:        new(true),
 						MaxHeaderBytes:      1048576,
 						MaxHeaderValueCount: 500,
 					},
@@ -272,6 +275,7 @@ func TestConfiguration_SetEffectiveConfiguration(t *testing.T) {
 					ForwardedHeaders: &ForwardedHeaders{},
 					HTTP: HTTPConfig{
 						SanitizePath:        new(true),
+						MergeSlashes:        new(true),
 						MaxHeaderBytes:      1048576,
 						MaxHeaderValueCount: 500,
 					},
@@ -332,6 +336,7 @@ func TestConfiguration_SetEffectiveConfiguration(t *testing.T) {
 					ForwardedHeaders: &ForwardedHeaders{},
 					HTTP: HTTPConfig{
 						SanitizePath:        new(true),
+						MergeSlashes:        new(true),
 						MaxHeaderBytes:      1048576,
 						MaxHeaderValueCount: 500,
 					},
@@ -396,6 +401,7 @@ func TestConfiguration_SetEffectiveConfiguration(t *testing.T) {
 					ForwardedHeaders: &ForwardedHeaders{},
 					HTTP: HTTPConfig{
 						SanitizePath:        new(true),
+						MergeSlashes:        new(true),
 						MaxHeaderBytes:      1048576,
 						MaxHeaderValueCount: 500,
 					},
@@ -423,6 +429,32 @@ func TestConfiguration_SetEffectiveConfiguration(t *testing.T) {
 							},
 						},
 					},
+				},
+			},
+		},
+		{
+			desc: "Gateway API provider, entrypoints protocol",
+			conf: &Configuration{
+				Providers: &Providers{
+					KubernetesGateway: &gateway.Provider{},
+				},
+				EntryPoints: EntryPoints{
+					"tcp": {Address: ":9000"},
+					"udp": {Address: ":9000/udp"},
+				},
+			},
+			expected: &Configuration{
+				Providers: &Providers{
+					KubernetesGateway: &gateway.Provider{
+						EntryPoints: map[string]gateway.Entrypoint{
+							"tcp": {Address: ":9000", Protocol: "tcp"},
+							"udp": {Address: ":9000", Protocol: "udp"},
+						},
+					},
+				},
+				EntryPoints: EntryPoints{
+					"tcp": {Address: ":9000"},
+					"udp": {Address: ":9000/udp"},
 				},
 			},
 		},
@@ -508,6 +540,7 @@ func TestConfiguration_SetEffectiveConfiguration(t *testing.T) {
 						ForwardedHeaders: &ForwardedHeaders{},
 						HTTP: HTTPConfig{
 							SanitizePath:        new(true),
+							MergeSlashes:        new(true),
 							MaxHeaderBytes:      1048576,
 							MaxHeaderValueCount: 500,
 						},
@@ -849,6 +882,54 @@ func TestValidateConfiguration_aliasHeadersStrategy(t *testing.T) {
 			}
 
 			err := cfg.ValidateConfiguration()
+			if test.expectError {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateConfiguration_AccessLogSampleRate(t *testing.T) {
+	testCases := []struct {
+		desc        string
+		config      *Configuration
+		expectError bool
+	}{
+		{
+			desc:        "sample rate below zero",
+			config:      &Configuration{AccessLog: &types.AccessLog{SampleRate: -0.1}},
+			expectError: true,
+		},
+		{
+			desc:        "sample rate above one",
+			config:      &Configuration{AccessLog: &types.AccessLog{SampleRate: 1.1}},
+			expectError: true,
+		},
+		{
+			desc:        "sample rate at zero",
+			config:      &Configuration{AccessLog: &types.AccessLog{SampleRate: 0}},
+			expectError: false,
+		},
+		{
+			desc:        "sample rate at one",
+			config:      &Configuration{AccessLog: &types.AccessLog{SampleRate: 1}},
+			expectError: false,
+		},
+		{
+			desc:        "sample rate within range",
+			config:      &Configuration{AccessLog: &types.AccessLog{SampleRate: 0.5}},
+			expectError: false,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			err := test.config.ValidateConfiguration()
 			if test.expectError {
 				assert.Error(t, err)
 				return

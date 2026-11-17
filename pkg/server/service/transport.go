@@ -252,48 +252,47 @@ type connWithTimeouts struct {
 
 func (c connWithTimeouts) Read(b []byte) (n int, err error) {
 	if c.readTimeout > 0 {
-		// Reset deadline before after each successive read.
 		_ = c.Conn.SetReadDeadline(time.Now().Add(c.readTimeout))
 		defer c.Conn.SetReadDeadline(time.Time{}) //nolint:errcheck
 	}
 
-	n, err = c.Conn.Read(b)
-	if err != nil {
-		return n, err
-	}
-
-	return n, nil
+	return c.Conn.Read(b)
 }
 
 func (c connWithTimeouts) Write(b []byte) (n int, err error) {
 	if c.writeTimeout > 0 {
-		// Reset deadline before after each successive write.
 		_ = c.Conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
 		defer c.Conn.SetWriteDeadline(time.Time{}) //nolint:errcheck
 	}
 
-	n, err = c.Conn.Write(b)
-	if err != nil {
-		return n, err
+	// While a connection waits in the idle pool, the transport read loop is already blocked in
+	// Read, so the read deadline is anchored to the moment the connection went idle rather than
+	// to the request being sent now. Re-arming it here gives the response the full readTimeout,
+	// instead of only what is left of the idle period, which would otherwise time out a request
+	// the backend goes on to serve normally.
+	if c.readTimeout > 0 {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.readTimeout))
 	}
 
-	return n, nil
+	return c.Conn.Write(b)
 }
 
 func customDialContext(d *net.Dialer, cfg *dynamic.ForwardingTimeouts) func(ctx context.Context, network string, address string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		conn, err := d.DialContext(ctx, network, address)
-
-		if cfg.ReadTimeout <= 0 && cfg.WriteTimeout <= 0 {
-			return conn, err
+		if err != nil {
+			return nil, err
 		}
 
-		custom := &connWithTimeouts{
+		if cfg.ReadTimeout <= 0 && cfg.WriteTimeout <= 0 {
+			return conn, nil
+		}
+
+		return &connWithTimeouts{
 			Conn:         conn,
 			readTimeout:  time.Duration(cfg.ReadTimeout),
 			writeTimeout: time.Duration(cfg.WriteTimeout),
-		}
-		return custom, err
+		}, nil
 	}
 }
 
@@ -325,6 +324,7 @@ func (t *TransportManager) createRoundTripper(cfg *dynamic.ServersTransport, tls
 		ReadBufferSize:        64 * 1024,
 		WriteBufferSize:       64 * 1024,
 		TLSClientConfig:       tlsConfig,
+		DisableCompression:    cfg.DisableCompression,
 	}
 
 	if cfg.ForwardingTimeouts != nil {
@@ -369,7 +369,14 @@ func createRootCACertPool(rootCAs []types.FileOrContent) *x509.CertPool {
 			log.Error().Err(err).Msg("Error while read RootCAs")
 			continue
 		}
-		roots.AppendCertsFromPEM(certContent)
+		if !roots.AppendCertsFromPEM(certContent) {
+			// Without this log, an invalid root CA only shows up later as an unknown authority error on every request.
+			if cert.IsPath() {
+				log.Error().Str("file", cert.String()).Msg("No valid certificate found in RootCAs file")
+			} else {
+				log.Error().Msg("No valid certificate found in RootCAs content")
+			}
+		}
 	}
 
 	return roots

@@ -98,6 +98,7 @@ entryPoints:
         allowEncodedHash: true
       encodeQuerySemicolons: true
       sanitizePath: true
+      mergeSlashes: true
       maxHeaderBytes: 42
       maxHeaderValueCount: 42
       aliasHeadersStrategy: foobar
@@ -106,6 +107,7 @@ entryPoints:
       maxConcurrentStreams: 42
     http3:
       advertisedPort: 42
+      initialPacketSize: 1200
     udp:
       timeout: 42s
     observability:
@@ -251,6 +253,7 @@ providers:
     stale: true
     cache: true
     exposedByDefault: true
+    allowEmptyServices: true
     defaultRule: foobar
     connectAware: true
     connectByDefault: true
@@ -393,6 +396,9 @@ metrics:
     headerLabels:
       name0: foobar
       name1: foobar
+    responseHeaderLabels:
+      name0: foobar
+      name1: foobar
   datadog:
     address: foobar
     pushInterval: 42s
@@ -494,6 +500,10 @@ log:
 accessLog:
   filePath: foobar
   format: foobar
+  maxSize: 42
+  maxAge: 42
+  maxBackups: 42
+  compress: true
   filters:
     statusCodes:
       - foobar

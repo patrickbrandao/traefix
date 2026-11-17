@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/mitchellh/hashstructure"
 	"github.com/rs/zerolog/log"
 	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
@@ -353,7 +355,20 @@ func (c configBuilder) buildTraefikService(ctx context.Context, tService *traefi
 func (c configBuilder) buildServicesLB(ctx context.Context, namespace string, tService traefikv1alpha1.TraefikServiceSpec, id string, parentKey []string, conf map[string]*dynamic.Service) error {
 	var wrrServices []dynamic.WRRService
 
+	// The CRDs have no field to explicitly enable HealthCheck propagation on a Weighted service
+	// (unlike the file provider, which exposes weighted.healthCheck).
+	// Because HealthCheck is only allowed on Kubernetes Service children of type ExternalName
+	// (enforced in loadServers), and because a child without its own HealthCheck configured cannot
+	// register as a status updater for its parent (it would make the config build fail), it is only
+	// safe, and only useful, to automatically enable HealthCheck propagation on this Weighted
+	// service when every child is a Kubernetes Service with HealthCheck configured.
+	healthCheckEnabled := len(tService.Weighted.Services) > 0
+
 	for si, service := range tService.Weighted.Services {
+		if (service.Kind != "" && service.Kind != "Service") || service.HealthCheck == nil {
+			healthCheckEnabled = false
+		}
+
 		serviceKey := makeSafeKey(append(slices.Clone(parentKey), strconv.Itoa(si), namespaceOrParentNamespace(service.Namespace, namespace), service.Name, service.Port.String())...)
 
 		fullName, k8sService, err := c.nameAndService(ctx, namespace, service.LoadBalancerSpec, serviceKey)
@@ -395,11 +410,16 @@ func (c configBuilder) buildServicesLB(ctx context.Context, namespace string, tS
 		}
 	}
 
+	weighted := &dynamic.WeightedRoundRobin{
+		Services: wrrServices,
+		Sticky:   sticky,
+	}
+	if healthCheckEnabled {
+		weighted.HealthCheck = &dynamic.HealthCheck{}
+	}
+
 	addToConfig(log.Ctx(ctx), "service", id, conf, &dynamic.Service{
-		Weighted: &dynamic.WeightedRoundRobin{
-			Services: wrrServices,
-			Sticky:   sticky,
-		},
+		Weighted: weighted,
 	})
 	return nil
 }
@@ -686,6 +706,11 @@ func (c configBuilder) loadServers(svc traefikv1alpha1.LoadBalancerSpec) ([]dyna
 			return nil, fmt.Errorf("nodes not found for NodePort service %s/%s", svc.Namespace, svc.Name)
 		}
 
+		nodes, err = nodePortLBNodes(c.client, service, nodes)
+		if err != nil {
+			return nil, err
+		}
+
 		protocol, err := parseServiceProtocol(svc.Scheme, svcPort.Name, svcPort.Port)
 		if err != nil {
 			return nil, err
@@ -891,20 +916,23 @@ func splitSvcNameProvider(name string) (string, string) {
 	return svc, pvd
 }
 
-// fullServiceName returns the identity-based name for a Kubernetes Service or TraefikService reference:
-// the same reference always produces the same name, regardless of the parent declaring it.
+// fullServiceName returns the name for a Kubernetes Service or TraefikService reference.
+// Legacy names are identity-based (namespace, name, port), with a hash of the
+// reference-specific options when those options are set, so two references to the
+// same Kubernetes Service with different options do not overwrite each other.
 func (c configBuilder) fullServiceName(ctx context.Context, service traefikv1alpha1.LoadBalancerSpec, port intstr.IntOrString) string {
 	hasPort := (port.Type == intstr.Int && port.IntVal != 0) || (port.Type == intstr.String && port.StrVal != "")
 
 	if !c.nameBuilder.safe {
-		if hasPort {
-			return provider.Normalize(fmt.Sprintf("%s-%s-%s", service.Namespace, service.Name, port.String()))
+		switch {
+		case hasPort:
+			return appendServiceOptionsHash(provider.Normalize(fmt.Sprintf("%s-%s-%s", service.Namespace, service.Name, port.String())), service)
+
+		case !strings.Contains(service.Name, providerNamespaceSeparator):
+			return appendServiceOptionsHash(provider.Normalize(fmt.Sprintf("%s-%s", service.Namespace, service.Name)), service)
 		}
 
-		if !strings.Contains(service.Name, providerNamespaceSeparator) {
-			return provider.Normalize(fmt.Sprintf("%s-%s", service.Namespace, service.Name))
-		}
-
+		// A provider-qualified name references an existing service: it must be kept as is.
 		name, pName := splitSvcNameProvider(service.Name)
 		if pName == ProviderName {
 			return provider.Normalize(fmt.Sprintf("%s-%s", service.Namespace, name))
@@ -943,6 +971,45 @@ func namespaceOrParentNamespace(namespace, parentNamespace string) string {
 	}
 
 	return parentNamespace
+}
+
+// appendServiceOptionsHash suffixes the generated service name with a hash of the
+// reference-specific options (sticky, health check, serversTransport, ...).
+// Identity fields are excluded so two references to the same Kubernetes Service
+// still share a name when their options match, and get distinct names otherwise.
+// A TraefikService reference is left untouched: its name must match the TraefikService it points to,
+// and its options do not shape the referenced service.
+func appendServiceOptionsHash(name string, service traefikv1alpha1.LoadBalancerSpec) string {
+	if service.Kind == "TraefikService" {
+		return name
+	}
+
+	hash, err := serviceOptionsHash(service)
+	if err != nil || hash == "" {
+		return name
+	}
+
+	return provider.Normalize(name + "-" + hash)
+}
+
+func serviceOptionsHash(service traefikv1alpha1.LoadBalancerSpec) (string, error) {
+	opts := *service.DeepCopy()
+	opts.Name = ""
+	opts.Kind = ""
+	opts.Namespace = ""
+	opts.Port = intstr.IntOrString{}
+	opts.Weight = nil
+
+	if reflect.DeepEqual(opts, traefikv1alpha1.LoadBalancerSpec{}) {
+		return "", nil
+	}
+
+	hash, err := hashstructure.Hash(opts, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return strconv.FormatUint(hash, 16), nil
 }
 
 // getTLSHTTP mutates tlsConfigs.

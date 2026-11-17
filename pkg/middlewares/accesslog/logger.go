@@ -2,6 +2,7 @@ package accesslog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -26,7 +27,9 @@ import (
 	traefiktls "github.com/traefik/traefik/v3/pkg/tls"
 	"github.com/traefik/traefik/v3/pkg/types"
 	"go.opentelemetry.io/contrib/bridges/otellogrus"
+	otelsdk "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 type key string
@@ -72,17 +75,59 @@ type Handler struct {
 	httpCodeRanges types.HTTPCodeRanges
 	logHandlerChan chan handlerParams
 	wg             sync.WaitGroup
+
+	otelLoggerProvider *otelsdk.LoggerProvider
+
+	// done is closed by Close to signal shutdown. logHandlerChan itself is never
+	// closed: a hijacked connection can outlive Shutdown, so its handler may still
+	// send after Close has run, and sending on a closed channel panics (#13693).
+	done chan struct{}
+
+	// closeOnce guards done: Close can be called more than once (e.g. Traefik's
+	// own shutdown path plus a caller's own cleanup), and closing a channel
+	// twice panics the same way sending on a closed one does.
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // NewHandler creates a new Handler.
 func NewHandler(ctx context.Context, config *otypes.AccessLog, hooks ...logrus.Hook) (*Handler, error) {
+	if a := config.Anonymization; a != nil {
+		if a.IPv4Subnet < 0 || a.IPv4Subnet > 32 {
+			return nil, fmt.Errorf("invalid access log anonymization IPv4 subnet %d: must be between 0 and 32", a.IPv4Subnet)
+		}
+		if a.IPv6Subnet < 0 || a.IPv6Subnet > 128 {
+			return nil, fmt.Errorf("invalid access log anonymization IPv6 subnet %d: must be between 0 and 128", a.IPv6Subnet)
+		}
+	}
+
 	var file io.WriteCloser = noopCloser{os.Stdout}
 	if len(config.FilePath) > 0 {
-		f, err := openAccessLogFile(config.FilePath)
-		if err != nil {
-			return nil, fmt.Errorf("error opening access log file: %w", err)
+		if config.MaxSize > 0 || config.MaxAge > 0 || config.MaxBackups > 0 || config.Compress {
+			// Lumberjack opens the file lazily on the first write, so an unwritable path is
+			// reported here instead of silently dropping every access log line.
+			f, err := openAccessLogFile(config.FilePath)
+			if err != nil {
+				return nil, fmt.Errorf("error opening access log file: %w", err)
+			}
+			if err := f.Close(); err != nil {
+				return nil, fmt.Errorf("error closing access log file: %w", err)
+			}
+
+			file = &lumberjack.Logger{
+				Filename:   config.FilePath,
+				MaxSize:    config.MaxSize,
+				MaxBackups: config.MaxBackups,
+				MaxAge:     config.MaxAge,
+				Compress:   config.Compress,
+			}
+		} else {
+			f, err := openAccessLogFile(config.FilePath)
+			if err != nil {
+				return nil, fmt.Errorf("error opening access log file: %w", err)
+			}
+			file = f
 		}
-		file = f
 	}
 	logHandlerChan := make(chan handlerParams, config.BufferingSize)
 
@@ -94,7 +139,7 @@ func NewHandler(ctx context.Context, config *otypes.AccessLog, hooks ...logrus.H
 	case GenericCLFFormat:
 		formatter = new(GenericCLFLogFormatter)
 	case JSONFormat:
-		formatter = new(logrus.JSONFormatter)
+		formatter = &logrus.JSONFormatter{TimestampFormat: jsonLogTimeFormat}
 	default:
 		log.Error().Msgf("Unsupported access log format: %q, defaulting to common format instead.", config.Format)
 		formatter = new(CommonLogFormatter)
@@ -111,8 +156,10 @@ func NewHandler(ctx context.Context, config *otypes.AccessLog, hooks ...logrus.H
 		logger.Hooks.Add(hook)
 	}
 
+	var otelLoggerProvider *otelsdk.LoggerProvider
 	if config.OTLP != nil {
-		otelLoggerProvider, err := config.OTLP.NewLoggerProvider(ctx)
+		var err error
+		otelLoggerProvider, err = config.OTLP.NewLoggerProvider(ctx, config.SampleRate)
 		if err != nil {
 			return nil, fmt.Errorf("setting up OpenTelemetry logger provider: %w", err)
 		}
@@ -152,6 +199,9 @@ func NewHandler(ctx context.Context, config *otypes.AccessLog, hooks ...logrus.H
 		logger:         logger,
 		file:           file,
 		logHandlerChan: logHandlerChan,
+		done:           make(chan struct{}),
+
+		otelLoggerProvider: otelLoggerProvider,
 	}
 
 	if config.Filters != nil {
@@ -164,8 +214,23 @@ func NewHandler(ctx context.Context, config *otypes.AccessLog, hooks ...logrus.H
 
 	if config.BufferingSize > 0 {
 		logHandler.wg.Go(func() {
-			for handlerParams := range logHandler.logHandlerChan {
-				logHandler.logTheRoundTrip(handlerParams.ctx, handlerParams.logDataTable)
+			for {
+				select {
+				case params := <-logHandler.logHandlerChan:
+					logHandler.logTheRoundTrip(params.ctx, params.logDataTable)
+
+				case <-logHandler.done:
+					// Write what is already buffered before giving up, so a shutdown
+					// does not silently discard entries that were accepted.
+					for {
+						select {
+						case params := <-logHandler.logHandlerChan:
+							logHandler.logTheRoundTrip(params.ctx, params.logDataTable)
+						default:
+							return
+						}
+					}
+				}
 			}
 		})
 	}
@@ -277,6 +342,12 @@ func (h *Handler) ServeHTTP(rw http.ResponseWriter, req *http.Request, next http
 		core[ClientHost] = forwardedFor
 	}
 
+	// Done after the X-Forwarded-For override, which would otherwise log the full client address.
+	if a := h.config.Anonymization; a != nil {
+		core[ClientHost] = maskIPList(core[ClientHost].(string), a)
+		core[ClientAddr] = maskClientAddr(core[ClientAddr].(string), a)
+	}
+
 	ctx := req.Context()
 	capt, err := capture.FromContext(ctx)
 	if err != nil {
@@ -310,9 +381,14 @@ func (h *Handler) ServeHTTP(rw http.ResponseWriter, req *http.Request, next http
 		}
 
 		if h.config.BufferingSize > 0 {
-			h.logHandlerChan <- handlerParams{
+			select {
+			case h.logHandlerChan <- handlerParams{
 				ctx:          req.Context(),
 				logDataTable: logDataTable,
+			}:
+			case <-h.done:
+				// The consumer is gone, so this entry cannot be written. Dropping it
+				// is preferable to blocking a handler that is already unwinding.
 			}
 			return
 		}
@@ -325,15 +401,39 @@ func (h *Handler) ServeHTTP(rw http.ResponseWriter, req *http.Request, next http
 
 // Close closes the Logger (i.e. the file, drain logHandlerChan, etc).
 func (h *Handler) Close() error {
-	close(h.logHandlerChan)
-	h.wg.Wait()
-	return h.file.Close()
+	h.closeOnce.Do(func() {
+		close(h.done)
+		h.wg.Wait()
+
+		// The batch processor keeps unexported records in memory: without a shutdown,
+		// every stop loses what was logged since the last periodic export.
+		var otelErr error
+		if h.otelLoggerProvider != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := h.otelLoggerProvider.Shutdown(ctx); err != nil {
+				otelErr = fmt.Errorf("shutting down OpenTelemetry logger provider: %w", err)
+			}
+		}
+
+		h.closeErr = errors.Join(otelErr, h.file.Close())
+	})
+	return h.closeErr
 }
 
 // Rotate closes and reopens the log file to allow for rotation by an external source.
+// When lumberjack is used for automatic rotation, this triggers an immediate rotation.
 func (h *Handler) Rotate() error {
 	if h.config.FilePath == "" {
 		return nil
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if lj, ok := h.file.(*lumberjack.Logger); ok {
+		return lj.Rotate()
 	}
 
 	if h.file != nil {
@@ -345,8 +445,6 @@ func (h *Handler) Rotate() error {
 	if err != nil {
 		return err
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.logger.Out = h.file
 	return nil
 }
@@ -434,7 +532,11 @@ func (h *Handler) redactHeaders(headers http.Header, fields logrus.Fields, prefi
 		v := h.config.Fields.KeepHeader(k)
 		switch v {
 		case otypes.AccessLogKeep:
-			fields[prefix+k] = strings.Join(headers.Values(k), ",")
+			value := strings.Join(headers.Values(k), ",")
+			if a := h.config.Anonymization; a != nil && prefix == "request_" {
+				value = anonymizedHeaderValue(k, value, a)
+			}
+			fields[prefix+k] = value
 		case otypes.AccessLogRedact:
 			fields[prefix+k] = "REDACTED"
 		}
@@ -470,7 +572,12 @@ func (h *Handler) keepAccessLog(statusCode, retryAttempts int, duration time.Dur
 // GetLogData gets the request context object that contains logging data.
 // This creates data as the request passes through the middleware chain.
 func GetLogData(req *http.Request) *LogData {
-	if ld, ok := req.Context().Value(DataTableKey).(*LogData); ok {
+	return GetLogDataTable(req.Context())
+}
+
+// GetLogDataTable gets the logging data from the given context.
+func GetLogDataTable(ctx context.Context) *LogData {
+	if ld, ok := ctx.Value(DataTableKey).(*LogData); ok {
 		return ld
 	}
 	return nil

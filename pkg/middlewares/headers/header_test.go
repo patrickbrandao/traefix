@@ -1,6 +1,7 @@
 package headers
 
 import (
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -238,6 +239,24 @@ func TestNewHeader_CORSPreflights(t *testing.T) {
 				"Access-Control-Allow-Methods": {"GET,OPTIONS,PUT"},
 			},
 		},
+		{
+			desc: "Non-matching origin Preflight",
+			cfg: dynamic.Headers{
+				AccessControlAllowMethods:     []string{"GET", "OPTIONS", "PUT"},
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlAllowHeaders:     []string{"origin"},
+				AccessControlAllowCredentials: true,
+				AccessControlExposeHeaders:    []string{"X-Custom"},
+				AccessControlMaxAge:           new(int64(600)),
+			},
+			requestHeaders: map[string][]string{
+				"Access-Control-Request-Method": {"GET", "OPTIONS"},
+				"Origin":                        {"https://not-foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Content-Length": {"0"},
+			},
+		},
 	}
 
 	emptyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
@@ -255,6 +274,171 @@ func TestNewHeader_CORSPreflights(t *testing.T) {
 			mid.ServeHTTP(rw, req)
 
 			assert.Equal(t, test.expected, rw.Result().Header)
+		})
+	}
+}
+
+func TestNewHeader_CORSStrict(t *testing.T) {
+	testCases := []struct {
+		desc              string
+		method            string
+		cfg               dynamic.Headers
+		requestHeaders    http.Header
+		backendHeaders    http.Header
+		expected          http.Header
+		expectedNextCalls int
+	}{
+		{
+			desc:   "Preflight with allowed origin is handled",
+			method: http.MethodOptions,
+			cfg: dynamic.Headers{
+				AccessControlAllowCredentials: true,
+				AccessControlAllowHeaders:     []string{"authorization"},
+				AccessControlAllowMethods:     []string{"GET"},
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlExposeHeaders:    []string{"X-Expose"},
+				AccessControlMaxAge:           new(int64(600)),
+				CORSStrict:                    true,
+			},
+			requestHeaders: http.Header{
+				"Access-Control-Request-Headers": {"authorization"},
+				"Access-Control-Request-Method":  {"GET"},
+				"Origin":                         {"https://foo.bar.org"},
+			},
+			expected: http.Header{
+				"Access-Control-Allow-Credentials": {"true"},
+				"Access-Control-Allow-Headers":     {"authorization"},
+				"Access-Control-Allow-Methods":     {"GET"},
+				"Access-Control-Allow-Origin":      {"https://foo.bar.org"},
+				"Access-Control-Expose-Headers":    {"X-Expose"},
+				"Access-Control-Max-Age":           {"600"},
+				"Content-Length":                   {"0"},
+			},
+		},
+		{
+			desc:   "Preflight with disallowed origin is proxied",
+			method: http.MethodOptions,
+			cfg: dynamic.Headers{
+				AccessControlAllowCredentials: true,
+				AccessControlAllowHeaders:     []string{"authorization"},
+				AccessControlAllowMethods:     []string{"GET"},
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlExposeHeaders:    []string{"X-Expose"},
+				AccessControlMaxAge:           new(int64(600)),
+				CORSStrict:                    true,
+			},
+			requestHeaders: http.Header{
+				"Access-Control-Request-Headers": {"authorization"},
+				"Access-Control-Request-Method":  {"GET"},
+				"Origin":                         {"https://other.example"},
+			},
+			expected:          http.Header{"X-Backend": {"true"}},
+			expectedNextCalls: 1,
+		},
+		{
+			desc:   "Preflight with disallowed origin without strict mode gets no CORS headers",
+			method: http.MethodOptions,
+			cfg: dynamic.Headers{
+				AccessControlAllowCredentials: true,
+				AccessControlAllowHeaders:     []string{"authorization"},
+				AccessControlAllowMethods:     []string{"GET"},
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlExposeHeaders:    []string{"X-Expose"},
+				AccessControlMaxAge:           new(int64(600)),
+			},
+			requestHeaders: http.Header{
+				"Access-Control-Request-Headers": {"authorization"},
+				"Access-Control-Request-Method":  {"GET"},
+				"Origin":                         {"https://other.example"},
+			},
+			expected: http.Header{"Content-Length": {"0"}},
+		},
+		{
+			desc:   "Response with allowed origin has CORS headers",
+			method: http.MethodGet,
+			cfg: dynamic.Headers{
+				AccessControlAllowCredentials: true,
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlExposeHeaders:    []string{"X-Expose"},
+				CORSStrict:                    true,
+			},
+			requestHeaders: http.Header{"Origin": {"https://foo.bar.org"}},
+			expected: http.Header{
+				"Access-Control-Allow-Credentials": {"true"},
+				"Access-Control-Allow-Origin":      {"https://foo.bar.org"},
+				"Access-Control-Expose-Headers":    {"X-Expose"},
+				"X-Backend":                        {"true"},
+			},
+			expectedNextCalls: 1,
+		},
+		{
+			desc:   "Response with disallowed origin is left untouched",
+			method: http.MethodGet,
+			cfg: dynamic.Headers{
+				AccessControlAllowCredentials: true,
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlExposeHeaders:    []string{"X-Expose"},
+				CORSStrict:                    true,
+			},
+			requestHeaders: http.Header{"Origin": {"https://other.example"}},
+			backendHeaders: http.Header{
+				"Access-Control-Allow-Credentials": {"backend"},
+				"Access-Control-Allow-Origin":      {"https://backend.example"},
+				"Access-Control-Expose-Headers":    {"X-Backend-Expose"},
+			},
+			expected: http.Header{
+				"Access-Control-Allow-Credentials": {"backend"},
+				"Access-Control-Allow-Origin":      {"https://backend.example"},
+				"Access-Control-Expose-Headers":    {"X-Backend-Expose"},
+				"X-Backend":                        {"true"},
+			},
+			expectedNextCalls: 1,
+		},
+		{
+			desc:   "Response with disallowed origin without strict mode gets no credentials nor exposed headers",
+			method: http.MethodGet,
+			cfg: dynamic.Headers{
+				AccessControlAllowCredentials: true,
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlExposeHeaders:    []string{"X-Expose"},
+			},
+			requestHeaders: http.Header{"Origin": {"https://other.example"}},
+			backendHeaders: http.Header{
+				"Access-Control-Allow-Origin": {"https://backend.example"},
+			},
+			expected: http.Header{
+				"Access-Control-Allow-Origin": {"https://backend.example"},
+				"X-Backend":                   {"true"},
+			},
+			expectedNextCalls: 1,
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			nextCalls := 0
+			next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				nextCalls++
+				for header, values := range test.backendHeaders {
+					for _, value := range values {
+						rw.Header().Add(header, value)
+					}
+				}
+				rw.Header().Set("X-Backend", "true")
+				rw.WriteHeader(http.StatusOK)
+			})
+
+			mid, err := NewHeader(next, test.cfg)
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(test.method, "/foo", nil)
+			req.Header = test.requestHeaders
+
+			rw := httptest.NewRecorder()
+			mid.ServeHTTP(rw, req)
+
+			assert.Equal(t, test.expected, rw.Result().Header)
+			assert.Equal(t, test.expectedNextCalls, nextCalls)
 		})
 	}
 }
@@ -390,6 +574,34 @@ func TestNewHeader_CORSResponses(t *testing.T) {
 			},
 		},
 		{
+			desc: "Non-matching origin Request",
+			next: emptyHandler,
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlAllowCredentials: true,
+				AccessControlExposeHeaders:    []string{"X-Custom"},
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://not-foo.bar.org"},
+			},
+			expected: map[string][]string{},
+		},
+		{
+			desc: "Non-matching origin Request with Vary Headers",
+			next: emptyHandler,
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList:  []string{"https://foo.bar.org"},
+				AccessControlAllowCredentials: true,
+				AddVaryHeader:                 true,
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://not-foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Vary": {"Origin"},
+			},
+		},
+		{
 			desc: "Test Simple Request with Vary Headers",
 			next: emptyHandler,
 			cfg: dynamic.Headers{
@@ -440,6 +652,80 @@ func TestNewHeader_CORSResponses(t *testing.T) {
 			expected: map[string][]string{
 				"Access-Control-Allow-Origin": {"https://foo.bar.org"},
 				"Vary":                        {"Origin"},
+			},
+		},
+		{
+			desc: "Test Simple Request with Vary Headers and multiple existing vary response",
+			next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("Vary", "Accept-Encoding")
+				w.Header().Add("Vary", "Cookie, Authorization")
+				w.WriteHeader(http.StatusOK)
+			}),
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList: []string{"https://foo.bar.org"},
+				AddVaryHeader:                true,
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Access-Control-Allow-Origin": {"https://foo.bar.org"},
+				"Vary":                        {"Accept-Encoding,Cookie, Authorization,Origin"},
+			},
+		},
+		{
+			desc: "Test Simple Request with Vary Headers and existing vary origin in a list",
+			next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("Vary", "Accept-Encoding")
+				w.Header().Add("Vary", "Cookie, origin")
+				w.WriteHeader(http.StatusOK)
+			}),
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList: []string{"https://foo.bar.org"},
+				AddVaryHeader:                true,
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Access-Control-Allow-Origin": {"https://foo.bar.org"},
+				"Vary":                        {"Accept-Encoding", "Cookie, origin"},
+			},
+		},
+		{
+			desc: "Test Simple Request with Vary Headers and a header name containing origin",
+			next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Vary", "X-Origin-Id")
+				w.WriteHeader(http.StatusOK)
+			}),
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList: []string{"https://foo.bar.org"},
+				AddVaryHeader:                true,
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Access-Control-Allow-Origin": {"https://foo.bar.org"},
+				"Vary":                        {"X-Origin-Id,Origin"},
+			},
+		},
+		{
+			desc: "Test Simple Request with Vary Headers and existing vary wildcard",
+			next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Vary", "*")
+				w.WriteHeader(http.StatusOK)
+			}),
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList: []string{"https://foo.bar.org"},
+				AddVaryHeader:                true,
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Access-Control-Allow-Origin": {"https://foo.bar.org"},
+				"Vary":                        {"*"},
 			},
 		},
 		{
@@ -570,6 +856,236 @@ func TestNewHeader_customResponseHeaders(t *testing.T) {
 			mid.ServeHTTP(rw, req)
 
 			assert.Equal(t, test.expected, rw.Result().Header)
+		})
+	}
+}
+
+func TestNewHeader_replaceRequestHeadersRegex(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		replace  map[string]dynamic.ReplaceHeaderRegex
+		custom   map[string]string
+		header   http.Header
+		expected http.Header
+	}{
+		{
+			desc: "replace a header",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "^b(.{2})$", Replacement: "f$1"},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{"Foo": {"far"}},
+		},
+		{
+			desc: "non canonical header name",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"foo": {Regex: "^b(.{2})$", Replacement: "f$1"},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{"Foo": {"far"}},
+		},
+		{
+			desc: "no match",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "^b(.{3})$", Replacement: "f$1"},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{"Foo": {"bar"}},
+		},
+		{
+			desc: "absent header is not added",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Too": {Regex: ".*", Replacement: "foo"},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{"Foo": {"bar"}},
+		},
+		{
+			desc: "every value is replaced",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "^b", Replacement: "f"},
+			},
+			header:   http.Header{"Foo": {"bar", "baz", "qux"}},
+			expected: http.Header{"Foo": {"far", "faz", "qux"}},
+		},
+		{
+			desc: "value replaced by an empty string is removed",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "^bar$", Replacement: ""},
+			},
+			header:   http.Header{"Foo": {"bar", "baz"}},
+			expected: http.Header{"Foo": {"baz"}},
+		},
+		{
+			desc: "header removed when every value is replaced by an empty string",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: ".+", Replacement: ""},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{},
+		},
+		{
+			desc:   "replacement applied after custom headers",
+			custom: map[string]string{"Foo": "bar"},
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "^b", Replacement: "f"},
+			},
+			header:   http.Header{},
+			expected: http.Header{"Foo": {"far"}},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			mid, err := NewHeader(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {}), dynamic.Headers{
+				CustomRequestHeaders:       test.custom,
+				ReplaceRequestHeadersRegex: test.replace,
+			})
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodGet, "/foo", nil)
+			req.Header = test.header
+
+			rw := httptest.NewRecorder()
+			mid.ServeHTTP(rw, req)
+
+			assert.Equal(t, http.StatusOK, rw.Code)
+			assert.Equal(t, test.expected, req.Header)
+		})
+	}
+}
+
+func TestNewHeader_replaceResponseHeadersRegex(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		replace  map[string]dynamic.ReplaceHeaderRegex
+		header   http.Header
+		expected http.Header
+	}{
+		{
+			desc: "replace the Location host",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Location": {Regex: `^https?://backend\.internal(:\d+)?/`, Replacement: "https://example.com/"},
+			},
+			header:   http.Header{"Location": {"http://backend.internal:8080/login"}},
+			expected: http.Header{"Location": {"https://example.com/login"}},
+		},
+		{
+			desc: "every Set-Cookie is kept",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Set-Cookie": {Regex: `; Domain=backend\.internal`, Replacement: "; Domain=example.com"},
+			},
+			header: http.Header{"Set-Cookie": {
+				"a=1; Domain=backend.internal",
+				"b=2; Path=/",
+			}},
+			expected: http.Header{"Set-Cookie": {
+				"a=1; Domain=example.com",
+				"b=2; Path=/",
+			}},
+		},
+		{
+			desc: "absent header is not added",
+			replace: map[string]dynamic.ReplaceHeaderRegex{
+				"Location": {Regex: ".*", Replacement: "foo"},
+			},
+			header:   http.Header{"Foo": {"bar"}},
+			expected: http.Header{"Foo": {"bar"}},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				maps.Copy(rw.Header(), test.header)
+				rw.WriteHeader(http.StatusOK)
+			})
+
+			mid, err := NewHeader(next, dynamic.Headers{ReplaceResponseHeadersRegex: test.replace})
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodGet, "/foo", nil)
+			rw := httptest.NewRecorder()
+			mid.ServeHTTP(rw, req)
+
+			assert.Equal(t, http.StatusOK, rw.Code)
+			assert.Equal(t, test.expected, rw.Result().Header)
+		})
+	}
+}
+
+func TestNewHeader_replaceHeadersRegexInvalid(t *testing.T) {
+	testCases := []struct {
+		desc string
+		cfg  dynamic.Headers
+	}{
+		{
+			desc: "invalid request regex",
+			cfg: dynamic.Headers{ReplaceRequestHeadersRegex: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Regex: "(", Replacement: "bar"},
+			}},
+		},
+		{
+			desc: "empty response regex",
+			cfg: dynamic.Headers{ReplaceResponseHeadersRegex: map[string]dynamic.ReplaceHeaderRegex{
+				"Foo": {Replacement: "bar"},
+			}},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := NewHeader(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {}), test.cfg)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestNewHeader_customResponseHeaders_setCookie(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		config   map[string]string
+		expected []string
+	}{
+		{
+			desc:     "Appending Set-Cookie",
+			config:   map[string]string{"Set-Cookie": "foo=bar; Path=/"},
+			expected: []string{"sticky=abc; Path=/", "foo=bar; Path=/"},
+		},
+		{
+			desc:     "Appending lowercase set-cookie",
+			config:   map[string]string{"set-cookie": "foo=bar; Path=/"},
+			expected: []string{"sticky=abc; Path=/", "foo=bar; Path=/"},
+		},
+		{
+			desc:   "Deleting Set-Cookie",
+			config: map[string]string{"Set-Cookie": ""},
+		},
+	}
+
+	emptyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			mid, err := NewHeader(emptyHandler, dynamic.Headers{CustomResponseHeaders: test.config})
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodGet, "/foo", nil)
+
+			rw := httptest.NewRecorder()
+			rw.Header().Add("Set-Cookie", "sticky=abc; Path=/")
+
+			mid.ServeHTTP(rw, req)
+
+			assert.Equal(t, test.expected, rw.Result().Header.Values("Set-Cookie"))
 		})
 	}
 }

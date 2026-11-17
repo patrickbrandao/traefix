@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
@@ -227,7 +228,122 @@ func TestBalancerAllServersFenced(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	assert.Equal(t, http.StatusServiceUnavailable, recorder.Result().StatusCode)
+	assert.Equal(t, http.StatusOK, recorder.Result().StatusCode)
+}
+
+func TestBalancerFencedFallback(t *testing.T) {
+	balancer := New(nil, true)
+
+	recorder := &responseRecorder{ResponseRecorder: httptest.NewRecorder(), save: map[string]int{}}
+
+	balancer.Add("first", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("server", "first")
+		rw.WriteHeader(http.StatusOK)
+	}), new(1), false)
+
+	balancer.Add("fenced", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("server", "fenced")
+		rw.WriteHeader(http.StatusOK)
+	}), new(1), true)
+
+	balancer.SetStatus(t.Context(), "first", false)
+
+	for range 3 {
+		balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	}
+
+	assert.Equal(t, 3, recorder.save["fenced"])
+
+	balancer.SetStatus(t.Context(), "first", true)
+
+	for range 3 {
+		balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	}
+
+	assert.Equal(t, 3, recorder.save["first"])
+	assert.Equal(t, 3, recorder.save["fenced"])
+}
+
+func TestBalancerFencedNotPreferredOverLowWeight(t *testing.T) {
+	balancer := New(nil, false)
+
+	recorder := &responseRecorder{ResponseRecorder: httptest.NewRecorder(), save: map[string]int{}}
+
+	balancer.Add("fenced", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("server", "fenced")
+		rw.WriteHeader(http.StatusOK)
+	}), new(100), true)
+
+	balancer.Add("light", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("server", "light")
+		rw.WriteHeader(http.StatusOK)
+	}), new(1), false)
+
+	for range 5 {
+		balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	}
+
+	assert.Equal(t, 5, recorder.save["light"])
+	assert.Equal(t, 0, recorder.save["fenced"])
+}
+
+// TestBalancerAllHealthyServersFenced checks that the balancer returns without
+// looping forever when the only up servers are fenced.
+// This state is reachable during a rolling update: the health check marks the
+// non-fenced servers down while the terminating (fenced) server is still up,
+// leaving no server that is both up and non-fenced.
+func TestBalancerAllHealthyServersFenced(t *testing.T) {
+	balancer := New(nil, false)
+
+	balancer.Add("fenced", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {}), new(1), true)
+	balancer.Add("healthy", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {}), new(1), false)
+
+	// The only non-fenced server goes down.
+	balancer.SetStatus(t.Context(), "healthy", false)
+
+	done := make(chan int, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+		done <- recorder.Result().StatusCode
+	}()
+
+	// Fenced servers are a fallback once no other healthy server is left, see traefik/traefik#12419.
+	select {
+	case code := <-done:
+		assert.Equal(t, http.StatusOK, code)
+	case <-time.After(time.Second):
+		t.Fatal("balancer.ServeHTTP did not return: nextServer is stuck in an infinite loop")
+	}
+}
+
+// TestBalancerHealthyZeroWeightServer checks that the balancer returns without
+// looping forever when the only up server has a zero weight.
+// Health checks still target zero-weight servers, so one can be reported up
+// while it is not in the pool and every server in the pool is down.
+func TestBalancerHealthyZeroWeightServer(t *testing.T) {
+	balancer := New(nil, false)
+
+	handler := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {})
+	balancer.Add("down", handler, new(1), false)
+	balancer.Add("disabled", handler, new(0), false)
+
+	balancer.SetStatus(t.Context(), "disabled", true)
+	balancer.SetStatus(t.Context(), "down", false)
+
+	done := make(chan int, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		balancer.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+		done <- recorder.Result().StatusCode
+	}()
+
+	select {
+	case code := <-done:
+		assert.Equal(t, http.StatusServiceUnavailable, code)
+	case <-time.After(time.Second):
+		t.Fatal("balancer.ServeHTTP did not return: nextServer is stuck in an infinite loop")
+	}
 }
 
 func TestSticky(t *testing.T) {

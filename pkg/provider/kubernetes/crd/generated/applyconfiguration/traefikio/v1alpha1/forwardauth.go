@@ -26,6 +26,10 @@ THE SOFTWARE.
 
 package v1alpha1
 
+import (
+	intstr "k8s.io/apimachinery/pkg/util/intstr"
+)
+
 // ForwardAuthApplyConfiguration represents a declarative configuration of the ForwardAuth type for use
 // with apply.
 //
@@ -34,7 +38,15 @@ package v1alpha1
 // More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/forwardauth/
 type ForwardAuthApplyConfiguration struct {
 	// Address defines the authentication server address.
+	// It is mutually exclusive with the Service option.
 	Address *string `json:"address,omitempty"`
+	// Service defines the reference to a Kubernetes Service that will serve as the authentication server.
+	// It is mutually exclusive with the Address and TLS options: the connection to the service is handled by its ServersTransport.
+	// More info: https://doc.traefik.io/traefik/v3.7/reference/routing-configuration/http/middlewares/forwardauth/#service
+	Service *ServiceApplyConfiguration `json:"service,omitempty"`
+	// Path defines the path of the authentication request when using the Service option.
+	// It can also contain a query string. It defaults to the root path.
+	Path *string `json:"path,omitempty"`
 	// TrustForwardHeader defines whether to trust (ie: forward) all X-Forwarded-* headers.
 	//
 	// Deprecated: Use forwardedHeaders.trustedIPs at the EntryPoint level instead, and set trustForwardHeader to true on this middleware.
@@ -53,6 +65,8 @@ type ForwardAuthApplyConfiguration struct {
 	MaxResponseBodySize *int64 `json:"maxResponseBodySize,omitempty"`
 	// AddAuthCookiesToResponse defines the list of cookies to copy from the authentication server response to the response.
 	AddAuthCookiesToResponse []string `json:"addAuthCookiesToResponse,omitempty"`
+	// AddAuthCookiesToResponseRegex defines a regex pattern used to match cookies to copy from the authentication server response to the response.
+	AddAuthCookiesToResponseRegex *string `json:"addAuthCookiesToResponseRegex,omitempty"`
 	// HeaderField defines a header field to store the authenticated user.
 	// More info: https://doc.traefik.io/traefik/v3.8/reference/routing-configuration/http/middlewares/forwardauth/#headerfield
 	HeaderField *string `json:"headerField,omitempty"`
@@ -66,6 +80,11 @@ type ForwardAuthApplyConfiguration struct {
 	PreserveRequestMethod *bool `json:"preserveRequestMethod,omitempty"`
 	// AuthSigninURL specifies the URL to redirect to when the authentication server returns 401 Unauthorized.
 	AuthSigninURL *string `json:"authSigninURL,omitempty"`
+	// Timeout defines the maximum duration of the request to the authentication server, including connection time and reading the response body.
+	// The value of timeout should be provided in seconds or as a valid duration format,
+	// see https://pkg.go.dev/time#ParseDuration.
+	// Zero means no timeout. Default is 30s.
+	Timeout *intstr.IntOrString `json:"timeout,omitempty"`
 }
 
 // ForwardAuthApplyConfiguration constructs a declarative configuration of the ForwardAuth type for use with
@@ -79,6 +98,22 @@ func ForwardAuth() *ForwardAuthApplyConfiguration {
 // If called multiple times, the Address field is set to the value of the last call.
 func (b *ForwardAuthApplyConfiguration) WithAddress(value string) *ForwardAuthApplyConfiguration {
 	b.Address = &value
+	return b
+}
+
+// WithService sets the Service field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Service field is set to the value of the last call.
+func (b *ForwardAuthApplyConfiguration) WithService(value *ServiceApplyConfiguration) *ForwardAuthApplyConfiguration {
+	b.Service = value
+	return b
+}
+
+// WithPath sets the Path field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Path field is set to the value of the last call.
+func (b *ForwardAuthApplyConfiguration) WithPath(value string) *ForwardAuthApplyConfiguration {
+	b.Path = &value
 	return b
 }
 
@@ -144,6 +179,14 @@ func (b *ForwardAuthApplyConfiguration) WithAddAuthCookiesToResponse(values ...s
 	return b
 }
 
+// WithAddAuthCookiesToResponseRegex sets the AddAuthCookiesToResponseRegex field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the AddAuthCookiesToResponseRegex field is set to the value of the last call.
+func (b *ForwardAuthApplyConfiguration) WithAddAuthCookiesToResponseRegex(value string) *ForwardAuthApplyConfiguration {
+	b.AddAuthCookiesToResponseRegex = &value
+	return b
+}
+
 // WithHeaderField sets the HeaderField field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the HeaderField field is set to the value of the last call.
@@ -189,5 +232,13 @@ func (b *ForwardAuthApplyConfiguration) WithPreserveRequestMethod(value bool) *F
 // If called multiple times, the AuthSigninURL field is set to the value of the last call.
 func (b *ForwardAuthApplyConfiguration) WithAuthSigninURL(value string) *ForwardAuthApplyConfiguration {
 	b.AuthSigninURL = &value
+	return b
+}
+
+// WithTimeout sets the Timeout field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Timeout field is set to the value of the last call.
+func (b *ForwardAuthApplyConfiguration) WithTimeout(value intstr.IntOrString) *ForwardAuthApplyConfiguration {
+	b.Timeout = &value
 	return b
 }

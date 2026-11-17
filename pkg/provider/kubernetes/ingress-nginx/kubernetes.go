@@ -65,6 +65,8 @@ const (
 
 	// https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/configmap/#upstream-keepalive-timeout
 	defaultUpstreamKeepaliveTimeout = 60
+	// https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/configmap/#upstream-keepalive-connections
+	defaultUpstreamKeepaliveConnections = 320
 )
 
 var (
@@ -127,6 +129,7 @@ type Provider struct {
 	ProxyNextUpstreamTimeout     int      `description:"Limits the total elapsed time to retry the request if the backend server does not reply. Timeout value is unitless and in seconds." json:"proxyNextUpstreamTimeout,omitempty" toml:"proxyNextUpstreamTimeout,omitempty" yaml:"proxyNextUpstreamTimeout,omitempty" export:"true"`
 	CustomHTTPErrors             []string `description:"Defines which status should result in calling the default backend to return an error page." json:"customHTTPErrors,omitempty" toml:"customHTTPErrors,omitempty" yaml:"customHTTPErrors,omitempty" export:"true"`
 	UpstreamKeepaliveTimeout     int      `description:"Defines the idle timeout for keep-alive connections to upstream servers. Timeout value is unitless and in seconds." json:"upstreamKeepaliveTimeout,omitempty" toml:"upstreamKeepaliveTimeout,omitempty" yaml:"upstreamKeepaliveTimeout,omitempty" export:"true"`
+	UpstreamKeepaliveConnections int      `description:"Defines the maximum number of idle keep-alive connections to upstream servers. 0 disables keep-alive connections." json:"upstreamKeepaliveConnections,omitempty" toml:"upstreamKeepaliveConnections,omitempty" yaml:"upstreamKeepaliveConnections,omitempty" export:"true"`
 	AllowCrossNamespaceResources bool     `description:"Allow Ingress to reference resources (e.g. ConfigMaps, Secrets) in different namespaces." json:"allowCrossNamespaceResources,omitempty" toml:"allowCrossNamespaceResources,omitempty" yaml:"allowCrossNamespaceResources,omitempty" export:"true"`
 	GlobalAllowedResponseHeaders []string `description:"List of allowed response headers inside the custom headers annotations." json:"globalAllowedResponseHeaders,omitempty" toml:"globalAllowedResponseHeaders,omitempty" yaml:"globalAllowedResponseHeaders,omitempty" export:"true"`
 	AllowSnippetAnnotations      bool     `description:"Enables to parse and add -snippet annotations/directives." json:"allowSnippetAnnotations,omitempty" toml:"allowSnippetAnnotations,omitempty" yaml:"allowSnippetAnnotations,omitempty" export:"true"`
@@ -160,6 +163,7 @@ func (p *Provider) SetDefaults() {
 	p.ProxyNextUpstream = defaultProxyNextUpstream
 	p.ProxyNextUpstreamTries = defaultProxyNextUpstreamTries
 	p.UpstreamKeepaliveTimeout = defaultUpstreamKeepaliveTimeout
+	p.UpstreamKeepaliveConnections = defaultUpstreamKeepaliveConnections
 	p.StrictValidatePathType = true
 }
 

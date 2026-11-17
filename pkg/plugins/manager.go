@@ -2,17 +2,21 @@ package plugins
 
 import (
 	zipa "archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/zip"
 	"gopkg.in/yaml.v3"
@@ -31,6 +35,8 @@ const pluginsURL = "https://plugins.traefik.io/public/"
 const (
 	hashHeader = "X-Plugin-Hash"
 )
+
+const verifiedHashSuffix = ".verified"
 
 // ManagerOptions the options of a Traefik plugins manager.
 type ManagerOptions struct {
@@ -77,20 +83,44 @@ func NewManager(downloader PluginDownloader, opts ManagerOptions) (*Manager, err
 }
 
 // InstallPlugin download and unzip the given plugin.
+//
+// When the registry is unavailable, the previously downloaded archive is reused,
+// so that a Traefik restart during a registry outage does not disable every plugin.
+// The cached archive is only used if its hash matches the pinned hash of the plugin,
+// or the hash recorded the last time the registry validated it.
 func (m *Manager) InstallPlugin(ctx context.Context, plugin Descriptor) error {
 	hash, err := m.downloader.Download(ctx, plugin.ModuleName, plugin.Version)
 	if err != nil {
-		return fmt.Errorf("unable to download plugin %s: %w", plugin.ModuleName, err)
-	}
-
-	if plugin.Hash != "" {
-		if plugin.Hash != hash {
-			return fmt.Errorf("invalid hash for plugin %s, expected %s, got %s", plugin.ModuleName, plugin.Hash, hash)
+		if !isRegistryUnavailable(err) {
+			return fmt.Errorf("unable to download plugin %s: %w", plugin.ModuleName, err)
 		}
+
+		if cacheErr := m.checkCachedArchive(ctx, plugin); cacheErr != nil {
+			return fmt.Errorf("unable to download plugin %s: %w", plugin.ModuleName, errors.Join(err, cacheErr))
+		}
+
+		log.Ctx(ctx).Warn().Err(err).
+			Str("module", plugin.ModuleName).
+			Str("version", plugin.Version).
+			Msg("Plugin download failed, using the previously verified cached archive")
 	} else {
-		err = m.downloader.Check(ctx, plugin.ModuleName, plugin.Version, hash)
-		if err != nil {
-			return fmt.Errorf("unable to check archive integrity of the plugin %s: %w", plugin.ModuleName, err)
+		if plugin.Hash != "" {
+			if plugin.Hash != hash {
+				return fmt.Errorf("invalid hash for plugin %s, expected %s, got %s", plugin.ModuleName, plugin.Hash, hash)
+			}
+		} else {
+			err = m.downloader.Check(ctx, plugin.ModuleName, plugin.Version, hash)
+			if err != nil {
+				return fmt.Errorf("unable to check archive integrity of the plugin %s: %w", plugin.ModuleName, err)
+			}
+		}
+
+		verifiedHashPath := m.buildVerifiedHashPath(plugin.ModuleName, plugin.Version)
+		if err = os.WriteFile(verifiedHashPath, []byte(hash), 0o600); err != nil {
+			log.Ctx(ctx).Warn().Err(err).
+				Str("module", plugin.ModuleName).
+				Str("version", plugin.Version).
+				Msg("Unable to record the verified plugin archive hash, the archive will not be reused if the registry is unavailable")
 		}
 	}
 
@@ -155,6 +185,11 @@ func (m *Manager) CleanArchives(plugins map[string]Descriptor) error {
 				if err = os.RemoveAll(archivePath); err != nil {
 					return fmt.Errorf("failed to remove archive %s: %w", archivePath, err)
 				}
+
+				verifiedHashPath := m.buildVerifiedHashPath(pName, pVersion)
+				if err = os.RemoveAll(verifiedHashPath); err != nil {
+					return fmt.Errorf("failed to remove archive verified hash %s: %w", verifiedHashPath, err)
+				}
 			}
 		}
 	}
@@ -192,6 +227,38 @@ func (m *Manager) ResetAll() error {
 	err = resetDirectory(m.archives)
 	if err != nil {
 		return fmt.Errorf("unable to reset plugins archives directory: %w", err)
+	}
+
+	return nil
+}
+
+// checkCachedArchive verifies that the cached archive of the plugin can be used without downloading it again.
+func (m *Manager) checkCachedArchive(ctx context.Context, plugin Descriptor) error {
+	hash, err := computeHash(m.buildArchivePath(plugin.ModuleName, plugin.Version))
+	if err != nil {
+		return fmt.Errorf("no usable cached archive: %w", err)
+	}
+
+	if plugin.Hash != "" {
+		if plugin.Hash != hash {
+			return fmt.Errorf("invalid hash for plugin %s, expected %s, got %s", plugin.ModuleName, plugin.Hash, hash)
+		}
+
+		return nil
+	}
+
+	verifiedHash, err := os.ReadFile(m.buildVerifiedHashPath(plugin.ModuleName, plugin.Version))
+	if err != nil {
+		return fmt.Errorf("cached archive was never verified: %w", err)
+	}
+
+	if subtle.ConstantTimeCompare(bytes.TrimSpace(verifiedHash), []byte(hash)) != 1 {
+		return errors.New("cached archive does not match its verified hash")
+	}
+
+	// The validation endpoint may still be reachable, and an explicit rejection (e.g. a revoked version) must not be ignored.
+	if err = m.downloader.Check(ctx, plugin.ModuleName, plugin.Version, hash); err != nil && !isRegistryUnavailable(err) {
+		return fmt.Errorf("unable to check archive integrity of the plugin %s: %w", plugin.ModuleName, err)
 	}
 
 	return nil
@@ -308,6 +375,20 @@ func (m *Manager) unzipFile(f *zipa.File, dest string) error {
 
 func (m *Manager) buildArchivePath(pName, pVersion string) string {
 	return filepath.Join(m.archives, filepath.FromSlash(pName), pVersion+".zip")
+}
+
+func (m *Manager) buildVerifiedHashPath(pName, pVersion string) string {
+	return m.buildArchivePath(pName, pVersion) + verifiedHashSuffix
+}
+
+// isRegistryUnavailable reports whether the error comes from the registry being unreachable or failing,
+// as opposed to the registry answering that the plugin version is unknown or invalid.
+func isRegistryUnavailable(err error) bool {
+	if statusErr, ok := errors.AsType[*registryStatusError](err); ok {
+		return statusErr.StatusCode >= http.StatusInternalServerError || statusErr.StatusCode == http.StatusTooManyRequests
+	}
+
+	return true
 }
 
 func resetDirectory(dir string) error {

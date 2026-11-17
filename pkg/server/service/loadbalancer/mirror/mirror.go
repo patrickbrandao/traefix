@@ -117,9 +117,33 @@ func (m *Mirroring) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			// prepare request, update body from buffer
 			r := rr.Clone(req.Context())
 
-			handler.ServeHTTP(m.rw, r.WithContext(mirrorContext(r.Context())))
+			if !m.mirrorBody {
+				// The main handler has consumed, and the server may have closed, the shared body:
+				// the mirrored request must neither read nor advertise it.
+				r.Body = http.NoBody
+				r.ContentLength = 0
+				r.TransferEncoding = nil
+				r.Header.Del("Content-Length")
+			}
+
+			serveMirror(handler, m.rw, r.WithContext(mirrorContext(r.Context())))
 		}
 	})
+}
+
+// serveMirror isolates each mirror, so that a proxy aborting a mirrored response
+// with http.ErrAbortHandler neither skips the next mirrors nor logs a stack trace.
+func serveMirror(handler http.Handler, rw http.ResponseWriter, req *http.Request) {
+	defer func() {
+		if err := recover(); err != nil {
+			if err == http.ErrAbortHandler { //nolint:errorlint // recover returns the panic value as is.
+				return
+			}
+			panic(err)
+		}
+	}()
+
+	handler.ServeHTTP(rw, req)
 }
 
 // mirrorContext returns the context of a mirrored request.

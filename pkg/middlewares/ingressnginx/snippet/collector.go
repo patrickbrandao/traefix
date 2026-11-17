@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/traefik/traefik/v3/pkg/middlewares/ingressnginx"
 	"github.com/tufanbarisyildirim/gonginx/config"
 )
 
@@ -27,7 +28,12 @@ type PhaseCollector struct {
 	// it completely replaces parent block's add_header directives.
 	HeaderFilterOverride []addHeaderEntry
 
-	// HeaderFilterAdditive contains additive header directives (more_*, proxy_hide_header, expires).
+	// HeaderFilterHide contains proxy_hide_header directives.
+	// They are applied to the upstream response headers before add_header and the additive directives.
+	// Both server and location apply.
+	HeaderFilterHide []action
+
+	// HeaderFilterAdditive contains additive header directives (more_*, expires).
 	// Both server and location apply.
 	HeaderFilterAdditive []action
 
@@ -162,7 +168,9 @@ func buildCollectableAction(d config.IDirective) (CollectableAction, error) {
 	// Content phase - collect
 	case "auth_request_set":
 		return createAuthRequestSetCollectable(d)
-	case "proxy_set_header":
+	// grpc_set_header is the gRPC version of proxy_set_header in NGINX.
+	// Traefik forwards gRPC and HTTP requests the same way, so both directives do the same thing.
+	case "proxy_set_header", "grpc_set_header":
 		return createProxySetHeaderCollectable(d)
 	case "proxy_method":
 		return createProxyMethodCollectable(d)
@@ -447,7 +455,7 @@ func createProxyHideHeaderCollectable(d config.IDirective) (CollectableAction, e
 	}
 
 	return func(rw http.ResponseWriter, req *http.Request, ctx *actionContext, pc *PhaseCollector) (bool, error) {
-		pc.HeaderFilterAdditive = append(pc.HeaderFilterAdditive, act)
+		pc.HeaderFilterHide = append(pc.HeaderFilterHide, act)
 		return false, nil
 	}, nil
 }
@@ -471,37 +479,38 @@ type locationMatcher func(req *http.Request) bool
 func buildLocationMatcher(pathPattern string) (locationMatcher, error) {
 	// Check ~* (case-insensitive regex) before ~ (case-sensitive regex)
 	if pattern, ok := strings.CutPrefix(pathPattern, "~*"); ok {
-		pattern = strings.TrimSpace(pattern)
+		pattern = trimQuote(strings.TrimSpace(pattern))
 		re, err := compileRegex("(?i)" + pattern)
 		if err != nil {
 			return nil, fmt.Errorf("compiling location regex: %w", err)
 		}
 		return func(req *http.Request) bool {
-			return re.MatchString(req.URL.Path)
+			return re.MatchString(ingressnginx.OriginalPath(req))
 		}, nil
 	}
 
 	if pattern, ok := strings.CutPrefix(pathPattern, "~"); ok {
-		pattern = strings.TrimSpace(pattern)
+		pattern = trimQuote(strings.TrimSpace(pattern))
 		re, err := compileRegex(pattern)
 		if err != nil {
 			return nil, fmt.Errorf("compiling location regex: %w", err)
 		}
 		return func(req *http.Request) bool {
-			return re.MatchString(req.URL.Path)
+			return re.MatchString(ingressnginx.OriginalPath(req))
 		}, nil
 	}
 
 	if exact, ok := strings.CutPrefix(pathPattern, "="); ok {
-		exactPath := strings.TrimSpace(exact)
+		exactPath := trimQuote(strings.TrimSpace(exact))
 		return func(req *http.Request) bool {
-			return req.URL.Path == exactPath
+			return ingressnginx.OriginalPath(req) == exactPath
 		}, nil
 	}
 
 	// Prefix match
+	pathPattern = trimQuote(strings.TrimSpace(pathPattern))
 	return func(req *http.Request) bool {
-		return strings.HasPrefix(req.URL.Path, pathPattern)
+		return strings.HasPrefix(ingressnginx.OriginalPath(req), pathPattern)
 	}, nil
 }
 

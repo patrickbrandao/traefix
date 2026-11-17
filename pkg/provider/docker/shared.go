@@ -79,6 +79,9 @@ func parseContainer(container containertypes.InspectResponse) dockerData {
 	if container.Config != nil && container.Config.Labels != nil {
 		dData.Labels = container.Config.Labels
 	}
+	if container.Config != nil && container.Config.ExposedPorts != nil {
+		dData.ExposedPorts = container.Config.ExposedPorts
+	}
 
 	if container.NetworkSettings != nil {
 		if container.NetworkSettings.Ports != nil {
@@ -106,7 +109,7 @@ func parseContainer(container containertypes.InspectResponse) dockerData {
 
 type ClientConfig struct {
 	Username          string           `description:"Username for Basic HTTP authentication." json:"username,omitempty" toml:"username,omitempty" yaml:"username,omitempty"`
-	Password          string           `description:"Password for Basic HTTP authentication." json:"password,omitempty" toml:"password,omitempty" yaml:"password,omitempty"`
+	Password          string           `description:"Password for Basic HTTP authentication." json:"password,omitempty" toml:"password,omitempty" yaml:"password,omitempty" loggable:"false"`
 	Endpoint          string           `description:"Docker server endpoint. Can be a TCP or a Unix socket endpoint." json:"endpoint,omitempty" toml:"endpoint,omitempty" yaml:"endpoint,omitempty"`
 	TLS               *types.ClientTLS `description:"Enable Docker TLS support." json:"tls,omitempty" toml:"tls,omitempty" yaml:"tls,omitempty" export:"true"`
 	HTTPClientTimeout ptypes.Duration  `description:"Client timeout for HTTP connections." json:"httpClientTimeout,omitempty" toml:"httpClientTimeout,omitempty" yaml:"httpClientTimeout,omitempty" export:"true"`
@@ -190,13 +193,18 @@ func getPort(container dockerData, serverPort string) string {
 	if len(serverPort) > 0 {
 		return serverPort
 	}
-	if len(container.NetworkSettings.Ports) == 0 {
-		return ""
-	}
 
 	var ports []networktypes.Port
 	for port := range container.NetworkSettings.Ports {
 		ports = append(ports, port)
+	}
+	if len(ports) == 0 {
+		for port := range container.ExposedPorts {
+			ports = append(ports, port)
+		}
+	}
+	if len(ports) == 0 {
+		return ""
 	}
 
 	slices.SortFunc(ports, func(a, b networktypes.Port) int {

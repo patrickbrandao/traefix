@@ -219,7 +219,8 @@ func (s *RestSuite) TestSimpleConfiguration() {
 		require.NoError(s.T(), err)
 		assert.Equal(s.T(), http.StatusOK, response.StatusCode)
 
-		err = try.GetRequest("http://127.0.0.1:8080/api/rawdata", time.Second, try.BodyContains(test.ruleMatch))
+		// The new configuration of the rest provider is applied only once providersThrottleDuration (2s) has elapsed.
+		err = try.GetRequest("http://127.0.0.1:8080/api/rawdata", 3*time.Second, try.BodyContains(test.ruleMatch))
 		require.NoError(s.T(), err)
 
 		err = try.GetRequest("http://127.0.0.1:8000/", time.Second, try.StatusCodeIs(http.StatusOK))

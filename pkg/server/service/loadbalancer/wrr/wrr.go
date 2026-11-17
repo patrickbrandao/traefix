@@ -159,7 +159,7 @@ func (b *Balancer) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			b.handlersMu.RUnlock()
 			if ok {
 				if rewrite {
-					if err := b.sticky.WriteStickyCookie(rw, h.Name); err != nil {
+					if err := b.sticky.WriteStickyCookie(rw, req, h.Name); err != nil {
 						log.Error().Err(err).Msg("Writing sticky cookie")
 					}
 				}
@@ -181,7 +181,7 @@ func (b *Balancer) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	if b.sticky != nil {
-		if err := b.sticky.WriteStickyCookie(rw, server.name); err != nil {
+		if err := b.sticky.WriteStickyCookie(rw, req, server.name); err != nil {
 			log.Error().Err(err).Msg("Error while writing sticky cookie")
 		}
 	}
@@ -226,7 +226,23 @@ func (b *Balancer) nextServer() (*namedHandler, error) {
 	b.handlersMu.Lock()
 	defer b.handlersMu.Unlock()
 
-	if len(b.handlers) == 0 || len(b.status) == 0 || len(b.fenced) == len(b.handlers) {
+	// Fenced (terminating yet still serving) handlers only get new requests when no other healthy handler is left,
+	// like kube-proxy does, so that single replica or Recreate rollouts do not answer 503 during the termination.
+	// Selectability is computed from the heap itself, so the loop below is guaranteed to end.
+	var healthy, healthyNotFenced bool
+	for _, h := range b.handlers {
+		if _, ok := b.status[h.name]; !ok {
+			continue
+		}
+
+		healthy = true
+		if _, fenced := b.fenced[h.name]; !fenced {
+			healthyNotFenced = true
+			break
+		}
+	}
+
+	if !healthy {
 		return nil, errNoAvailableServer
 	}
 
@@ -240,12 +256,15 @@ func (b *Balancer) nextServer() (*namedHandler, error) {
 		handler.deadline += 1 / handler.weight
 
 		heap.Push(b, handler)
-		if _, ok := b.status[handler.name]; ok {
-			if _, ok := b.fenced[handler.name]; !ok {
-				// do not select a fenced handler.
-				break
-			}
+		if _, ok := b.status[handler.name]; !ok {
+			continue
 		}
+
+		if _, fenced := b.fenced[handler.name]; fenced && healthyNotFenced {
+			continue
+		}
+
+		break
 	}
 
 	log.Debug().Msgf("Service selected by WRR: %s", handler.name)

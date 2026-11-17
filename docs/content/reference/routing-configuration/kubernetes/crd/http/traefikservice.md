@@ -16,6 +16,12 @@ Services configure how to reach the actual endpoints that will eventually handle
 
 The WRR is able to load balance the requests between multiple services based on weights. The WRR `TraefikService` allows you to load balance the traffic between Kubernetes Services and other instances of `TraefikService` (another WRR service -, or a mirroring service).
 
+!!! info "Health Check Propagation"
+
+    A WRR `TraefikService`, as well as the implicit WRR built when an `IngressRoute` route lists several services, has no `healthCheck` option of its own.
+    When every one of its services is a Kubernetes Service of type `ExternalName` with its own [`healthCheck`](./service.md#configuration-options), Traefik takes their health into account: an unhealthy service is excluded from the load balancing.
+    If at least one service is a `TraefikService`, or has no `healthCheck`, the health of the services is not taken into account at this level.
+
 ### Configuration Example
 
 ```yaml tab="IngressRoute"

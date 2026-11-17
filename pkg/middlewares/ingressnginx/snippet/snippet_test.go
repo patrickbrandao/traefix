@@ -13,9 +13,67 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
+	"github.com/traefik/traefik/v3/pkg/middlewares/ingressnginx"
+	"github.com/traefik/traefik/v3/pkg/middlewares/ingressnginx/rewritetarget"
 	"github.com/traefik/traefik/v3/pkg/server/service/kerberos"
 	"github.com/traefik/traefik/v3/pkg/testhelpers"
 )
+
+func TestServerSnippetLocationMatchesOriginalPathBeforeRewriteTarget(t *testing.T) {
+	nextCalled := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	snippetHandler, err := New(t.Context(), next, &dynamic.Snippet{
+		ServerSnippet: `
+location ~* "^/prometheus/-(.*)" {
+		return 403;
+}`,
+	}, "test-snippet")
+	require.NoError(t, err)
+
+	handler, err := rewritetarget.New(t.Context(), snippetHandler, dynamic.RewriteTarget{
+		Regex:       `^/prometheus/?(.*)`,
+		Replacement: `/$1`,
+	}, "test-rewrite-target")
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/prometheus/-bad", nil)
+	rw := httptest.NewRecorder()
+	handler.ServeHTTP(rw, req)
+
+	assert.Equal(t, http.StatusForbidden, rw.Code)
+	assert.False(t, nextCalled)
+}
+
+func TestServerSnippetDenyLocationMatchesOriginalPathBeforeRewriteTarget(t *testing.T) {
+	var nextCalled bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+	})
+
+	snippetHandler, err := New(t.Context(), next, &dynamic.Snippet{
+		ServerSnippet: `
+location = "/admin/secret" {
+	deny all;
+}`,
+	}, "test-snippet")
+	require.NoError(t, err)
+
+	handler, err := rewritetarget.New(t.Context(), snippetHandler, dynamic.RewriteTarget{
+		Regex:       `^/admin/(.*)`,
+		Replacement: `/$1`,
+	}, "test-rewrite-target")
+	require.NoError(t, err)
+
+	rw := httptest.NewRecorder()
+	handler.ServeHTTP(rw, httptest.NewRequest(http.MethodGet, "http://example.com/admin/secret", nil))
+
+	assert.Equal(t, http.StatusForbidden, rw.Code)
+	assert.False(t, nextCalled)
+}
 
 func Test_New(t *testing.T) {
 	testCases := []struct {
@@ -261,6 +319,30 @@ func Test_New(t *testing.T) {
 	}
 }
 
+func TestTrimQuote(t *testing.T) {
+	testCases := []struct {
+		in   string
+		want string
+	}{
+		{in: `"value"`, want: "value"},
+		{in: `'value'`, want: "value"},
+		{in: `'X-Single-Quoted'`, want: "X-Single-Quoted"},
+		{in: `""`, want: ""},
+		{in: `''`, want: ""},
+		{in: `value`, want: "value"},
+		{in: `'foo"`, want: `'foo"`},
+		{in: `"foo'`, want: `"foo'`},
+		{in: `'`, want: `'`},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.in, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, test.want, trimQuote(test.in))
+		})
+	}
+}
+
 func Test_Directives(t *testing.T) {
 	testCases := []struct {
 		desc                       string
@@ -274,10 +356,12 @@ func Test_Directives(t *testing.T) {
 		path                       string
 		remoteAddr                 string
 		requestHeaders             map[string]string
+		upstreamResponseHeaders    map[string]string
 		expectedResponseHeaders    map[string]string
 		unexpectedResponseHeaders  []string
 		expectedRequestHeaders     map[string]string
 		expectedAuthRequestHeaders map[string]string
+		originalURI                string
 		expectedStatusCode         int
 		expectedBody               string
 		expectedPath               string
@@ -390,6 +474,13 @@ proxy_set_header X-Custom-Uri $request_uri;
 			},
 		},
 		{
+			desc:                 "grpc_set_header directive",
+			configurationSnippet: `grpc_set_header X-Custom-Method $request_method;`,
+			expectedRequestHeaders: map[string]string{
+				"X-Custom-Method": "GET",
+			},
+		},
+		{
 			desc: "proxy_set_header with empty value removes header",
 			configurationSnippet: `
 proxy_set_header Accept-Encoding "";
@@ -408,6 +499,17 @@ proxy_set_header "X-Custom-Header" "my-value";
 `,
 			expectedRequestHeaders: map[string]string{
 				"X-Custom-Header": "my-value",
+			},
+		},
+		{
+			desc: "proxy_set_header with single quoted name and value",
+			configurationSnippet: `
+proxy_set_header 'X-Single-Quoted' "value";
+proxy_set_header X-Quoted-Value 'single';
+`,
+			expectedRequestHeaders: map[string]string{
+				"X-Single-Quoted": "value",
+				"X-Quoted-Value":  "single",
 			},
 		},
 		{
@@ -709,6 +811,50 @@ location ~ ^/api/v[0-9]+/ {
 			path:               "/api/v2/users",
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       "versioned",
+		},
+		{
+			desc: "location directive with quoted regex match and return",
+			serverSnippet: `
+location ~ "^/api/v[0-9]+/" {
+	return 200 "quoted-versioned";
+}
+`,
+			path:               "/api/v2/users",
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "quoted-versioned",
+		},
+		{
+			desc: "location directive with quoted case-insensitive regex match and return",
+			serverSnippet: `
+location ~* "^/API/V[0-9]+/" {
+	return 200 "quoted-versioned";
+}
+`,
+			path:               "/api/v2/users",
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "quoted-versioned",
+		},
+		{
+			desc: "location directive with quoted exact match and return",
+			serverSnippet: `
+location = "/exact" {
+	return 200 "quoted-exact";
+}
+`,
+			path:               "/exact",
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "quoted-exact",
+		},
+		{
+			desc: "location directive with quoted prefix match and return",
+			serverSnippet: `
+location "/quoted-prefix" {
+	return 200 "quoted-prefix";
+}
+`,
+			path:               "/quoted-prefix/users",
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "quoted-prefix",
 		},
 		{
 			desc: "location directive with regex match - not matching continues to next",
@@ -1289,7 +1435,42 @@ deny all;
 			configurationSnippet: `
 proxy_hide_header X-Powered-By;
 `,
+			upstreamResponseHeaders:   map[string]string{"X-Powered-By": "upstream"},
 			unexpectedResponseHeaders: []string{"X-Powered-By"},
+		},
+		{
+			desc: "proxy_hide_header in server snippet removes response header",
+			serverSnippet: `
+proxy_hide_header X-Powered-By;
+`,
+			upstreamResponseHeaders:   map[string]string{"X-Powered-By": "upstream"},
+			unexpectedResponseHeaders: []string{"X-Powered-By"},
+		},
+		{
+			desc: "proxy_hide_header does not remove header added by add_header",
+			configurationSnippet: `
+proxy_hide_header Access-Control-Allow-Origin;
+add_header Access-Control-Allow-Origin "*" always;
+`,
+			upstreamResponseHeaders: map[string]string{"Access-Control-Allow-Origin": "https://upstream.example.com"},
+			expectedResponseHeaders: map[string]string{"Access-Control-Allow-Origin": "*"},
+		},
+		{
+			desc: "add_header resolves upstream_http variable from hidden header",
+			configurationSnippet: `
+proxy_hide_header Access-Control-Allow-Origin;
+add_header X-Copied $upstream_http_access_control_allow_origin always;
+`,
+			upstreamResponseHeaders:   map[string]string{"Access-Control-Allow-Origin": "*"},
+			expectedResponseHeaders:   map[string]string{"X-Copied": "*"},
+			unexpectedResponseHeaders: []string{"Access-Control-Allow-Origin"},
+		},
+		{
+			desc: "add_header skips header with empty value",
+			configurationSnippet: `
+add_header X-Copied $upstream_http_access_control_allow_origin always;
+`,
+			unexpectedResponseHeaders: []string{"X-Copied"},
 		},
 		// --- expires tests ---
 		{
@@ -1559,6 +1740,50 @@ proxy_method $request_method;
 			expectNextCalled:   new(true),
 		},
 		{
+			// Nothing else sets these headers, so the test only passes if $authHeaderN is resolved.
+			desc: "grpc_set_header with $authHeaderN variables",
+			configurationSnippet: `
+grpc_set_header X-Grpc-Auth $authHeader0;
+grpc_set_header X-Grpc-Req $authHeader1;
+`,
+			authResponseHeaders: []string{"Authorization", "Request-Id"},
+			authServerHandler: func(t *testing.T) http.HandlerFunc {
+				t.Helper()
+
+				return func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Authorization", "Bearer verified-token")
+					w.Header().Set("Request-Id", "req-42")
+					w.WriteHeader(http.StatusOK)
+				}
+			},
+			expectedRequestHeaders: map[string]string{
+				"X-Grpc-Auth": "Bearer verified-token",
+				"X-Grpc-Req":  "req-42",
+			},
+			expectedStatusCode: http.StatusOK,
+			expectNextCalled:   new(true),
+		},
+		{
+			// The header keeps the verified token, not the literal "$authHeader0".
+			desc:                 "grpc_set_header Authorization with $authHeader0",
+			configurationSnippet: `grpc_set_header "Authorization" $authHeader0;`,
+			authResponseHeaders:  []string{"Authorization", "Request-Id"},
+			authServerHandler: func(t *testing.T) http.HandlerFunc {
+				t.Helper()
+
+				return func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Authorization", "Bearer verified-token")
+					w.Header().Set("Request-Id", "req-42")
+					w.WriteHeader(http.StatusOK)
+				}
+			},
+			expectedRequestHeaders: map[string]string{
+				"Authorization": "Bearer verified-token",
+			},
+			expectedStatusCode: http.StatusOK,
+			expectNextCalled:   new(true),
+		},
+		{
 			desc:        "auth-snippet proxy_set_header modifies auth request",
 			authSnippet: `proxy_set_header X-Custom-Auth "auth-value";`,
 			authServerHandler: func(t *testing.T) http.HandlerFunc {
@@ -1585,6 +1810,28 @@ proxy_method $request_method;
 			},
 			expectedStatusCode: http.StatusOK,
 			expectNextCalled:   new(true),
+		},
+		{
+			desc:                 "forward auth receives the client URI after a configuration-snippet rewrite",
+			configurationSnippet: `rewrite ^/admin/(.*)$ /public/$1 break;`,
+			path:                 "/admin/secret?x=1",
+			expectedAuthRequestHeaders: map[string]string{
+				"X-Forwarded-Uri": "/admin/secret?x=1",
+			},
+			expectedPath:     "/public/secret",
+			expectedQuery:    "x=1",
+			expectNextCalled: new(true),
+		},
+		{
+			desc:        "forward auth preserves original forwarded URI",
+			originalURI: "/application/query?tenant=acme",
+			expectedAuthRequestHeaders: map[string]string{
+				"X-Forwarded-Uri": "/application/query?tenant=acme",
+			},
+			expectedRequestHeaders: map[string]string{
+				"X-Forwarded-Uri": "",
+			},
+			expectNextCalled: new(true),
 		},
 		{
 			desc: "auth-snippet set directive creates variable for proxy_set_header",
@@ -1821,6 +2068,9 @@ if ($http_x_block_auth = "yes") {
 				for header := range test.expectedRequestHeaders {
 					capturedRequestHeaders[header] = r.Header.Get(header)
 				}
+				for k, v := range test.upstreamResponseHeaders {
+					w.Header().Set(k, v)
+				}
 				w.WriteHeader(http.StatusOK)
 			})
 
@@ -1876,6 +2126,9 @@ if ($http_x_block_auth = "yes") {
 			for k, v := range test.requestHeaders {
 				req.Header.Set(k, v)
 			}
+			if test.originalURI != "" {
+				req = ingressnginx.WithOriginalURI(req, test.originalURI)
+			}
 			rw := httptest.NewRecorder()
 
 			handler.ServeHTTP(rw, req)
@@ -1907,7 +2160,7 @@ if ($http_x_block_auth = "yes") {
 			}
 
 			for _, header := range test.unexpectedResponseHeaders {
-				assert.Empty(t, rw.Header().Get(header), "response header %s should not be set", header)
+				assert.Empty(t, rw.Header().Values(header), "response header %s should not be set", header)
 			}
 
 			for header, expectedValue := range test.expectedRequestHeaders {

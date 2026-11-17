@@ -142,6 +142,13 @@ Servers represent individual backend instances for your service. The [service lo
 
 The `strategy` option on the load balancer determines how traffic is distributed among the backend servers.
 
+!!! info "Terminating Kubernetes endpoints"
+
+    With the Kubernetes providers, servers backed by terminating yet still serving endpoints are fenced:
+    they only keep receiving the requests tied to their sticky cookie.
+    When no other healthy server is left, for example during the rollout of a single replica or with the `Recreate` deployment strategy,
+    every strategy sends the new requests to the fenced servers instead of answering `503`.
+
 #### Weighted Round Robin (wrr)
 
 The default strategy. Distributes requests evenly across all servers in rotation, respecting server weights.
@@ -305,6 +312,8 @@ Below are the available options for the health check mechanism:
 | <a id="opt-headers" href="#opt-headers" title="#opt-headers">`headers`</a> | Defines custom headers to be sent to the health check endpoint.                                                               |         | No       |
 | <a id="opt-followRedirects" href="#opt-followRedirects" title="#opt-followRedirects">`followRedirects`</a> | Defines whether redirects should be followed during the health check calls.                                                   | true    | No       |
 | <a id="opt-method" href="#opt-method" title="#opt-method">`method`</a> | Defines the HTTP method that will be used while connecting to the endpoint.                                                   | GET     | No       |
+| <a id="opt-body" href="#opt-body" title="#opt-body">`body`</a> | Defines the request body sent to the health check endpoint, for example a JSON-RPC payload sent with the `POST` method. Ignored when `mode` is `grpc`. | "" | No |
+| <a id="opt-maxConcurrency" href="#opt-maxConcurrency" title="#opt-maxConcurrency">`maxConcurrency`</a> | Defines the maximum number of servers of the service checked at the same time. By default, the servers are checked one after the other, so a slow or unreachable server delays the checks of the next ones. | 1 | No |
 | <a id="opt-status" href="#opt-status" title="#opt-status">`status`</a> | Defines the expected HTTP status code of the response to the health check request.                                            |         | No       |
 
 ### Sticky Sessions

@@ -55,6 +55,7 @@ func TestDecodeConfiguration(t *testing.T) {
 		"traefik.http.middlewares.Middleware7.forwardauth.maxbodysize":                             "42",
 		"traefik.http.middlewares.Middleware7.forwardauth.preserveRequestMethod":                   "true",
 		"traefik.http.middlewares.Middleware7.forwardauth.maxresponsebodysize":                     "42",
+		"traefik.http.middlewares.Middleware7.forwardauth.timeout":                                 "1s",
 		"traefik.http.middlewares.Middleware8.headers.accesscontrolallowcredentials":               "true",
 		"traefik.http.middlewares.Middleware8.headers.allowedhosts":                                "foobar, fiibar",
 		"traefik.http.middlewares.Middleware8.headers.accesscontrolallowheaders":                   "X-foobar, X-fiibar",
@@ -601,6 +602,7 @@ func TestDecodeConfiguration(t *testing.T) {
 						MaxBodySize:           new(int64(42)),
 						PreserveRequestMethod: true,
 						MaxResponseBodySize:   new(int64(42)),
+						Timeout:               ptypes.Duration(time.Second),
 					},
 				},
 				"Middleware8": {
@@ -977,7 +979,8 @@ func TestEncodeConfiguration(t *testing.T) {
 				},
 				"Middleware11": {
 					PassTLSClientCert: &dynamic.PassTLSClientCert{
-						PEM: true,
+						PEM:      true,
+						OnlyLeaf: true,
 						Info: &dynamic.TLSClientCertificateInfo{
 							NotAfter:     true,
 							NotBefore:    true,
@@ -1163,6 +1166,7 @@ func TestEncodeConfiguration(t *testing.T) {
 						MaxBodySize:           new(int64(42)),
 						PreserveRequestMethod: true,
 						MaxResponseBodySize:   new(int64(42)),
+						Timeout:               ptypes.Duration(time.Second),
 					},
 				},
 				"Middleware8": {
@@ -1346,6 +1350,7 @@ func TestEncodeConfiguration(t *testing.T) {
 
 	expected := map[string]string{
 		"traefik.HTTP.Middlewares.Middleware0.AddPrefix.Prefix":                                    "foobar",
+		"traefik.HTTP.Middlewares.Middleware1.BasicAuth.AllowCORSPreflight":                        "false",
 		"traefik.HTTP.Middlewares.Middleware1.BasicAuth.HeaderField":                               "foobar",
 		"traefik.HTTP.Middlewares.Middleware1.BasicAuth.Realm":                                     "foobar",
 		"traefik.HTTP.Middlewares.Middleware1.BasicAuth.RemoveHeader":                              "true",
@@ -1386,6 +1391,7 @@ func TestEncodeConfiguration(t *testing.T) {
 		"traefik.HTTP.Middlewares.Middleware7.ForwardAuth.PreserveLocationHeader":                  "false",
 		"traefik.HTTP.Middlewares.Middleware7.ForwardAuth.PreserveRequestMethod":                   "true",
 		"traefik.HTTP.Middlewares.Middleware7.ForwardAuth.MaxResponseBodySize":                     "42",
+		"traefik.HTTP.Middlewares.Middleware7.ForwardAuth.Timeout":                                 "1000000000",
 		"traefik.HTTP.Middlewares.Middleware8.Headers.AccessControlAllowCredentials":               "true",
 		"traefik.HTTP.Middlewares.Middleware8.Headers.AccessControlAllowHeaders":                   "X-foobar, X-fiibar",
 		"traefik.HTTP.Middlewares.Middleware8.Headers.AccessControlAllowMethods":                   "GET, PUT",
@@ -1453,6 +1459,7 @@ func TestEncodeConfiguration(t *testing.T) {
 		"traefik.HTTP.Middlewares.Middleware11.PassTLSClientCert.Info.Issuer.SerialNumber":         "true",
 		"traefik.HTTP.Middlewares.Middleware11.PassTLSClientCert.Info.Issuer.DomainComponent":      "true",
 		"traefik.HTTP.Middlewares.Middleware11.PassTLSClientCert.PEM":                              "true",
+		"traefik.HTTP.Middlewares.Middleware11.PassTLSClientCert.OnlyLeaf":                         "true",
 		"traefik.HTTP.Middlewares.Middleware12.RateLimit.Average":                                  "42",
 		"traefik.HTTP.Middlewares.Middleware12.RateLimit.Period":                                   "1000000000",
 		"traefik.HTTP.Middlewares.Middleware12.RateLimit.Burst":                                    "42",
@@ -1512,6 +1519,7 @@ func TestEncodeConfiguration(t *testing.T) {
 		"traefik.HTTP.Services.Service0.LoadBalancer.HealthCheck.Method":               "foobar",
 		"traefik.HTTP.Services.Service0.LoadBalancer.HealthCheck.Status":               "401",
 		"traefik.HTTP.Services.Service0.LoadBalancer.HealthCheck.Port":                 "42",
+		"traefik.HTTP.Services.Service0.LoadBalancer.HealthCheck.MaxConcurrency":       "0",
 		"traefik.HTTP.Services.Service0.LoadBalancer.HealthCheck.Scheme":               "foobar",
 		"traefik.HTTP.Services.Service0.LoadBalancer.HealthCheck.Timeout":              "1000000000",
 		"traefik.HTTP.Services.Service0.LoadBalancer.PassHostHeader":                   "true",
@@ -1537,6 +1545,7 @@ func TestEncodeConfiguration(t *testing.T) {
 		"traefik.HTTP.Services.Service1.LoadBalancer.HealthCheck.Method":               "foobar",
 		"traefik.HTTP.Services.Service1.LoadBalancer.HealthCheck.Status":               "401",
 		"traefik.HTTP.Services.Service1.LoadBalancer.HealthCheck.Port":                 "42",
+		"traefik.HTTP.Services.Service1.LoadBalancer.HealthCheck.MaxConcurrency":       "0",
 		"traefik.HTTP.Services.Service1.LoadBalancer.HealthCheck.Scheme":               "foobar",
 		"traefik.HTTP.Services.Service1.LoadBalancer.HealthCheck.Timeout":              "1000000000",
 		"traefik.HTTP.Services.Service1.LoadBalancer.PassHostHeader":                   "true",

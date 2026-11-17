@@ -60,6 +60,7 @@
       middlewares = ["foobar", "foobar"]
       encodeQuerySemicolons = true
       sanitizePath = true
+      mergeSlashes = true
       maxHeaderBytes = 42
       maxHeaderValueCount = 42
       aliasHeadersStrategy = "foobar"
@@ -93,6 +94,7 @@
       maxConcurrentStreams = 42
     [entryPoints.EntryPoint0.http3]
       advertisedPort = 42
+      initialPacketSize = 1200
     [entryPoints.EntryPoint0.udp]
       timeout = "42s"
     [entryPoints.EntryPoint0.observability]
@@ -217,6 +219,7 @@
     stale = true
     cache = true
     exposedByDefault = true
+    allowEmptyServices = true
     defaultRule = "foobar"
     connectAware = true
     connectByDefault = true
@@ -355,6 +358,9 @@
     [metrics.prometheus.headerLabels]
       name0 = "foobar"
       name1 = "foobar"
+    [metrics.prometheus.responseHeaderLabels]
+      name0 = "foobar"
+      name1 = "foobar"
   [metrics.datadog]
     address = "foobar"
     pushInterval = "42s"
@@ -457,6 +463,10 @@
 [accessLog]
   filePath = "foobar"
   format = "foobar"
+  maxSize = 42
+  maxAge = 42
+  maxBackups = 42
+  compress = true
   bufferingSize = 42
   addInternals = true
   [accessLog.filters]

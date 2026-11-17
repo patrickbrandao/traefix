@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -94,21 +96,31 @@ func NewServiceTCPHealthChecker(ctx context.Context, config *dynamic.TCPServerHe
 }
 
 func (thc *ServiceTCPHealthChecker) Launch(ctx context.Context) {
-	go thc.healthcheck(ctx, thc.unhealthyTargets, thc.unhealthyInterval)
+	// Waits for both loops, so that no check started by the unhealthy loop
+	// outlives Launch when the configuration is reloaded.
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	wg.Go(func() {
+		thc.healthcheck(ctx, thc.unhealthyTargets, thc.unhealthyInterval)
+	})
 
 	thc.healthcheck(ctx, thc.healthyTargets, thc.interval)
 }
 
 func (thc *ServiceTCPHealthChecker) healthcheck(ctx context.Context, targets chan *TCPHealthCheckTarget, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	// Fire immediately so DOWN servers are identified on the first check rather
+	// than after waiting one full interval. Without this, every configuration
+	// reload opens a window (up to interval long) where all servers appear UP.
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
-		case <-ticker.C:
+		case <-timer.C:
 			// We collect the targets to check once for all,
 			// to avoid rechecking a target that has been moved during the health check.
 			var targetsToCheck []*TCPHealthCheckTarget
@@ -163,6 +175,8 @@ func (thc *ServiceTCPHealthChecker) healthcheck(ctx context.Context, targets cha
 
 				// TODO: add a TCP server up metric (like for HTTP).
 			}
+
+			timer.Reset(interval)
 		}
 	}
 }
@@ -199,7 +213,7 @@ func (thc *ServiceTCPHealthChecker) executeHealthCheck(ctx context.Context, conf
 
 	if config.Expect != "" {
 		buf := make([]byte, len(config.Expect))
-		if _, err = conn.Read(buf); err != nil {
+		if _, err = io.ReadFull(conn, buf); err != nil {
 			return fmt.Errorf("reading from %s: %w", addr, err)
 		}
 

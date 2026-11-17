@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -179,13 +180,30 @@ func TestMirroringWithBody(t *testing.T) {
 	assert.Equal(t, numMirrors, int(val))
 }
 
+// serverRequestBody mimics a server request body that rejects reads after close.
+type serverRequestBody struct {
+	reader *bytes.Reader
+	closed bool
+}
+
+func (b *serverRequestBody) Read(p []byte) (int, error) {
+	if b.closed {
+		return 0, http.ErrBodyReadAfterClose
+	}
+	return b.reader.Read(p)
+}
+
+func (b *serverRequestBody) Close() error {
+	b.closed = true
+	return nil
+}
+
 func TestMirroringWithIgnoredBody(t *testing.T) {
 	const numMirrors = 10
 
 	var (
 		countMirror atomic.Int32
 		body        = []byte(`body`)
-		emptyBody   = []byte(``)
 	)
 
 	pool := safe.NewPool(t.Context())
@@ -195,6 +213,10 @@ func TestMirroringWithIgnoredBody(t *testing.T) {
 		bb, err := io.ReadAll(r.Body)
 		assert.NoError(t, err)
 		assert.Equal(t, body, bb)
+
+		// Simulate the server closing the request body after the handler returns.
+		assert.NoError(t, r.Body.Close())
+
 		rw.WriteHeader(http.StatusOK)
 	})
 
@@ -205,13 +227,17 @@ func TestMirroringWithIgnoredBody(t *testing.T) {
 			assert.NotNil(t, r.Body)
 			bb, err := io.ReadAll(r.Body)
 			assert.NoError(t, err)
-			assert.Equal(t, emptyBody, bb)
+			assert.Empty(t, bb)
+			assert.Equal(t, int64(0), r.ContentLength)
+			assert.Empty(t, r.Header.Get("Content-Length"))
 			countMirror.Add(1)
 		}), 100, 100)
 		assert.NoError(t, err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBuffer(body))
+	req := httptest.NewRequest(http.MethodPost, "/", &serverRequestBody{reader: bytes.NewReader(body)})
+	req.ContentLength = int64(len(body))
+	req.Header.Set("Content-Length", strconv.Itoa(len(body)))
 
 	mirror.ServeHTTP(httptest.NewRecorder(), req)
 
@@ -219,6 +245,45 @@ func TestMirroringWithIgnoredBody(t *testing.T) {
 
 	val := countMirror.Load()
 	assert.Equal(t, numMirrors, int(val))
+}
+
+func TestMirroringWithIgnoredChunkedBody(t *testing.T) {
+	body := []byte(`body`)
+	pool := safe.NewPool(t.Context())
+
+	handler := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		bb, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+		assert.Equal(t, body, bb)
+		assert.Equal(t, int64(-1), r.ContentLength)
+		assert.Equal(t, []string{"chunked"}, r.TransferEncoding)
+		assert.NoError(t, r.Body.Close())
+		rw.WriteHeader(http.StatusOK)
+	})
+
+	mirror := New(handler, pool, false, defaultMaxBodySize, false, nil)
+	var mirrored atomic.Bool
+	err := mirror.AddMirror(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		bb, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+		assert.Empty(t, bb)
+		assert.Equal(t, int64(0), r.ContentLength)
+		assert.Empty(t, r.Header.Get("Content-Length"))
+		assert.Empty(t, r.TransferEncoding)
+		mirrored.Store(true)
+	}), 100, 100)
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/", &serverRequestBody{reader: bytes.NewReader(body)})
+	req.ContentLength = -1
+	req.TransferEncoding = []string{"chunked"}
+
+	mirror.ServeHTTP(httptest.NewRecorder(), req)
+	pool.Stop()
+
+	assert.True(t, mirrored.Load())
+	assert.Equal(t, int64(-1), req.ContentLength)
+	assert.Equal(t, []string{"chunked"}, req.TransferEncoding)
 }
 
 func TestCloneRequest(t *testing.T) {
@@ -346,4 +411,30 @@ func TestCloneRequest(t *testing.T) {
 		_, _, err := NewReusableRequest(nil, defaultMaxBodySize)
 		assert.Error(t, err)
 	})
+}
+
+func TestMirroringAbortedMirrorDoesNotSkipNextMirrors(t *testing.T) {
+	var countMirror2 atomic.Int32
+	handler := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
+	})
+	pool := safe.NewPool(t.Context())
+	mirror := New(handler, pool, true, defaultMaxBodySize, false, nil)
+	err := mirror.AddMirror(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		panic(http.ErrAbortHandler)
+	}), 100, 100)
+	assert.NoError(t, err)
+
+	err = mirror.AddMirror(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		countMirror2.Add(1)
+	}), 100, 100)
+	assert.NoError(t, err)
+
+	for range 10 {
+		mirror.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	}
+
+	pool.Stop()
+
+	assert.Equal(t, 10, int(countMirror2.Load()))
 }

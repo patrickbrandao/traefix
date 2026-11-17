@@ -792,7 +792,7 @@ func (s *SimpleSuite) TestXForwardedHeaders() {
 	err = try.Request(req, 1*time.Second,
 		try.StatusCodeIs(http.StatusOK),
 		try.BodyContains("X-Forwarded-Proto", "X-Forwarded-For", "X-Forwarded-Host",
-			"X-Forwarded-Host", "X-Forwarded-Port", "X-Forwarded-Server", "X-Real-Ip", "X-Real-Port", "Forwarded: for="))
+			"X-Forwarded-Host", "X-Forwarded-Port", "X-Forwarded-Server", "X-Real-Ip", "X-Real-Port", "Forwarded: by=", ";for="))
 	require.NoError(s.T(), err)
 }
 

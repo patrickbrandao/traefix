@@ -13,12 +13,16 @@ import (
 const (
 	// ForwardAuthDefaultMaxBodySize is the ForwardAuth.MaxBodySize option default value.
 	ForwardAuthDefaultMaxBodySize int64 = -1
+	// ForwardAuthDefaultTimeout is the ForwardAuth.Timeout option default value.
+	ForwardAuthDefaultTimeout = ptypes.Duration(30 * time.Second)
 	// RetryDefaultMaxRequestBodyBytes is the Retry.MaxRequestBodyBytes option default value.
 	RetryDefaultMaxRequestBodyBytes int64 = 2 * 1024 * 1024 // 2 MB
 	// TapDefaultPath is the tap records Path option default value.
 	TapDefaultPath = "/"
 	// TapDefaultTimeout is the tap records Timeout option default value.
 	TapDefaultTimeout = 10 * time.Second
+	// RedisDefaultDenyOnError is the Redis.DenyOnError option default value.
+	RedisDefaultDenyOnError = true
 )
 
 // +k8s:deepcopy-gen=true
@@ -30,28 +34,30 @@ type Middleware struct {
 	StripPrefixRegex *StripPrefixRegex `json:"stripPrefixRegex,omitempty" toml:"stripPrefixRegex,omitempty" yaml:"stripPrefixRegex,omitempty" export:"true"`
 	ReplacePath      *ReplacePath      `json:"replacePath,omitempty" toml:"replacePath,omitempty" yaml:"replacePath,omitempty" export:"true"`
 	ReplacePathRegex *ReplacePathRegex `json:"replacePathRegex,omitempty" toml:"replacePathRegex,omitempty" yaml:"replacePathRegex,omitempty" export:"true"`
+	QueryParameters  *QueryParameters  `json:"queryParameters,omitempty" toml:"queryParameters,omitempty" yaml:"queryParameters,omitempty" export:"true"`
 	Chain            *Chain            `json:"chain,omitempty" toml:"chain,omitempty" yaml:"chain,omitempty" export:"true"`
 	// Deprecated: please use IPAllowList instead.
-	IPWhiteList       *IPWhiteList       `json:"ipWhiteList,omitempty" toml:"ipWhiteList,omitempty" yaml:"ipWhiteList,omitempty" export:"true"`
-	IPAllowList       *IPAllowList       `json:"ipAllowList,omitempty" toml:"ipAllowList,omitempty" yaml:"ipAllowList,omitempty" export:"true"`
-	Headers           *Headers           `json:"headers,omitempty" toml:"headers,omitempty" yaml:"headers,omitempty" export:"true"`
-	EncodedCharacters *EncodedCharacters `json:"encodedCharacters,omitempty" toml:"encodedCharacters,omitempty" yaml:"encodedCharacters,omitempty" export:"true"`
-	Errors            *ErrorPage         `json:"errors,omitempty" toml:"errors,omitempty" yaml:"errors,omitempty" export:"true"`
-	RateLimit         *RateLimit         `json:"rateLimit,omitempty" toml:"rateLimit,omitempty" yaml:"rateLimit,omitempty" export:"true"`
-	RedirectRegex     *RedirectRegex     `json:"redirectRegex,omitempty" toml:"redirectRegex,omitempty" yaml:"redirectRegex,omitempty" export:"true"`
-	RedirectScheme    *RedirectScheme    `json:"redirectScheme,omitempty" toml:"redirectScheme,omitempty" yaml:"redirectScheme,omitempty" export:"true"`
-	BasicAuth         *BasicAuth         `json:"basicAuth,omitempty" toml:"basicAuth,omitempty" yaml:"basicAuth,omitempty" export:"true"`
-	DigestAuth        *DigestAuth        `json:"digestAuth,omitempty" toml:"digestAuth,omitempty" yaml:"digestAuth,omitempty" export:"true"`
-	ForwardAuth       *ForwardAuth       `json:"forwardAuth,omitempty" toml:"forwardAuth,omitempty" yaml:"forwardAuth,omitempty" export:"true"`
-	InFlightReq       *InFlightReq       `json:"inFlightReq,omitempty" toml:"inFlightReq,omitempty" yaml:"inFlightReq,omitempty" export:"true"`
-	Buffering         *Buffering         `json:"buffering,omitempty" toml:"buffering,omitempty" yaml:"buffering,omitempty" export:"true"`
-	CircuitBreaker    *CircuitBreaker    `json:"circuitBreaker,omitempty" toml:"circuitBreaker,omitempty" yaml:"circuitBreaker,omitempty" export:"true"`
-	Compress          *Compress          `json:"compress,omitempty" toml:"compress,omitempty" yaml:"compress,omitempty" label:"allowEmpty" file:"allowEmpty" kv:"allowEmpty" export:"true"`
-	PassTLSClientCert *PassTLSClientCert `json:"passTLSClientCert,omitempty" toml:"passTLSClientCert,omitempty" yaml:"passTLSClientCert,omitempty" export:"true"`
-	Retry             *Retry             `json:"retry,omitempty" toml:"retry,omitempty" yaml:"retry,omitempty" export:"true"`
-	ContentType       *ContentType       `json:"contentType,omitempty" toml:"contentType,omitempty" yaml:"contentType,omitempty" label:"allowEmpty" file:"allowEmpty" kv:"allowEmpty" export:"true"`
-	GrpcWeb           *GrpcWeb           `json:"grpcWeb,omitempty" toml:"grpcWeb,omitempty" yaml:"grpcWeb,omitempty" export:"true"`
-	Tap               *Tap               `json:"tap,omitempty" toml:"tap,omitempty" yaml:"tap,omitempty" export:"true"`
+	IPWhiteList           *IPWhiteList           `json:"ipWhiteList,omitempty" toml:"ipWhiteList,omitempty" yaml:"ipWhiteList,omitempty" export:"true"`
+	IPAllowList           *IPAllowList           `json:"ipAllowList,omitempty" toml:"ipAllowList,omitempty" yaml:"ipAllowList,omitempty" export:"true"`
+	Headers               *Headers               `json:"headers,omitempty" toml:"headers,omitempty" yaml:"headers,omitempty" export:"true"`
+	EncodedCharacters     *EncodedCharacters     `json:"encodedCharacters,omitempty" toml:"encodedCharacters,omitempty" yaml:"encodedCharacters,omitempty" export:"true"`
+	Errors                *ErrorPage             `json:"errors,omitempty" toml:"errors,omitempty" yaml:"errors,omitempty" export:"true"`
+	RateLimit             *RateLimit             `json:"rateLimit,omitempty" toml:"rateLimit,omitempty" yaml:"rateLimit,omitempty" export:"true"`
+	RedirectRegex         *RedirectRegex         `json:"redirectRegex,omitempty" toml:"redirectRegex,omitempty" yaml:"redirectRegex,omitempty" export:"true"`
+	RedirectScheme        *RedirectScheme        `json:"redirectScheme,omitempty" toml:"redirectScheme,omitempty" yaml:"redirectScheme,omitempty" export:"true"`
+	RedirectTrailingSlash *RedirectTrailingSlash `json:"redirectTrailingSlash,omitempty" toml:"redirectTrailingSlash,omitempty" yaml:"redirectTrailingSlash,omitempty" export:"true"`
+	BasicAuth             *BasicAuth             `json:"basicAuth,omitempty" toml:"basicAuth,omitempty" yaml:"basicAuth,omitempty" export:"true"`
+	DigestAuth            *DigestAuth            `json:"digestAuth,omitempty" toml:"digestAuth,omitempty" yaml:"digestAuth,omitempty" export:"true"`
+	ForwardAuth           *ForwardAuth           `json:"forwardAuth,omitempty" toml:"forwardAuth,omitempty" yaml:"forwardAuth,omitempty" export:"true"`
+	InFlightReq           *InFlightReq           `json:"inFlightReq,omitempty" toml:"inFlightReq,omitempty" yaml:"inFlightReq,omitempty" export:"true"`
+	Buffering             *Buffering             `json:"buffering,omitempty" toml:"buffering,omitempty" yaml:"buffering,omitempty" export:"true"`
+	CircuitBreaker        *CircuitBreaker        `json:"circuitBreaker,omitempty" toml:"circuitBreaker,omitempty" yaml:"circuitBreaker,omitempty" export:"true"`
+	Compress              *Compress              `json:"compress,omitempty" toml:"compress,omitempty" yaml:"compress,omitempty" label:"allowEmpty" file:"allowEmpty" kv:"allowEmpty" export:"true"`
+	PassTLSClientCert     *PassTLSClientCert     `json:"passTLSClientCert,omitempty" toml:"passTLSClientCert,omitempty" yaml:"passTLSClientCert,omitempty" export:"true"`
+	Retry                 *Retry                 `json:"retry,omitempty" toml:"retry,omitempty" yaml:"retry,omitempty" export:"true"`
+	ContentType           *ContentType           `json:"contentType,omitempty" toml:"contentType,omitempty" yaml:"contentType,omitempty" label:"allowEmpty" file:"allowEmpty" kv:"allowEmpty" export:"true"`
+	GrpcWeb               *GrpcWeb               `json:"grpcWeb,omitempty" toml:"grpcWeb,omitempty" yaml:"grpcWeb,omitempty" export:"true"`
+	Tap                   *Tap                   `json:"tap,omitempty" toml:"tap,omitempty" yaml:"tap,omitempty" export:"true"`
 
 	Plugin map[string]PluginConf `json:"plugin,omitempty" toml:"plugin,omitempty" yaml:"plugin,omitempty" export:"true"`
 
@@ -127,6 +133,9 @@ type BasicAuth struct {
 	// RemoveHeader sets the removeHeader option to true to remove the authorization header before forwarding the request to your service.
 	// Default: false.
 	RemoveHeader bool `json:"removeHeader,omitempty" toml:"removeHeader,omitempty" yaml:"removeHeader,omitempty" export:"true"`
+	// AllowCORSPreflight allows the CORS preflight requests (OPTIONS requests with non-empty Origin and Access-Control-Request-Method headers) to pass through without authentication.
+	// Default: false.
+	AllowCORSPreflight bool `json:"allowCORSPreflight,omitempty" toml:"allowCORSPreflight,omitempty" yaml:"allowCORSPreflight,omitempty" export:"true"`
 	// HeaderField defines a header field to store the authenticated user.
 	// More info: https://doc.traefik.io/traefik/v3.8/middlewares/http/basicauth/#headerfield
 	HeaderField string `json:"headerField,omitempty" toml:"headerField,omitempty" yaml:"headerField,omitempty" export:"true"`
@@ -220,6 +229,10 @@ type Compress struct {
 	Encodings []string `json:"encodings,omitempty" toml:"encodings,omitempty" yaml:"encodings,omitempty" export:"true"`
 	// DefaultEncoding specifies the default encoding if the `Accept-Encoding` header is not in the request or contains a wildcard (`*`).
 	DefaultEncoding string `json:"defaultEncoding,omitempty" toml:"defaultEncoding,omitempty" yaml:"defaultEncoding,omitempty" export:"true"`
+	// ExcludeRequestContentType defines whether the request Content-Type header is also compared to the excluded content types.
+	// Requests with a matching Content-Type are passed through without compression.
+	// Default: true.
+	ExcludeRequestContentType *bool `json:"excludeRequestContentType,omitempty" toml:"excludeRequestContentType,omitempty" yaml:"excludeRequestContentType,omitempty" export:"true"`
 }
 
 func (c *Compress) SetDefaults() {
@@ -293,6 +306,10 @@ type ErrorPage struct {
 	// Set to an empty list to forward no headers, or list specific headers to forward only those.
 	ErrorRequestHeaders []string `json:"errorRequestHeaders,omitempty" toml:"errorRequestHeaders,omitempty" yaml:"errorRequestHeaders,omitempty" export:"true"`
 
+	// ErrorResponseHeaders defines the original backend response headers forwarded to the error page service request.
+	// These headers replace matching request headers. If not set, no response headers are forwarded to the service.
+	ErrorResponseHeaders []string `json:"errorResponseHeaders,omitempty" toml:"errorResponseHeaders,omitempty" yaml:"errorResponseHeaders,omitempty" export:"true"`
+
 	// NginxHeaders defines the headers to forward to the Error page service.
 	// NginxHeaders option is unexposed to other providers than the IngressNGINX one.
 	NginxHeaders *http.Header `json:"nginxHeaders,omitempty" toml:"-" yaml:"-" label:"-" file:"-" kv:"-" export:"true"`
@@ -305,7 +322,16 @@ type ErrorPage struct {
 // More info: https://doc.traefik.io/traefik/v3.8/middlewares/http/forwardauth/
 type ForwardAuth struct {
 	// Address defines the authentication server address.
+	// Supports the http, https, and h2c schemes.
+	// It is mutually exclusive with the Service option.
 	Address string `json:"address,omitempty" toml:"address,omitempty" yaml:"address,omitempty"`
+	// Service defines the name of a Traefik service to use as the authentication server.
+	// It is mutually exclusive with the Address and TLS options: the connection to the service is handled by its ServersTransport.
+	// Using a service routes the authentication request through Traefik's load balancer, enabling service discovery, health checks, and sticky sessions for the authentication server.
+	Service string `json:"service,omitempty" toml:"service,omitempty" yaml:"service,omitempty" export:"true"`
+	// Path defines the path of the authentication request when using the Service option.
+	// It can also contain a query string. It defaults to the root path.
+	Path string `json:"path,omitempty" toml:"path,omitempty" yaml:"path,omitempty" export:"true"`
 	// TLS defines the configuration used to secure the connection to the authentication server.
 	TLS *ClientTLS `json:"tls,omitempty" toml:"tls,omitempty" yaml:"tls,omitempty" export:"true"`
 	// TrustForwardHeader defines whether to trust (ie: forward) all X-Forwarded-* headers.
@@ -324,6 +350,8 @@ type ForwardAuth struct {
 	MaxResponseBodySize *int64 `json:"maxResponseBodySize,omitempty" toml:"maxResponseBodySize,omitempty" yaml:"maxResponseBodySize,omitempty" export:"true"`
 	// AddAuthCookiesToResponse defines the list of cookies to copy from the authentication server response to the response.
 	AddAuthCookiesToResponse []string `json:"addAuthCookiesToResponse,omitempty" toml:"addAuthCookiesToResponse,omitempty" yaml:"addAuthCookiesToResponse,omitempty" export:"true"`
+	// AddAuthCookiesToResponseRegex defines a regex pattern used to match cookies to copy from the authentication server response to the response.
+	AddAuthCookiesToResponseRegex string `json:"addAuthCookiesToResponseRegex,omitempty" toml:"addAuthCookiesToResponseRegex,omitempty" yaml:"addAuthCookiesToResponseRegex,omitempty" export:"true"`
 	// HeaderField defines a header field to store the authenticated user.
 	// More info: https://doc.traefik.io/traefik/v3.8/middlewares/http/forwardauth/#headerfield
 	HeaderField string `json:"headerField,omitempty" toml:"headerField,omitempty" yaml:"headerField,omitempty" export:"true"`
@@ -337,11 +365,16 @@ type ForwardAuth struct {
 	PreserveRequestMethod bool `json:"preserveRequestMethod,omitempty" toml:"preserveRequestMethod,omitempty" yaml:"preserveRequestMethod,omitempty" export:"true"`
 	// AuthSigninURL specifies the URL to redirect to when the authentication server returns 401 Unauthorized.
 	AuthSigninURL string `json:"authSigninURL,omitempty" toml:"authSigninURL,omitempty" yaml:"authSigninURL,omitempty" export:"true"`
+	// Timeout defines the maximum duration of the request to the authentication server, including connection time and reading the response body.
+	// Zero means the default value (30s).
+	Timeout ptypes.Duration `json:"timeout,omitempty" toml:"timeout,omitempty" yaml:"timeout,omitempty" export:"true"`
 }
 
+// SetDefaults sets the default values on a ForwardAuth.
 func (f *ForwardAuth) SetDefaults() {
 	defaultMaxBodySize := ForwardAuthDefaultMaxBodySize
 	f.MaxBodySize = &defaultMaxBodySize
+	f.Timeout = ForwardAuthDefaultTimeout
 }
 
 // +k8s:deepcopy-gen=true
@@ -368,6 +401,12 @@ type Headers struct {
 	CustomRequestHeaders map[string]string `json:"customRequestHeaders,omitempty" toml:"customRequestHeaders,omitempty" yaml:"customRequestHeaders,omitempty" export:"true"`
 	// CustomResponseHeaders defines the header names and values to apply to the response.
 	CustomResponseHeaders map[string]string `json:"customResponseHeaders,omitempty" toml:"customResponseHeaders,omitempty" yaml:"customResponseHeaders,omitempty" export:"true"`
+	// ReplaceRequestHeadersRegex defines, by header name, the regular expression replacements applied to the values of the request headers.
+	// A header absent from the request is not added.
+	ReplaceRequestHeadersRegex map[string]ReplaceHeaderRegex `json:"replaceRequestHeadersRegex,omitempty" toml:"replaceRequestHeadersRegex,omitempty" yaml:"replaceRequestHeadersRegex,omitempty" export:"true"`
+	// ReplaceResponseHeadersRegex defines, by header name, the regular expression replacements applied to the values of the response headers.
+	// A header absent from the response is not added.
+	ReplaceResponseHeadersRegex map[string]ReplaceHeaderRegex `json:"replaceResponseHeadersRegex,omitempty" toml:"replaceResponseHeadersRegex,omitempty" yaml:"replaceResponseHeadersRegex,omitempty" export:"true"`
 
 	// AccessControlAllowCredentials defines whether the request can include user credentials.
 	AccessControlAllowCredentials bool `json:"accessControlAllowCredentials,omitempty" toml:"accessControlAllowCredentials,omitempty" yaml:"accessControlAllowCredentials,omitempty" export:"true"`
@@ -385,6 +424,11 @@ type Headers struct {
 	AccessControlMaxAge *int64 `json:"accessControlMaxAge,omitempty" toml:"accessControlMaxAge,omitempty" yaml:"accessControlMaxAge,omitempty" export:"true"`
 	// AddVaryHeader defines whether the Vary header is automatically added/updated when the AccessControlAllowOriginList is set.
 	AddVaryHeader bool `json:"addVaryHeader,omitempty" toml:"addVaryHeader,omitempty" yaml:"addVaryHeader,omitempty" export:"true"`
+	// CORSStrict restricts CORS processing to requests whose Origin matches the allow list.
+	// When enabled, preflight requests from other origins are passed to the next handler,
+	// and credentials and expose headers are only set for allowed origins.
+	// It is not part of the public configuration, and is set by the Kubernetes Ingress NGINX provider.
+	CORSStrict bool `json:"-" toml:"-" yaml:"-" label:"-" file:"-" kv:"-"`
 	// AllowedHosts defines the fully qualified list of allowed domain names.
 	AllowedHosts []string `json:"allowedHosts,omitempty" toml:"allowedHosts,omitempty" yaml:"allowedHosts,omitempty"`
 	// HostsProxyHeaders defines the header keys that may hold a proxied hostname value for the request.
@@ -447,7 +491,9 @@ type Headers struct {
 // HasCustomHeadersDefined checks to see if any of the custom header elements have been set.
 func (h *Headers) HasCustomHeadersDefined() bool {
 	return h != nil && (len(h.CustomResponseHeaders) != 0 ||
-		len(h.CustomRequestHeaders) != 0)
+		len(h.CustomRequestHeaders) != 0 ||
+		len(h.ReplaceRequestHeadersRegex) != 0 ||
+		len(h.ReplaceResponseHeadersRegex) != 0)
 }
 
 // HasCorsHeadersDefined checks to see if any of the cors header elements have been set.
@@ -595,6 +641,8 @@ type InFlightReq struct {
 type PassTLSClientCert struct {
 	// PEM sets the X-Forwarded-Tls-Client-Cert header with the certificate.
 	PEM bool `json:"pem,omitempty" toml:"pem,omitempty" yaml:"pem,omitempty" export:"true"`
+	// OnlyLeaf controls whether the full certificate chain is sent or only the leaf certificate.
+	OnlyLeaf bool `json:"onlyLeaf,omitempty" toml:"onlyLeaf,omitempty" yaml:"onlyLeaf,omitempty" export:"true"`
 	// Info selects the specific client certificate details you want to add to the X-Forwarded-Tls-Client-Cert-Info header.
 	Info *TLSClientCertificateInfo `json:"info,omitempty" toml:"info,omitempty" yaml:"info,omitempty" export:"true"`
 }
@@ -693,11 +741,26 @@ type Redis struct {
 	// DialTimeout sets the timeout for establishing new connections.
 	// Default value is 5 seconds.
 	DialTimeout *ptypes.Duration `json:"dialTimeout,omitempty" toml:"dialTimeout,omitempty" yaml:"dialTimeout,omitempty" export:"true"`
+	// MasterName defines the name of the Redis Sentinel master set.
+	// When set, Endpoints are the Sentinel addresses and the client follows the master elected by Sentinel.
+	MasterName string `json:"masterName,omitempty" toml:"masterName,omitempty" yaml:"masterName,omitempty" export:"true"`
+	// SentinelUsername defines the username to connect to the Redis Sentinel servers.
+	SentinelUsername string `json:"sentinelUsername,omitempty" toml:"sentinelUsername,omitempty" yaml:"sentinelUsername,omitempty" loggable:"false"`
+	// SentinelPassword defines the password to connect to the Redis Sentinel servers.
+	SentinelPassword string `json:"sentinelPassword,omitempty" toml:"sentinelPassword,omitempty" yaml:"sentinelPassword,omitempty" loggable:"false"`
+
+	// DenyOnError controls the middleware behavior when Redis is unavailable or returns an error.
+	// When true (the default), the request is rejected with a 500 status code.
+	// When false, the error is logged and the request is forwarded to the next handler (fail-open).
+	// It is a pointer so that an unset value keeps the default even for providers that do not
+	// apply defaults, such as the REST provider, instead of silently turning into false.
+	DenyOnError *bool `json:"denyOnError,omitempty" toml:"denyOnError,omitempty" yaml:"denyOnError,omitempty" export:"true"`
 }
 
-// SetDefaults sets the default values on a RateLimit.
+// SetDefaults sets the default values on a Redis.
 func (r *Redis) SetDefaults() {
 	r.Endpoints = []string{"localhost:6379"}
+	r.DenyOnError = new(RedisDefaultDenyOnError)
 
 	defaultReadTimeout := ptypes.Duration(3 * time.Second)
 	r.ReadTimeout = &defaultReadTimeout
@@ -745,6 +808,39 @@ type RedirectScheme struct {
 	ForcePermanentRedirect bool `json:"-" toml:"-" yaml:"-" label:"-" file:"-" kv:"-" export:"true"`
 }
 
+// TrailingSlashMode defines whether the RedirectTrailingSlash middleware adds or removes trailing slashes.
+type TrailingSlashMode string
+
+const (
+	TrailingSlashAdd    TrailingSlashMode = "add"
+	TrailingSlashRemove TrailingSlashMode = "remove"
+)
+
+// +k8s:deepcopy-gen=true
+
+// RedirectTrailingSlash holds the redirect trailing slash middleware configuration.
+// This middleware redirects requests to add or remove a trailing slash from the path.
+type RedirectTrailingSlash struct {
+	// Mode controls whether a trailing slash is added or removed.
+	// +kubebuilder:validation:Enum=add;remove
+	Mode TrailingSlashMode `json:"mode,omitempty" toml:"mode,omitempty" yaml:"mode,omitempty" export:"true"`
+	// Permanent enables a permanent redirect (301/308) instead of temporary (302/307).
+	Permanent bool `json:"permanent,omitempty" toml:"permanent,omitempty" yaml:"permanent,omitempty" export:"true"`
+}
+
+// +k8s:deepcopy-gen=true
+
+// QueryParameters holds the query parameters middleware configuration.
+// This middleware modifies the query parameters of the request URL.
+type QueryParameters struct {
+	// Set defines the query parameters to set, replacing every existing value of the same parameter.
+	Set map[string]string `json:"set,omitempty" toml:"set,omitempty" yaml:"set,omitempty" export:"true"`
+	// Add defines the query parameters to add, keeping any existing value of the same parameter.
+	Add map[string]string `json:"add,omitempty" toml:"add,omitempty" yaml:"add,omitempty" export:"true"`
+	// Delete defines the names of the query parameters to remove.
+	Delete []string `json:"delete,omitempty" toml:"delete,omitempty" yaml:"delete,omitempty" export:"true"`
+}
+
 // +k8s:deepcopy-gen=true
 
 // ReplacePath holds the replace path middleware configuration.
@@ -753,6 +849,16 @@ type RedirectScheme struct {
 type ReplacePath struct {
 	// Path defines the path to use as replacement in the request URL.
 	Path string `json:"path,omitempty" toml:"path,omitempty" yaml:"path,omitempty" export:"true"`
+}
+
+// +k8s:deepcopy-gen=true
+
+// ReplaceHeaderRegex holds a regular expression replacement applied to the values of a header.
+type ReplaceHeaderRegex struct {
+	// Regex defines the regular expression used to match and capture parts of the header value.
+	Regex string `json:"regex,omitempty" toml:"regex,omitempty" yaml:"regex,omitempty" export:"true"`
+	// Replacement defines the replacement format of the matched parts, which can include captured variables.
+	Replacement string `json:"replacement,omitempty" toml:"replacement,omitempty" yaml:"replacement,omitempty" export:"true"`
 }
 
 // +k8s:deepcopy-gen=true

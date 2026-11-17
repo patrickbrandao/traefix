@@ -1,12 +1,15 @@
 package recovery
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,4 +65,32 @@ func TestRecoverHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRecoverHandler_panicAndStackInOneEvent(t *testing.T) {
+	var buf bytes.Buffer
+	logger := zerolog.New(&buf).Level(zerolog.ErrorLevel)
+	ctx := logger.WithContext(t.Context())
+
+	recovery, err := New(ctx, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		panic(errors.New("boom"))
+	}))
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/foo", nil).WithContext(ctx)
+	recovery.ServeHTTP(httptest.NewRecorder(), req)
+
+	// One JSON object per event: a single line means a single event.
+	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
+	require.Len(t, lines, 1)
+
+	var event map[string]any
+	require.NoError(t, json.Unmarshal(lines[0], &event))
+
+	message, ok := event["message"].(string)
+	require.True(t, ok)
+	assert.Contains(t, message, "Recovered from panic in HTTP handler")
+	assert.Contains(t, message, "boom")
+	assert.Contains(t, message, "Stack:")
+	assert.Contains(t, message, "recovery.recoverFunc")
 }

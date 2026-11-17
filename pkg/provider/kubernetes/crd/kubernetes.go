@@ -35,6 +35,7 @@ import (
 	apiextensionv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -284,10 +285,14 @@ func (p *Provider) loadConfigurationFromCRD(ctx context.Context, client Client) 
 			continue
 		}
 
-		forwardAuth, err := createForwardAuthMiddleware(client, middleware.Namespace, middleware.Spec.ForwardAuth, refs)
+		forwardAuth, forwardAuthService, err := p.createForwardAuthMiddleware(ctxMid, client, middleware.Namespace, id+"-forwardauth-service", middleware.Spec.ForwardAuth, refs)
 		if err != nil {
 			logger.Error().Err(err).Msg("Error while reading forward auth middleware")
 			continue
+		}
+
+		if forwardAuthService != nil {
+			addToConfig(log.Ctx(ctxMid), "service", forwardAuth.Service, conf.HTTP.Services, forwardAuthService)
 		}
 
 		errorPage, errorPageService, err := p.createErrorPageMiddleware(ctxMid, client, middleware.Namespace, id+"-errorpage-service", middleware.Spec.Errors)
@@ -339,34 +344,36 @@ func (p *Provider) loadConfigurationFromCRD(ctx context.Context, client Client) 
 		}
 
 		addToConfig(log.Ctx(ctxMid), "middleware", id, conf.HTTP.Middlewares, &dynamic.Middleware{
-			AddPrefix:         middleware.Spec.AddPrefix,
-			StripPrefix:       middleware.Spec.StripPrefix,
-			StripPrefixRegex:  middleware.Spec.StripPrefixRegex,
-			ReplacePath:       middleware.Spec.ReplacePath,
-			ReplacePathRegex:  middleware.Spec.ReplacePathRegex,
-			Chain:             chain,
-			IPWhiteList:       middleware.Spec.IPWhiteList,
-			IPAllowList:       middleware.Spec.IPAllowList,
-			Headers:           middleware.Spec.Headers,
-			EncodedCharacters: middleware.Spec.EncodedCharacters,
-			Errors:            errorPage,
-			RateLimit:         rateLimit,
-			RedirectRegex:     middleware.Spec.RedirectRegex,
-			RedirectScheme:    middleware.Spec.RedirectScheme,
-			BasicAuth:         basicAuth,
-			DigestAuth:        digestAuth,
-			ForwardAuth:       forwardAuth,
-			InFlightReq:       middleware.Spec.InFlightReq,
-			Buffering:         createBufferingMiddleware(middleware.Spec.Buffering),
-			CircuitBreaker:    circuitBreaker,
-			Compress:          createCompressMiddleware(middleware.Spec.Compress),
-			PassTLSClientCert: middleware.Spec.PassTLSClientCert,
-			Retry:             retry,
-			ContentType:       middleware.Spec.ContentType,
-			GrpcWeb:           middleware.Spec.GrpcWeb,
-			Tap:               tap,
-			Plugin:            plugin,
-			URNRefs:           refs.OrNil(),
+			AddPrefix:             middleware.Spec.AddPrefix,
+			StripPrefix:           middleware.Spec.StripPrefix,
+			StripPrefixRegex:      middleware.Spec.StripPrefixRegex,
+			ReplacePath:           middleware.Spec.ReplacePath,
+			ReplacePathRegex:      middleware.Spec.ReplacePathRegex,
+			QueryParameters:       middleware.Spec.QueryParameters,
+			Chain:                 chain,
+			IPWhiteList:           middleware.Spec.IPWhiteList,
+			IPAllowList:           middleware.Spec.IPAllowList,
+			Headers:               middleware.Spec.Headers,
+			EncodedCharacters:     middleware.Spec.EncodedCharacters,
+			Errors:                errorPage,
+			RateLimit:             rateLimit,
+			RedirectRegex:         middleware.Spec.RedirectRegex,
+			RedirectScheme:        middleware.Spec.RedirectScheme,
+			RedirectTrailingSlash: middleware.Spec.RedirectTrailingSlash,
+			BasicAuth:             basicAuth,
+			DigestAuth:            digestAuth,
+			ForwardAuth:           forwardAuth,
+			InFlightReq:           middleware.Spec.InFlightReq,
+			Buffering:             createBufferingMiddleware(middleware.Spec.Buffering),
+			CircuitBreaker:        circuitBreaker,
+			Compress:              createCompressMiddleware(middleware.Spec.Compress),
+			PassTLSClientCert:     middleware.Spec.PassTLSClientCert,
+			Retry:                 retry,
+			ContentType:           middleware.Spec.ContentType,
+			GrpcWeb:               middleware.Spec.GrpcWeb,
+			Tap:                   tap,
+			Plugin:                plugin,
+			URNRefs:               refs.OrNil(),
 		})
 	}
 
@@ -575,6 +582,7 @@ func (p *Provider) loadConfigurationFromCRD(ctx context.Context, client Client) 
 			MinVersion:          minVersion,
 			MaxVersion:          maxVersion,
 			DisableHTTP2:        serversTransport.Spec.DisableHTTP2,
+			DisableCompression:  serversTransport.Spec.DisableCompression,
 			MaxIdleConnsPerHost: serversTransport.Spec.MaxIdleConnsPerHost,
 			ForwardingTimeouts:  forwardingTimeout,
 			PeerCertURI:         serversTransport.Spec.PeerCertURI,
@@ -720,11 +728,12 @@ func (p *Provider) createErrorPageMiddleware(ctx context.Context, client Client,
 	}
 
 	errp := &dynamic.ErrorPage{
-		Status:              errorPage.Status,
-		StatusRewrites:      errorPage.StatusRewrites,
-		Query:               errorPage.Query,
-		ErrorRequestHeaders: errorPage.ErrorRequestHeaders,
-		Service:             serviceName,
+		Status:               errorPage.Status,
+		StatusRewrites:       errorPage.StatusRewrites,
+		Query:                errorPage.Query,
+		ErrorRequestHeaders:  errorPage.ErrorRequestHeaders,
+		ErrorResponseHeaders: errorPage.ErrorResponseHeaders,
+		Service:              serviceName,
 	}
 	if service != nil {
 		errp.Service = serviceKey
@@ -873,6 +882,46 @@ func getNativeServiceAddress(service corev1.Service, svcPort corev1.ServicePort)
 	}
 
 	return net.JoinHostPort(service.Spec.ClusterIP, strconv.Itoa(int(svcPort.Port))), nil
+}
+
+// nodePortLBNodes returns the nodes to load-balance on for a NodePort service.
+// With externalTrafficPolicy Local, kube-proxy drops the traffic received by a node without a local endpoint,
+// so only the nodes hosting a ready endpoint of the service are kept.
+func nodePortLBNodes(client Client, service *corev1.Service, nodes []*corev1.Node) ([]*corev1.Node, error) {
+	if service.Spec.ExternalTrafficPolicy != corev1.ServiceExternalTrafficPolicyLocal {
+		return nodes, nil
+	}
+
+	endpointSlices, err := client.GetEndpointSlicesForService(service.Namespace, service.Name)
+	if err != nil {
+		return nil, fmt.Errorf("getting endpointslices: %w", err)
+	}
+
+	nodesByName := make(map[string]*corev1.Node, len(nodes))
+	for _, node := range nodes {
+		nodesByName[node.Name] = node
+	}
+
+	// Endpoints are walked in order, rather than nodes, to keep the generated servers stable across rebuilds.
+	var localNodes []*corev1.Node
+	for _, endpointSlice := range endpointSlices {
+		for _, endpoint := range endpointSlice.Endpoints {
+			// From the Kubernetes API documentation, a nil ready condition should be interpreted as "true".
+			if endpoint.NodeName == nil || !ptr.Deref(endpoint.Conditions.Ready, true) {
+				continue
+			}
+
+			node, ok := nodesByName[*endpoint.NodeName]
+			if !ok {
+				continue
+			}
+
+			localNodes = append(localNodes, node)
+			delete(nodesByName, *endpoint.NodeName)
+		}
+	}
+
+	return localNodes, nil
 }
 
 func createPluginMiddleware(k8sClient Client, ns string, plugins map[string]apiextensionv1.JSON, refs k8s.URNRefs) (map[string]dynamic.PluginConf, error) {
@@ -1091,6 +1140,8 @@ func createCompressMiddleware(compress *traefikv1alpha1.Compress) *dynamic.Compr
 		c.DefaultEncoding = *compress.DefaultEncoding
 	}
 
+	c.ExcludeRequestContentType = compress.ExcludeRequestContentType
+
 	return c
 }
 
@@ -1186,6 +1237,10 @@ func createRateLimitMiddleware(client Client, namespace string, rateLimit *traef
 			rl.Redis.Username = refs.Add("/rateLimit/redis/username", rateLimit.Redis.Secret, "username", username)
 			rl.Redis.Password = refs.Add("/rateLimit/redis/password", rateLimit.Redis.Secret, "password", password)
 		}
+
+		if rateLimit.Redis.DenyOnError != nil {
+			rl.Redis.DenyOnError = new(*rateLimit.Redis.DenyOnError)
+		}
 	}
 
 	return rl, nil
@@ -1243,26 +1298,40 @@ func createRetryMiddleware(retry *traefikv1alpha1.Retry) (*dynamic.Retry, error)
 	return r, nil
 }
 
-func createForwardAuthMiddleware(k8sClient Client, namespace string, auth *traefikv1alpha1.ForwardAuth, refs k8s.URNRefs) (*dynamic.ForwardAuth, error) {
+// createForwardAuthMiddleware returns the ForwardAuth middleware configuration,
+// along with the service to register when it references a Kubernetes Service.
+func (p *Provider) createForwardAuthMiddleware(ctx context.Context, client Client, namespace, serviceKey string, auth *traefikv1alpha1.ForwardAuth, refs k8s.URNRefs) (*dynamic.ForwardAuth, *dynamic.Service, error) {
 	if auth == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	if len(auth.Address) == 0 {
-		return nil, errors.New("forward authentication requires an address")
+
+	if len(auth.Address) == 0 && auth.Service == nil {
+		return nil, nil, errors.New("forward authentication requires an address or a service")
+	}
+	if len(auth.Address) > 0 && auth.Service != nil {
+		return nil, nil, errors.New("forward authentication address and service options are mutually exclusive")
+	}
+	if auth.Service != nil && auth.TLS != nil {
+		return nil, nil, errors.New("forward authentication cannot use the tls option with a service, configure a ServersTransport on the service instead")
+	}
+	if len(auth.Path) > 0 && auth.Service == nil {
+		return nil, nil, errors.New("forward authentication path option requires the service option")
 	}
 
 	forwardAuth := &dynamic.ForwardAuth{
-		Address:                  auth.Address,
-		TrustForwardHeader:       auth.TrustForwardHeader,
-		AuthResponseHeaders:      auth.AuthResponseHeaders,
-		AuthResponseHeadersRegex: auth.AuthResponseHeadersRegex,
-		AuthRequestHeaders:       auth.AuthRequestHeaders,
-		AddAuthCookiesToResponse: auth.AddAuthCookiesToResponse,
-		HeaderField:              auth.HeaderField,
-		ForwardBody:              auth.ForwardBody,
-		PreserveLocationHeader:   auth.PreserveLocationHeader,
-		PreserveRequestMethod:    auth.PreserveRequestMethod,
-		AuthSigninURL:            auth.AuthSigninURL,
+		Address:                       auth.Address,
+		Path:                          auth.Path,
+		TrustForwardHeader:            auth.TrustForwardHeader,
+		AuthResponseHeaders:           auth.AuthResponseHeaders,
+		AuthResponseHeadersRegex:      auth.AuthResponseHeadersRegex,
+		AuthRequestHeaders:            auth.AuthRequestHeaders,
+		AddAuthCookiesToResponse:      auth.AddAuthCookiesToResponse,
+		AddAuthCookiesToResponseRegex: auth.AddAuthCookiesToResponseRegex,
+		HeaderField:                   auth.HeaderField,
+		ForwardBody:                   auth.ForwardBody,
+		PreserveLocationHeader:        auth.PreserveLocationHeader,
+		PreserveRequestMethod:         auth.PreserveRequestMethod,
+		AuthSigninURL:                 auth.AuthSigninURL,
 	}
 	forwardAuth.SetDefaults()
 
@@ -1274,23 +1343,41 @@ func createForwardAuthMiddleware(k8sClient Client, namespace string, auth *traef
 		forwardAuth.MaxBodySize = auth.MaxBodySize
 	}
 
+	if auth.Timeout != nil {
+		if err := forwardAuth.Timeout.Set(auth.Timeout.String()); err != nil {
+			return nil, nil, fmt.Errorf("parsing forward authentication timeout: %w", err)
+		}
+	}
+
 	if auth.TLS != nil {
+		if auth.TLS.CASecret != "" && auth.TLS.CAConfigMap != "" {
+			return nil, nil, errors.New("forward authentication TLS caSecret and caConfigMap are mutually exclusive")
+		}
+
 		forwardAuth.TLS = &dynamic.ClientTLS{
 			InsecureSkipVerify: auth.TLS.InsecureSkipVerify,
 		}
 
 		if len(auth.TLS.CASecret) > 0 {
-			caSecret, err := loadCASecret(namespace, auth.TLS.CASecret, k8sClient)
+			caSecret, err := loadCASecret(namespace, auth.TLS.CASecret, client)
 			if err != nil {
-				return nil, fmt.Errorf("failed to load auth ca secret: %w", err)
+				return nil, nil, fmt.Errorf("failed to load auth ca secret: %w", err)
 			}
 			forwardAuth.TLS.CA = caSecret
 		}
 
-		if len(auth.TLS.CertSecret) > 0 {
-			authSecretCert, authSecretKey, err := loadAuthTLSSecret(namespace, auth.TLS.CertSecret, k8sClient)
+		if len(auth.TLS.CAConfigMap) > 0 {
+			caConfigMap, err := loadCAConfigMap(namespace, auth.TLS.CAConfigMap, client)
 			if err != nil {
-				return nil, fmt.Errorf("failed to load auth secret: %w", err)
+				return nil, nil, fmt.Errorf("failed to load auth ca configMap: %w", err)
+			}
+			forwardAuth.TLS.CA = caConfigMap
+		}
+
+		if len(auth.TLS.CertSecret) > 0 {
+			authSecretCert, authSecretKey, err := loadAuthTLSSecret(namespace, auth.TLS.CertSecret, client)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to load auth secret: %w", err)
 			}
 			forwardAuth.TLS.Cert = refs.Add("/forwardAuth/tls/cert", auth.TLS.CertSecret, "tls.crt", authSecretCert)
 			forwardAuth.TLS.Key = refs.Add("/forwardAuth/tls/key", auth.TLS.CertSecret, "tls.key", authSecretKey)
@@ -1299,7 +1386,30 @@ func createForwardAuthMiddleware(k8sClient Client, namespace string, auth *traef
 		forwardAuth.TLS.CAOptional = auth.TLS.CAOptional
 	}
 
-	return forwardAuth, nil
+	if auth.Service == nil {
+		return forwardAuth, nil, nil
+	}
+
+	cb := configBuilder{
+		client:                    client,
+		allowCrossNamespace:       p.AllowCrossNamespace,
+		allowExternalNameServices: p.AllowExternalNameServices,
+		allowEmptyServices:        p.AllowEmptyServices,
+		crossProviderNamespaces:   p.CrossProviderNamespaces,
+		nameBuilder:               p.nameBuilder,
+	}
+
+	serviceName, service, err := cb.nameAndService(ctx, namespace, auth.Service.LoadBalancerSpec, serviceKey)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	forwardAuth.Service = serviceName
+	if service != nil {
+		forwardAuth.Service = serviceKey
+	}
+
+	return forwardAuth, service, nil
 }
 
 func loadCASecret(namespace, secretName string, k8sClient Client) (string, error) {
@@ -1399,10 +1509,11 @@ func createBasicAuthMiddleware(client Client, namespace string, basicAuth *traef
 
 		return &dynamic.BasicAuth{
 			// The user is computed from both keys: the password key is the one that must not be exposed.
-			Users:        refs.AddUsers("/basicAuth/users", basicAuth.Secret, "password", credentials),
-			Realm:        basicAuth.Realm,
-			RemoveHeader: basicAuth.RemoveHeader,
-			HeaderField:  basicAuth.HeaderField,
+			Users:              refs.AddUsers("/basicAuth/users", basicAuth.Secret, "password", credentials),
+			Realm:              basicAuth.Realm,
+			RemoveHeader:       basicAuth.RemoveHeader,
+			AllowCORSPreflight: basicAuth.AllowCORSPreflight,
+			HeaderField:        basicAuth.HeaderField,
 		}, nil
 	}
 
@@ -1412,10 +1523,11 @@ func createBasicAuthMiddleware(client Client, namespace string, basicAuth *traef
 	}
 
 	return &dynamic.BasicAuth{
-		Users:        refs.AddUsers("/basicAuth/users", basicAuth.Secret, key, credentials),
-		Realm:        basicAuth.Realm,
-		RemoveHeader: basicAuth.RemoveHeader,
-		HeaderField:  basicAuth.HeaderField,
+		Users:              refs.AddUsers("/basicAuth/users", basicAuth.Secret, key, credentials),
+		Realm:              basicAuth.Realm,
+		RemoveHeader:       basicAuth.RemoveHeader,
+		AllowCORSPreflight: basicAuth.AllowCORSPreflight,
+		HeaderField:        basicAuth.HeaderField,
 	}, nil
 }
 

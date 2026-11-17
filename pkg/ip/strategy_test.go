@@ -15,6 +15,74 @@ const (
 	ipv6BracketsZonePort = "[::abcd:ffff:c0a8:1%1]:80"
 )
 
+func TestMaskIP(t *testing.T) {
+	testCases := []struct {
+		desc       string
+		ip         string
+		ipv4Subnet int
+		ipv6Subnet int
+		expected   string
+	}{
+		{
+			desc:       "IPv4 truncated to /24",
+			ip:         "203.0.113.42",
+			ipv4Subnet: 24,
+			ipv6Subnet: 48,
+			expected:   "203.0.113.0",
+		},
+		{
+			desc:       "IPv6 truncated to /48",
+			ip:         "2001:db8::abcd:ffff:c0a8:1",
+			ipv4Subnet: 24,
+			ipv6Subnet: 48,
+			expected:   "2001:db8::",
+		},
+		{
+			desc:       "IPv4 subnet disabled leaves IPv4 untouched",
+			ip:         "203.0.113.42",
+			ipv4Subnet: 0,
+			ipv6Subnet: 48,
+			expected:   "203.0.113.42",
+		},
+		{
+			desc:       "IPv6 subnet disabled leaves IPv6 untouched",
+			ip:         "2001:db8::1",
+			ipv4Subnet: 24,
+			ipv6Subnet: 0,
+			expected:   "2001:db8::1",
+		},
+		{
+			desc:       "4-in-6 mapped address uses the IPv4 subnet",
+			ip:         "::ffff:203.0.113.42",
+			ipv4Subnet: 24,
+			ipv6Subnet: 48,
+			expected:   "203.0.113.0",
+		},
+		{
+			desc:       "invalid IP is returned unchanged",
+			ip:         "not-an-ip",
+			ipv4Subnet: 24,
+			ipv6Subnet: 48,
+			expected:   "not-an-ip",
+		},
+		{
+			desc:       "out-of-range subnet is returned unchanged",
+			ip:         "203.0.113.42",
+			ipv4Subnet: 40,
+			ipv6Subnet: 48,
+			expected:   "203.0.113.42",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, test.expected, MaskIP(test.ip, test.ipv4Subnet, test.ipv6Subnet))
+		})
+	}
+}
+
 func TestRemoteAddrStrategy_GetIP(t *testing.T) {
 	testCases := []struct {
 		desc       string
@@ -153,14 +221,41 @@ func TestTrustedIPsStrategy_GetIP(t *testing.T) {
 		desc          string
 		trustedIPs    []string
 		xForwardedFor string
+		remoteAddr    string
 		expected      string
-		useRemote     bool
 	}{
 		{
 			desc:          "Trust all IPs",
 			trustedIPs:    []string{"10.0.0.4", "10.0.0.3", "10.0.0.2", "10.0.0.1"},
 			xForwardedFor: "10.0.0.4,10.0.0.3,10.0.0.2,10.0.0.1",
+			remoteAddr:    "10.0.0.4:1234",
 			expected:      "",
+		},
+		{
+			desc:          "Trust all IPs from an untrusted remote address",
+			trustedIPs:    []string{"10.0.0.4", "10.0.0.3", "10.0.0.2", "10.0.0.1"},
+			xForwardedFor: "10.0.0.4,10.0.0.3,10.0.0.2,10.0.0.1",
+			remoteAddr:    "192.168.0.1:1234",
+			expected:      "192.168.0.1",
+		},
+		{
+			desc:       "No X-Forwarded-For from an untrusted remote address",
+			trustedIPs: []string{"10.0.0.1/24"},
+			remoteAddr: "192.168.0.1:1234",
+			expected:   "192.168.0.1",
+		},
+		{
+			desc:       "No X-Forwarded-For from a trusted remote address",
+			trustedIPs: []string{"10.0.0.1/24"},
+			remoteAddr: "10.0.0.5:1234",
+			expected:   "",
+		},
+		{
+			desc:          "Untrusted remote address does not take precedence over X-Forwarded-For",
+			trustedIPs:    []string{"10.0.0.1/24"},
+			xForwardedFor: "127.0.0.1,10.0.0.1",
+			remoteAddr:    "192.168.0.1:1234",
+			expected:      "127.0.0.1",
 		},
 		{
 			desc:          "Do not trust all IPs",
@@ -178,6 +273,7 @@ func TestTrustedIPsStrategy_GetIP(t *testing.T) {
 			desc:          "Trust all IPs with CIDR",
 			trustedIPs:    []string{"10.0.0.1/24"},
 			xForwardedFor: "10.0.0.4,10.0.0.3,10.0.0.2,10.0.0.1",
+			remoteAddr:    "10.0.0.5:1234",
 			expected:      "",
 		},
 	}
@@ -192,6 +288,9 @@ func TestTrustedIPsStrategy_GetIP(t *testing.T) {
 			strategy := PoolStrategy{Checker: checker}
 			req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1", nil)
 			req.Header.Set(xForwardedFor, test.xForwardedFor)
+			if test.remoteAddr != "" {
+				req.RemoteAddr = test.remoteAddr
+			}
 			actual := strategy.GetIP(req)
 			assert.Equal(t, test.expected, actual)
 		})

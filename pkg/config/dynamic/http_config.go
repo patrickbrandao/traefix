@@ -397,6 +397,9 @@ type Cookie struct {
 	// More info: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie/SameSite
 	// +kubebuilder:validation:Enum=none;lax;strict;None;Lax;Strict
 	SameSite string `json:"sameSite,omitempty" toml:"sameSite,omitempty" yaml:"sameSite,omitempty" export:"true"`
+	// ConditionalSameSiteNone defines whether the SameSite=None attribute should be omitted for incompatible user agents.
+	// This option is exposed only for the Ingress NGINX provider.
+	ConditionalSameSiteNone bool `json:"-" toml:"-" yaml:"-" label:"-" file:"-" kv:"-" export:"true"`
 	// MaxAge defines the number of seconds until the cookie expires.
 	// When set to a negative number, the cookie expires immediately.
 	// When set to zero, the cookie never expires.
@@ -554,6 +557,8 @@ type ServerHealthCheck struct {
 	Hostname          string            `json:"hostname,omitempty" toml:"hostname,omitempty" yaml:"hostname,omitempty"`
 	FollowRedirects   *bool             `json:"followRedirects,omitempty" toml:"followRedirects,omitempty" yaml:"followRedirects,omitempty" export:"true"`
 	Headers           map[string]string `json:"headers,omitempty" toml:"headers,omitempty" yaml:"headers,omitempty" export:"true"`
+	Body              string            `json:"body,omitempty" toml:"body,omitempty" yaml:"body,omitempty"`
+	MaxConcurrency    int               `json:"maxConcurrency,omitempty" toml:"maxConcurrency,omitempty" yaml:"maxConcurrency,omitempty" export:"true"`
 }
 
 // SetDefaults Default values for a HealthCheck.
@@ -597,6 +602,7 @@ type ServersTransport struct {
 	MaxIdleConnsPerHost int                     `description:"If non-zero, controls the maximum idle (keep-alive) to keep per-host. If zero, DefaultMaxIdleConnsPerHost is used. If negative, disables connection reuse." json:"maxIdleConnsPerHost,omitempty" toml:"maxIdleConnsPerHost,omitempty" yaml:"maxIdleConnsPerHost,omitempty" export:"true"`
 	ForwardingTimeouts  *ForwardingTimeouts     `description:"Defines the timeouts for requests forwarded to the backend servers." json:"forwardingTimeouts,omitempty" toml:"forwardingTimeouts,omitempty" yaml:"forwardingTimeouts,omitempty" export:"true"`
 	DisableHTTP2        bool                    `description:"Disables HTTP/2 for connections with backend servers." json:"disableHTTP2,omitempty" toml:"disableHTTP2,omitempty" yaml:"disableHTTP2,omitempty" export:"true"`
+	DisableCompression  bool                    `description:"Disables compression handling for connections with backend servers." json:"disableCompression,omitempty" toml:"disableCompression,omitempty" yaml:"disableCompression,omitempty" export:"true"`
 	// Deprecated: PeerCertURI is deprecated, please use the PeerCertSANs option instead.
 	PeerCertURI  string           `description:"Defines the URI used to match against SAN URI during the peer certificate verification." json:"peerCertURI,omitempty" toml:"peerCertURI,omitempty" yaml:"peerCertURI,omitempty"`
 	PeerCertSANs []traefiktls.SAN `description:"Defines the SANs (Subject Alternative Names) used to match against SANs during the peer certificate verification." json:"peerCertSANs,omitempty" toml:"peerCertSANs,omitempty" yaml:"peerCertSANs,omitempty"`
