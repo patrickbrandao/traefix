@@ -100,17 +100,19 @@ func (s *Header) PostRequestModifyResponseHeaders(res *http.Response) error {
 		return nil
 	}
 
-	varyHeader := res.Header.Get("Vary")
-	if varyHeader == "Origin" {
-		return nil
+	// The backend may send Vary on several lines or as a list on one line,
+	// and every value must be kept so that caches do not serve the wrong variant.
+	varyValues := res.Header.Values("Vary")
+	for _, value := range varyValues {
+		for token := range strings.SplitSeq(value, ",") {
+			token = strings.TrimSpace(token)
+			if token == "*" || strings.EqualFold(token, "Origin") {
+				return nil
+			}
+		}
 	}
 
-	if varyHeader != "" {
-		varyHeader += ","
-	}
-	varyHeader += "Origin"
-
-	res.Header.Set("Vary", varyHeader)
+	res.Header.Set("Vary", strings.Join(append(slices.Clone(varyValues), "Origin"), ","))
 	return nil
 }
 

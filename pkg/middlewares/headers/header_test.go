@@ -443,6 +443,80 @@ func TestNewHeader_CORSResponses(t *testing.T) {
 			},
 		},
 		{
+			desc: "Test Simple Request with Vary Headers and multiple existing vary response",
+			next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("Vary", "Accept-Encoding")
+				w.Header().Add("Vary", "Cookie, Authorization")
+				w.WriteHeader(http.StatusOK)
+			}),
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList: []string{"https://foo.bar.org"},
+				AddVaryHeader:                true,
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Access-Control-Allow-Origin": {"https://foo.bar.org"},
+				"Vary":                        {"Accept-Encoding,Cookie, Authorization,Origin"},
+			},
+		},
+		{
+			desc: "Test Simple Request with Vary Headers and existing vary origin in a list",
+			next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("Vary", "Accept-Encoding")
+				w.Header().Add("Vary", "Cookie, origin")
+				w.WriteHeader(http.StatusOK)
+			}),
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList: []string{"https://foo.bar.org"},
+				AddVaryHeader:                true,
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Access-Control-Allow-Origin": {"https://foo.bar.org"},
+				"Vary":                        {"Accept-Encoding", "Cookie, origin"},
+			},
+		},
+		{
+			desc: "Test Simple Request with Vary Headers and a header name containing origin",
+			next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Vary", "X-Origin-Id")
+				w.WriteHeader(http.StatusOK)
+			}),
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList: []string{"https://foo.bar.org"},
+				AddVaryHeader:                true,
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Access-Control-Allow-Origin": {"https://foo.bar.org"},
+				"Vary":                        {"X-Origin-Id,Origin"},
+			},
+		},
+		{
+			desc: "Test Simple Request with Vary Headers and existing vary wildcard",
+			next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Vary", "*")
+				w.WriteHeader(http.StatusOK)
+			}),
+			cfg: dynamic.Headers{
+				AccessControlAllowOriginList: []string{"https://foo.bar.org"},
+				AddVaryHeader:                true,
+			},
+			requestHeaders: map[string][]string{
+				"Origin": {"https://foo.bar.org"},
+			},
+			expected: map[string][]string{
+				"Access-Control-Allow-Origin": {"https://foo.bar.org"},
+				"Vary":                        {"*"},
+			},
+		},
+		{
 			desc: "Test Simple Request with non-empty response: set ACAO",
 			next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// existingAccessControlAllowOriginHandlerSet
