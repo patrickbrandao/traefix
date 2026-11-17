@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +204/-10 em 6 arquivos |
 | Labels | status/1-needs-design-review, kind/bug/fix, size/M, area/middleware, area/provider/k8s/ingress-nginx |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -39,3 +39,22 @@ Flag interno, sem impacto nos demais providers. Status: needs-design-review, ent
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- No provider ingress-nginx, o middleware `Headers` gerado para `enable-cors` respondia a qualquer preflight (`OPTIONS` com `Origin` e `Access-Control-Request-Method`) **sem repassar ao backend**, mesmo quando a origem não estava em `cors-allow-origin`. Também mandava `Access-Control-Allow-Credentials: true` e `Access-Control-Expose-Headers` para todas as origens. O ingress-nginx só trata CORS quando a origem casa; nos outros casos, repassa a requisição ao backend sem headers CORS.
+- Segurança: não é uma vulnerabilidade direta, porque sem `Access-Control-Allow-Origin` o navegador bloqueia a leitura. Mesmo assim, reduz informação vazada (credenciais e headers expostos para origens não permitidas) e devolve ao backend o tratamento de `OPTIONS` de origens desconhecidas.
+- O PR implementa isso com um campo interno `CORSStrict` em `dynamic.Headers` (`json:"-"`, sem exposição na configuração pública, como o precedente `Cookie.Expires`), que só o provider ingress-nginx liga. O middleware `Headers` genérico não muda de comportamento.
+- Ainda em "design-review" no upstream, sem objeção.
+
+**Ajustes**
+
+- Nenhum ajuste funcional. Acrescentei `CORSStrict: true` nas três expectativas de CORS de `TestLoadIngresses` que o PR não cobria (casos criados depois da base do PR).
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/middlewares/headers/ ./pkg/provider/kubernetes/ingress-nginx/` ok.
+- `golangci-lint` nos pacotes tocados: 0 issues.
