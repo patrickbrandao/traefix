@@ -194,6 +194,56 @@ func TestLoadConfigurationFromIngresses(t *testing.T) {
 			},
 		},
 		{
+			desc: "Ingress with strategy annotation",
+			expected: &dynamic.Configuration{
+				HTTP: &dynamic.HTTPConfiguration{
+					Middlewares: map[string]*dynamic.Middleware{},
+					Routers: map[string]*dynamic.Router{
+						"testing-bar": {
+							Rule:    `PathPrefix("/bar")`,
+							Service: "testing-service1-80",
+							Observability: &dynamic.RouterObservabilityConfig{
+								Metadata: &dynamic.ObservabilityMetadata{
+									Ingress: &dynamic.KubernetesMetadata{
+										Kind:      "Ingress",
+										Namespace: "testing",
+									},
+								},
+							},
+						},
+					},
+					Services: map[string]*dynamic.Service{
+						"testing-service1-80": {
+							LoadBalancer: &dynamic.ServersLoadBalancer{
+								Strategy:       dynamic.BalancerStrategyP2C,
+								PassHostHeader: new(true),
+								ResponseForwarding: &dynamic.ResponseForwarding{
+									FlushInterval: ptypes.Duration(100 * time.Millisecond),
+								},
+								Servers: []dynamic.Server{
+									{
+										URL: "http://10.10.0.1:8080",
+									},
+									{
+										URL: "http://10.21.0.1:8080",
+									},
+								},
+							},
+							Observability: &dynamic.ServiceObservabilityConfig{
+								Metadata: &dynamic.ServiceObservabilityMetadata{
+									Kubernetes: &dynamic.KubernetesServiceMetadata{
+										Namespace: "testing",
+										Name:      "service1",
+										Port:      "80",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
 			desc: "Ingress with two different rules with one path",
 			expected: &dynamic.Configuration{
 				HTTP: &dynamic.HTTPConfiguration{
@@ -3885,4 +3935,21 @@ func TestStrictPrefixMatchingRule(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadServiceUnsupportedStrategy(t *testing.T) {
+	client := clientMock{
+		services: []*corev1.Service{{
+			Name:        "service1",
+			Namespace:   "testing",
+			Annotations: map[string]string{"traefik.ingress.kubernetes.io/service.strategy": "random"},
+			Spec:        corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+		}},
+	}
+
+	p := Provider{}
+	_, err := p.loadService(client, "testing", netv1.IngressBackend{
+		Service: &netv1.IngressServiceBackend{Name: "service1", Port: netv1.ServiceBackendPort{Number: 80}},
+	})
+	assert.EqualError(t, err, "load-balancer strategy random is not supported")
 }
