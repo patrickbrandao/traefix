@@ -1446,3 +1446,92 @@ func generateBytes(length int) []byte {
 	}
 	return value
 }
+
+func TestVaryHeader(t *testing.T) {
+	testCases := []struct {
+		desc            string
+		vary            []string
+		contentEncoding string
+		body            []byte
+		expected        []string
+	}{
+		{
+			desc:     "added when the backend does not send it",
+			body:     bigTestBody,
+			expected: []string{acceptEncodingHeader},
+		},
+		{
+			desc:     "added to the values sent by the backend",
+			vary:     []string{"Cookie"},
+			body:     bigTestBody,
+			expected: []string{"Cookie", acceptEncodingHeader},
+		},
+		{
+			desc:     "added when the response is not compressed",
+			body:     smallTestBody,
+			expected: []string{acceptEncodingHeader},
+		},
+		{
+			desc:     "not duplicated when compressed",
+			vary:     []string{acceptEncodingHeader},
+			body:     bigTestBody,
+			expected: []string{acceptEncodingHeader},
+		},
+		{
+			desc:     "not duplicated when not compressed",
+			vary:     []string{acceptEncodingHeader},
+			body:     smallTestBody,
+			expected: []string{acceptEncodingHeader},
+		},
+		{
+			desc:            "not duplicated when already encoded",
+			vary:            []string{acceptEncodingHeader},
+			contentEncoding: gzipName,
+			body:            bigTestBody,
+			expected:        []string{acceptEncodingHeader},
+		},
+		{
+			desc:     "not duplicated when listed with other values",
+			vary:     []string{"Cookie, accept-encoding"},
+			body:     bigTestBody,
+			expected: []string{"Cookie, accept-encoding"},
+		},
+		{
+			desc:     "not added to a wildcard",
+			vary:     []string{"*"},
+			body:     bigTestBody,
+			expected: []string{"*"},
+		},
+	}
+
+	for _, encoding := range defaultSupportedEncodings {
+		for _, test := range testCases {
+			t.Run(encoding+" "+test.desc, func(t *testing.T) {
+				t.Parallel()
+
+				next := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+					// Like the reverse proxy, which adds the backend headers to the ones already set.
+					for _, v := range test.vary {
+						rw.Header().Add(varyHeader, v)
+					}
+					if test.contentEncoding != "" {
+						rw.Header().Set(contentEncodingHeader, test.contentEncoding)
+					}
+					_, err := rw.Write(test.body)
+					require.NoError(t, err)
+				})
+
+				handler, err := New(t.Context(), next, dynamic.Compress{Encodings: defaultSupportedEncodings}, "testing")
+				require.NoError(t, err)
+
+				req := testhelpers.MustNewRequest(http.MethodGet, "http://localhost", nil)
+				req.Header.Set(acceptEncodingHeader, encoding)
+
+				rw := httptest.NewRecorder()
+				handler.ServeHTTP(rw, req)
+
+				assert.Equal(t, test.expected, rw.Header().Values(varyHeader))
+			})
+		}
+	}
+}

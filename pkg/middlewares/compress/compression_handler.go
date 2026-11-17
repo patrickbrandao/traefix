@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/traefik/traefik/v3/pkg/middlewares"
@@ -118,8 +119,6 @@ func NewCompressionHandler(cfg Config, newWriter NewCompressionWriter, next http
 }
 
 func (c *CompressionHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	rw.Header().Add(vary, acceptEncoding)
-
 	compressionWriter, err := c.getCompressionWriter(rw)
 	if err != nil {
 		logger := middlewares.GetLogger(r.Context(), c.cfg.MiddlewareName, typeName)
@@ -401,7 +400,7 @@ func (r *responseWriter) start(compress bool) error {
 		header.Set(contentEncoding, r.compressionWriter.ContentEncoding())
 	}
 
-	r.rw.WriteHeader(r.statusCode)
+	r.writeHeader()
 
 	if len(r.buf) == 0 {
 		return nil
@@ -417,6 +416,31 @@ func (r *responseWriter) start(compress bool) error {
 	return err
 }
 
+// writeHeader sends the status code and the headers, with a Vary header listing Accept-Encoding.
+// Vary is only completed here, once the handler is done with the headers:
+// adding it before calling the handler duplicated the Vary: Accept-Encoding header that backends commonly send.
+func (r *responseWriter) writeHeader() {
+	if !varyListsAcceptEncoding(r.rw.Header()) {
+		r.rw.Header().Add(vary, acceptEncoding)
+	}
+
+	r.rw.WriteHeader(r.statusCode)
+}
+
+// varyListsAcceptEncoding reports whether the Vary header lists Accept-Encoding or "*".
+func varyListsAcceptEncoding(header http.Header) bool {
+	for _, value := range header.Values(vary) {
+		for token := range strings.SplitSeq(value, ",") {
+			token = strings.TrimSpace(token)
+			if token == "*" || strings.EqualFold(token, acceptEncoding) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // close sends whatever the handler left pending, and terminates the compressed stream.
 // The compression writer is only closed once compression started,
 // as closing it writes end-of-stream bytes.
@@ -427,7 +451,7 @@ func (r *responseWriter) close() error {
 
 	switch r.state {
 	case stateHeadersPending:
-		r.rw.WriteHeader(r.statusCode)
+		r.writeHeader()
 		return nil
 
 	case stateBuffering:
