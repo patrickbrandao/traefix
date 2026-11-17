@@ -24,6 +24,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/crd"
 	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/gateway"
 	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/ingress"
+	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/knative"
 	"github.com/traefik/traefik/v3/pkg/provider/kv/consul"
 	"github.com/traefik/traefik/v3/pkg/provider/kv/etcd"
 	"github.com/traefik/traefik/v3/pkg/provider/kv/redis"
@@ -616,6 +617,8 @@ func fullStaticConfiguration() *static.Configuration {
 			Key:                "mycert.key",
 			InsecureSkipVerify: true,
 		},
+		Username:          "MyUsername",
+		Password:          "MyPassword",
 		HTTPClientTimeout: 42,
 	}
 
@@ -633,6 +636,8 @@ func fullStaticConfiguration() *static.Configuration {
 			Key:                "mycert.key",
 			InsecureSkipVerify: true,
 		},
+		Username:          "MyUsername",
+		Password:          "MyPassword",
 		HTTPClientTimeout: 42,
 		RefreshSeconds:    42,
 	}
@@ -663,6 +668,15 @@ func fullStaticConfiguration() *static.Configuration {
 	}
 
 	config.Providers.KubernetesGateway = &gateway.Provider{
+		Endpoint:         "MyEndpoint",
+		Token:            "MyToken",
+		CertAuthFilePath: "MyCertAuthPath",
+		Namespaces:       []string{"a", "b"},
+		LabelSelector:    "myLabelSelector",
+		ThrottleDuration: ptypes.Duration(111 * time.Second),
+	}
+
+	config.Providers.Knative = &knative.Provider{
 		Endpoint:         "MyEndpoint",
 		Token:            "MyToken",
 		CertAuthFilePath: "MyCertAuthPath",
@@ -767,6 +781,9 @@ func fullStaticConfiguration() *static.Configuration {
 		Endpoint:     "Myendpoint",
 		PollInterval: 42,
 		PollTimeout:  42,
+		Headers: map[string]string{
+			"foo": "bar",
+		},
 		TLS: &types.ClientTLS{
 			CA:                 "myCa",
 			Cert:               "mycert.pem",

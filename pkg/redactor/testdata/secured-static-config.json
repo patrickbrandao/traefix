@@ -96,6 +96,8 @@
       "useBindPortIP": true,
       "watch": true,
       "defaultRule": "PathPrefix(`/`)",
+      "username": "MyUsername",
+      "password": "xxxx",
       "endpoint": "MyEndPoint",
       "tls": {
         "ca": "myCa",
@@ -113,6 +115,8 @@
       "useBindPortIP": true,
       "watch": true,
       "defaultRule": "PathPrefix(`/`)",
+      "username": "MyUsername",
+      "password": "xxxx",
       "endpoint": "MyEndPoint",
       "tls": {
         "ca": "myCa",
@@ -167,6 +171,19 @@
         "b"
       ],
       "labelSelector": "myLabelSelector",
+      "throttleDuration": "1m51s"
+    },
+    "knative": {
+      "endpoint": "MyEndpoint",
+      "token": "xxxx",
+      "certAuthFilePath": "MyCertAuthPath",
+      "namespaces": [
+        "a",
+        "b"
+      ],
+      "labelSelector": "myLabelSelector",
+      "publicService": {},
+      "privateService": {},
       "throttleDuration": "1m51s"
     },
     "rest": {
