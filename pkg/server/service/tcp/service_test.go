@@ -1,6 +1,8 @@
 package tcp
 
 import (
+	"io"
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -353,4 +355,76 @@ func TestManager_BuildTCP(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestManager_BuildTCP_ServerWeight(t *testing.T) {
+	backends := map[string]string{}
+	for _, name := range []string{"heavy", "light", "disabled"} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = ln.Close() })
+
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				_, _ = conn.Write([]byte(name))
+				_ = conn.Close()
+			}
+		}()
+
+		backends[name] = ln.Addr().String()
+	}
+
+	dialerManager := tcp.NewDialerManager(nil)
+	dialerManager.Update(map[string]*dynamic.TCPServersTransport{"default@internal": {}})
+
+	manager := NewManager(&runtime.Configuration{
+		TCPServices: map[string]*runtime.TCPServiceInfo{
+			"test@file": {
+				TCPService: &dynamic.TCPService{
+					LoadBalancer: &dynamic.TCPServersLoadBalancer{
+						Servers: []dynamic.TCPServer{
+							{Address: backends["heavy"], Weight: new(3)},
+							{Address: backends["light"]},
+							{Address: backends["disabled"], Weight: new(0)},
+						},
+					},
+				},
+			},
+		},
+	}, dialerManager)
+
+	handler, err := manager.BuildTCP(t.Context(), "test@file")
+	require.NoError(t, err)
+
+	frontend, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = frontend.Close() })
+
+	go func() {
+		for {
+			conn, err := frontend.Accept()
+			if err != nil {
+				return
+			}
+			go handler.ServeTCP(conn.(*net.TCPConn))
+		}
+	}()
+
+	counts := map[string]int{}
+	for range 8 {
+		conn, err := net.Dial("tcp", frontend.Addr().String())
+		require.NoError(t, err)
+
+		name, err := io.ReadAll(conn)
+		require.NoError(t, err)
+		_ = conn.Close()
+
+		counts[string(name)]++
+	}
+
+	assert.Equal(t, map[string]int{"heavy": 6, "light": 2}, counts)
 }

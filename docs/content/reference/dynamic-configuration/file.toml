@@ -493,10 +493,12 @@
         [[tcp.services.TCPService01.loadBalancer.servers]]
           address = "foobar"
           tls = true
+          weight = 42
 
         [[tcp.services.TCPService01.loadBalancer.servers]]
           address = "foobar"
           tls = true
+          weight = 42
         [tcp.services.TCPService01.loadBalancer.proxyProtocol]
           version = 42
     [tcp.services.TCPService02]
