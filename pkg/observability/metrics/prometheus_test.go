@@ -578,12 +578,33 @@ func TestPrometheusRemovedMetricsReset(t *testing.T) {
 	assertCounterValue(t, 1, findMetricFamily(serviceReqsTotalName, metricsFamilies), labelNamesValues...)
 }
 
+func TestResetTLSCertificateMetrics(t *testing.T) {
+	promState = newPrometheusState()
+	promRegistry = prometheus.NewRegistry()
+	t.Cleanup(promState.reset)
+
+	prometheusRegistry := RegisterPrometheus(t.Context(), &otypes.Prometheus{})
+	defer promRegistry.Unregister(promState)
+
+	prometheusRegistry.
+		TLSCertsNotAfterTimestampGauge().
+		With("cn", "value", "serial", "value", "sans", "value").
+		Set(1)
+
+	assertMetricsExist(t, mustScrape(), tlsCertsNotAfterTimestampName)
+
+	ResetTLSCertificateMetrics()
+
+	assertMetricsAbsent(t, mustScrape(), tlsCertsNotAfterTimestampName)
+}
+
 // reset is a utility method for unit testing.
 // It should be called after each test run that changes promState internally
 // in order to avoid dependencies between unit tests.
 func (ps *prometheusState) reset() {
 	ps.dynamicConfig = newDynamicConfig()
 	ps.vectors = nil
+	ps.tlsCertsGaugeVec = nil
 	ps.deletedEP = nil
 	ps.deletedRouters = nil
 	ps.deletedServices = nil

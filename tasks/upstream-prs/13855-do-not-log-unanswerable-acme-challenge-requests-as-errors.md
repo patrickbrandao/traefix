@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +77/-3 em 2 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, area/acme, size/M |
-| Status | pendente |
+| Status | importado com ajustes |
 
 ## O que faz
 
@@ -37,3 +37,27 @@ Mudança pequena de nível de log, mas o log some do nível padrão de operaçã
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Veredito: importado com ajustes.**
+
+Achados:
+- O handler do desafio HTTP-01 (`/.well-known/acme-challenge/`) pode ser acessado por qualquer pessoa no entry
+  point. Requisições com token ausente ou desconhecido eram logadas em nível `error`, o que permitia a
+  terceiros inflar o log de erros do operador (ruído e log flooding). O PR rebaixa esses logs para `debug`,
+  coerente com as linhas vizinhas. A resposta continua sendo 404.
+- Os valores vindos do cliente (token e host) continuam sendo logados com `%q`, sem risco de log injection.
+- O teste novo tinha uma mensagem de assert descritiva, contrariando a convenção do AGENTS.md.
+- Achado adicional: `getPathParam` recompilava a regex a cada requisição nesse endpoint público, um custo de
+  CPU desnecessário que qualquer um pode provocar.
+
+Ajustes:
+- A regex do caminho do token passou a ser compilada uma única vez (`tokenPathRegexp`), com
+  `regexp.QuoteMeta` no prefixo.
+- Removi a mensagem do assert no teste.
+
+Testes:
+- `go build ./...`: ok.
+- `go test ./pkg/provider/acme/`: ok.
+- `golangci-lint run ./pkg/provider/acme/...`: 0 issues.
