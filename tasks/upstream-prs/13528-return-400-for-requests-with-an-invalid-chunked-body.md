@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +95/-0 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/M, area/server |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -37,3 +37,24 @@ Casamento de erros por string, que pode quebrar em versões futuras do Go. Statu
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, status "review" sem comentários técnicos de maintainer.
+
+### Achados no PR original
+
+- Correto e de baixo risco: as mensagens são comparadas por igualdade exata com os erros não exportados do leitor
+  chunked do `net/http`, então mensagens arbitrárias do backend não viram 400. O `http.Transport` desembrulha
+  `requestBodyReadError`, então o erro chega ao `ErrorHandler` sem wrapper.
+- Limitação: a lista de mensagens depende de detalhes internos do `net/http` e pode ficar desatualizada em versões futuras
+  do Go (nesse caso o resultado volta a ser 500, sem risco de segurança). Os testes geram os erros com
+  `httputil.NewChunkedReader`, então detectam essa mudança.
+
+### Ajustes
+
+Nenhum.
+
+### Testes
+
+- `go test ./pkg/proxy/httputil/` ok; `golangci-lint run ./pkg/proxy/httputil/...`: 0 issues.
