@@ -146,6 +146,10 @@ func (rt *rewriteTarget) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		req = ingressnginx.WithOriginalURI(req, req.URL.RequestURI())
 	}
 
+	// Location matching in ingress-nginx happens before rewrite-target changes the request path,
+	// so the snippet location blocks must keep matching the client path.
+	req = ingressnginx.WithOriginalPath(req, req.URL.Path)
+
 	// As replacement can introduce escaped characters
 	// Path must remain an unescaped version of RawPath
 	// Doesn't handle multiple times encoded replacement (`/` => `%2F` => `%252F` => ...)

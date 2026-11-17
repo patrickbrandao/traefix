@@ -28,3 +28,24 @@ func OriginalRequestURI(req *http.Request) string {
 
 	return req.URL.RequestURI()
 }
+
+type originalPathContextKey struct{}
+
+// WithOriginalPath stores the request path before an ingress-nginx rewrite.
+// It preserves the first value when more than one rewrite middleware is used.
+func WithOriginalPath(req *http.Request, path string) *http.Request {
+	if _, ok := req.Context().Value(originalPathContextKey{}).(string); ok {
+		return req
+	}
+
+	return req.WithContext(context.WithValue(req.Context(), originalPathContextKey{}, path))
+}
+
+// OriginalPath returns the path before an ingress-nginx rewrite, if one ran.
+func OriginalPath(req *http.Request) string {
+	if path, ok := req.Context().Value(originalPathContextKey{}).(string); ok {
+		return path
+	}
+
+	return req.URL.Path
+}
