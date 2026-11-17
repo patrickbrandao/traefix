@@ -14,7 +14,7 @@
 | Branch-alvo | `master` |
 | Tamanho | +96/-32 em 4 arquivos |
 | Labels | kind/enhancement, status/2-needs-review, size/S, area/rules, area/performance |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -39,3 +39,24 @@ Mudança localizada em dois arquivos de mux, sem mudança de API. Só traz ganho
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, só com review automatizado (sem achados), status "review".
+
+### Achados no PR original
+
+- Correto: `sort.Search` com o predicado `newRoute.precedes(routes[i])` é monotônico numa lista ordenada de forma
+  decrescente por `(priority, providerPriority)`. A rota nova entra depois das de mesma precedência, o que dá ordem de
+  inserção estável (o `sort.Sort` anterior não era estável em listas maiores).
+- Remove o custo quadrático (`append` mais `sort.Sort` a cada rota) para tabelas com milhares de routers.
+- Mudança sutil: entre rotas de mesma prioridade e mesmo provider, a ordem agora é sempre a de inserção. Antes ela
+  dependia do algoritmo de ordenação. Prioridades iguais não têm ordem garantida pela documentação, então não há regressão.
+
+### Ajustes
+
+Nenhum.
+
+### Testes
+
+- `go build ./...` ok; `go test ./pkg/muxer/...` ok; `golangci-lint run ./pkg/muxer/...`: 0 issues.
