@@ -49,6 +49,9 @@ func newRouter(ctx context.Context, router, routerRule, service string, next htt
 }
 
 func (f *routerTracing) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	// Innermost router wins with nested routers, as it is the one that actually matched.
+	setHTTPRoute(req.Context(), f.routerRule)
+
 	tracer := tracing.TracerFromContext(req.Context())
 	if tracer == nil {
 		f.next.ServeHTTP(rw, req)

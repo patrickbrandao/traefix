@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/traefik/traefik/v3/pkg/observability/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -181,6 +182,42 @@ func TestExtractRouteFromRule(t *testing.T) {
 	for _, test := range testCases {
 		t.Run(test.rule, func(t *testing.T) {
 			assert.Equal(t, test.expected, extractRouteFromRule(test.rule))
+		})
+	}
+}
+
+func TestNewRouter_HTTPRoute(t *testing.T) {
+	testCases := []struct {
+		desc   string
+		seeded bool
+	}{
+		{desc: "route holder seeded by the semconv metrics middleware", seeded: true},
+		{desc: "no route holder"},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://www.test.com/search", nil)
+			if test.seeded {
+				req = req.WithContext(context.WithValue(req.Context(), httpRouteKey{}, &httpRouteHolder{}))
+			}
+
+			var nextReq *http.Request
+			next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				nextReq = r
+			})
+
+			handler := newRouter(t.Context(), "myRouter", "PathPrefix(`/search`)", "myService", next)
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+
+			require.NotNil(t, nextReq)
+			assert.Same(t, req, nextReq)
+
+			route, ok := HTTPRoute(req.Context())
+			assert.Equal(t, test.seeded, ok)
+			if test.seeded {
+				assert.Equal(t, "PathPrefix(`/search`)", route)
+			}
 		})
 	}
 }

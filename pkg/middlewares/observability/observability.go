@@ -121,6 +121,31 @@ func SetStatusErrorf(ctx context.Context, format string, args ...any) {
 	}
 }
 
+type httpRouteKey struct{}
+
+// httpRouteHolder carries the matched router rule produced by the router
+// handler during request processing so the entrypoint semconv metrics
+// middleware can read it after downstream handlers return.
+type httpRouteHolder struct {
+	route string
+}
+
+// setHTTPRoute records the route in the holder that the semconv metrics middleware put in the context.
+// Without a holder, semconv metrics are disabled and there is nothing to record.
+func setHTTPRoute(ctx context.Context, route string) {
+	if holder, ok := ctx.Value(httpRouteKey{}).(*httpRouteHolder); ok && route != "" {
+		holder.route = route
+	}
+}
+
+// HTTPRoute returns the HTTP route pattern from the context, if available.
+func HTTPRoute(ctx context.Context) (string, bool) {
+	if holder, ok := ctx.Value(httpRouteKey{}).(*httpRouteHolder); ok && holder.route != "" {
+		return holder.route, true
+	}
+	return "", false
+}
+
 func Proto(proto string) string {
 	switch proto {
 	case "HTTP/1.0":
