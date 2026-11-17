@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +29/-2 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/rules |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -37,3 +37,26 @@ Mudança pequena em pkg/muxer/http/matcher.go, com testes. Status: needs-review,
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+PR aberto, só com review automatizado (sem achados), status "review".
+
+### Achados no PR original
+
+- **Correção relevante para segurança:** `Host` já aceitava o host com ponto final (`app.example.com.`), mas `HostRegexp`
+  não. Um request para `app.example.com.` deixava de casar com o router `HostRegexp` e caía num router de prioridade
+  menor, pulando os middlewares daquele router (auth, allowlist...). É um bypass de roteamento.
+- A correção tenta primeiro o host bruto (regras que incluem o ponto continuam funcionando) e depois o host sem o ponto
+  final, como o matcher `Host`.
+- Limitação, igual à do `Host`: só um ponto final é removido (`example.com..` não casa), o que é seguro porque falha fechado.
+- Fora do escopo: o `HostRegexp` da sintaxe v2 (`matcher_v2.go`, baseado no gorilla/mux) não foi alterado e pode ter a
+  mesma limitação. Vale uma task própria se a sintaxe v2 estiver em uso.
+
+### Ajustes
+
+Nenhum.
+
+### Testes
+
+- `go test ./pkg/muxer/...` ok; `golangci-lint run ./pkg/muxer/...`: 0 issues.
