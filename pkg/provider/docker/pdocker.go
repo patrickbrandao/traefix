@@ -117,12 +117,11 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 				res := dockerClient.Events(ctx, client.EventsListOptions{
 					Filters: make(client.Filters).Add("type", string(eventtypes.ContainerEventType)),
 				})
+				healthStatuses := make(map[string]eventtypes.Action)
 				for {
 					select {
 					case event := <-res.Messages:
-						if event.Action == "start" ||
-							event.Action == "die" ||
-							strings.HasPrefix(string(event.Action), "health_status") {
+						if shouldHandleEvent(event, healthStatuses) {
 							startStopHandle(event)
 						}
 					case err := <-res.Err:
@@ -149,6 +148,29 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 	})
 
 	return nil
+}
+
+// shouldHandleEvent reports whether the event may change the configuration.
+// Docker can emit a health_status event on every health check probe, even when the status did not change,
+// so health_status events are skipped when the container status is the same as the last one seen.
+// healthStatuses holds the last health status of each container, and is cleaned up when a container starts or dies.
+func shouldHandleEvent(event eventtypes.Message, healthStatuses map[string]eventtypes.Action) bool {
+	switch {
+	case event.Action == eventtypes.ActionStart || event.Action == eventtypes.ActionDie:
+		delete(healthStatuses, event.Actor.ID)
+		return true
+
+	case strings.HasPrefix(string(event.Action), string(eventtypes.ActionHealthStatus)):
+		if last, ok := healthStatuses[event.Actor.ID]; ok && last == event.Action {
+			return false
+		}
+
+		healthStatuses[event.Actor.ID] = event.Action
+		return true
+
+	default:
+		return false
+	}
 }
 
 func (p *Provider) createClient(ctx context.Context) (*client.Client, error) {
