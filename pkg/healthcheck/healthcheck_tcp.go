@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"sync"
@@ -212,7 +213,7 @@ func (thc *ServiceTCPHealthChecker) executeHealthCheck(ctx context.Context, conf
 
 	if config.Expect != "" {
 		buf := make([]byte, len(config.Expect))
-		if _, err = conn.Read(buf); err != nil {
+		if _, err = io.ReadFull(conn, buf); err != nil {
 			return fmt.Errorf("reading from %s: %w", addr, err)
 		}
 
