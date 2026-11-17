@@ -1,11 +1,15 @@
 package ratelimiter
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,4 +67,39 @@ func TestRedisClientKey(t *testing.T) {
 	password, err := redisClientKey(&dynamic.Redis{Password: "secret"})
 	require.NoError(t, err)
 	assert.NotContains(t, password, "secret")
+}
+
+func TestRedisLimiter_clientClosedWhenUnused(t *testing.T) {
+	config := &dynamic.Redis{Endpoints: []string{"127.0.0.1:0"}, DB: 5}
+
+	kept := buildRedisLimiter(t, config)
+	client := func() redis.UniversalClient {
+		return buildRedisLimiter(t, config).client.(redis.UniversalClient)
+	}()
+
+	key, err := redisClientKey(config)
+	require.NoError(t, err)
+
+	// The limiter still in use keeps the shared client open.
+	require.Eventually(t, func() bool {
+		runtime.GC()
+
+		sharedRedisClients.mu.Lock()
+		defer sharedRedisClients.mu.Unlock()
+
+		return sharedRedisClients.clients[key].refs == 1
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.NotErrorIs(t, client.Ping(context.Background()).Err(), redis.ErrClosed)
+
+	runtime.KeepAlive(kept)
+
+	require.Eventually(t, func() bool {
+		runtime.GC()
+		return errors.Is(client.Ping(context.Background()).Err(), redis.ErrClosed)
+	}, 5*time.Second, 10*time.Millisecond)
+
+	sharedRedisClients.mu.Lock()
+	defer sharedRedisClients.mu.Unlock()
+
+	assert.NotContains(t, sharedRedisClients.clients, key)
 }

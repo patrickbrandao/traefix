@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -26,27 +27,51 @@ const redisPrefix = "rate:"
 // Sharing changes no semantics, as the buckets live in Redis.
 var sharedRedisClients = struct {
 	mu      sync.Mutex
-	clients map[string]redis.UniversalClient
-}{clients: make(map[string]redis.UniversalClient)}
+	clients map[string]*sharedClient
+}{clients: make(map[string]*sharedClient)}
 
-// sharedRedisClient returns the client cached for the Redis configuration, creating it on first use.
-func sharedRedisClient(config *dynamic.Redis, options *redis.UniversalOptions) (redis.UniversalClient, error) {
-	key, err := redisClientKey(config)
-	if err != nil {
-		return nil, err
-	}
+type sharedClient struct {
+	client redis.UniversalClient
+	refs   int
+}
 
+// acquireRedisClient returns the client cached for the key, creating it on first use.
+// Each call must be paired with a releaseRedisClient call.
+func acquireRedisClient(key string, options *redis.UniversalOptions) redis.UniversalClient {
 	sharedRedisClients.mu.Lock()
 	defer sharedRedisClients.mu.Unlock()
 
-	if client, ok := sharedRedisClients.clients[key]; ok {
-		return client, nil
+	shared, ok := sharedRedisClients.clients[key]
+	if !ok {
+		shared = &sharedClient{client: redis.NewUniversalClient(options)}
+		sharedRedisClients.clients[key] = shared
+	}
+	shared.refs++
+
+	return shared.client
+}
+
+// releaseRedisClient closes the client cached for the key once it is no longer used,
+// so that a configuration change or a certificate rotation does not leak the previous client.
+func releaseRedisClient(key string) {
+	sharedRedisClients.mu.Lock()
+
+	shared, ok := sharedRedisClients.clients[key]
+	if !ok {
+		sharedRedisClients.mu.Unlock()
+		return
 	}
 
-	client := redis.NewUniversalClient(options)
-	sharedRedisClients.clients[key] = client
+	shared.refs--
+	if shared.refs > 0 {
+		sharedRedisClients.mu.Unlock()
+		return
+	}
 
-	return client, nil
+	delete(sharedRedisClients.clients, key)
+	sharedRedisClients.mu.Unlock()
+
+	_ = shared.client.Close()
 }
 
 // redisClientKey derives the cache key from the configuration values, and not from redis.UniversalOptions,
@@ -136,21 +161,27 @@ func newRedisLimiter(ctx context.Context, rate rate.Limit, burst int64, maxDelay
 		return nil, fmt.Errorf("loading bucket script: %w", err)
 	}
 
-	client, err := sharedRedisClient(config.Redis, options)
+	key, err := redisClientKey(config.Redis)
 	if err != nil {
-		return nil, fmt.Errorf("obtaining redis client: %w", err)
+		return nil, err
 	}
 
-	return &redisLimiter{
+	limiter := &redisLimiter{
 		rate:     rate,
 		burst:    burst,
 		period:   config.Period,
 		maxDelay: maxDelay,
 		logger:   logger,
 		ttl:      ttl,
-		client:   client,
+		client:   acquireRedisClient(key, options),
 		script:   script,
-	}, nil
+	}
+
+	// The configuration context is canceled while the previous handler may still serve requests,
+	// so the client is released when the limiter becomes unreachable instead.
+	runtime.AddCleanup(limiter, releaseRedisClient, key)
+
+	return limiter, nil
 }
 
 func (r *redisLimiter) Allow(ctx context.Context, source string) (*time.Duration, error) {
@@ -165,6 +196,9 @@ func (r *redisLimiter) Allow(ctx context.Context, source string) (*time.Duration
 }
 
 func (r *redisLimiter) evaluateScript(ctx context.Context, key string) (bool, *time.Duration, error) {
+	// Otherwise the client could be closed by the cleanup while the script is running.
+	defer runtime.KeepAlive(r)
+
 	if r.rate == rate.Inf {
 		// A nil delay would reject the request, while an infinite rate must allow all of them.
 		var noDelay time.Duration
