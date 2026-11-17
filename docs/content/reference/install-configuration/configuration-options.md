@@ -9,6 +9,9 @@ THIS FILE MUST NOT BE EDITED BY HAND
 |:-------|:------------|:-------|
 | <a id="opt-accesslog" href="#opt-accesslog" title="#opt-accesslog">accesslog</a> | Access log settings. | false |
 | <a id="opt-accesslog-addinternals" href="#opt-accesslog-addinternals" title="#opt-accesslog-addinternals">accesslog.addinternals</a> | Enables access log for internal services (ping, dashboard, etc...). | false |
+| <a id="opt-accesslog-anonymization" href="#opt-accesslog-anonymization" title="#opt-accesslog-anonymization">accesslog.anonymization</a> | Access log client IP anonymization settings. | false |
+| <a id="opt-accesslog-anonymization-ipv4subnet" href="#opt-accesslog-anonymization-ipv4subnet" title="#opt-accesslog-anonymization-ipv4subnet">accesslog.anonymization.ipv4subnet</a> | Truncate client IPv4 addresses to this prefix length (1-32); 0 disables truncation. | 24 |
+| <a id="opt-accesslog-anonymization-ipv6subnet" href="#opt-accesslog-anonymization-ipv6subnet" title="#opt-accesslog-anonymization-ipv6subnet">accesslog.anonymization.ipv6subnet</a> | Truncate client IPv6 addresses to this prefix length (1-128); 0 disables truncation. | 48 |
 | <a id="opt-accesslog-bufferingsize" href="#opt-accesslog-bufferingsize" title="#opt-accesslog-bufferingsize">accesslog.bufferingsize</a> | Number of access log lines to process in a buffered way. | 0 |
 | <a id="opt-accesslog-compress" href="#opt-accesslog-compress" title="#opt-accesslog-compress">accesslog.compress</a> | Determines if the rotated access log files should be compressed using gzip. | false |
 | <a id="opt-accesslog-dualoutput" href="#opt-accesslog-dualoutput" title="#opt-accesslog-dualoutput">accesslog.dualoutput</a> | Enables access log output alongside OTLP. By default, this output is disabled when OTLP is configured. | false |

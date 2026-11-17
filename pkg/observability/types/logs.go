@@ -68,7 +68,22 @@ type AccessLog struct {
 	MaxBackups    int               `description:"Maximum number of old access log files to retain." json:"maxBackups,omitempty" toml:"maxBackups,omitempty" yaml:"maxBackups,omitempty" export:"true"`
 	Compress      bool              `description:"Determines if the rotated access log files should be compressed using gzip." json:"compress,omitempty" toml:"compress,omitempty" yaml:"compress,omitempty" export:"true"`
 
+	Anonymization *AccessLogAnonymization `description:"Access log client IP anonymization settings." json:"anonymization,omitempty" toml:"anonymization,omitempty" yaml:"anonymization,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+
 	OTLP *OTelLog `description:"Settings for OpenTelemetry." json:"otlp,omitempty" toml:"otlp,omitempty" yaml:"otlp,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+}
+
+// AccessLogAnonymization holds the client IP truncation settings for access logs.
+type AccessLogAnonymization struct {
+	IPv4Subnet int `description:"Truncate client IPv4 addresses to this prefix length (1-32); 0 disables truncation." json:"ipv4Subnet,omitempty" toml:"ipv4Subnet,omitempty" yaml:"ipv4Subnet,omitempty" export:"true"`
+	IPv6Subnet int `description:"Truncate client IPv6 addresses to this prefix length (1-128); 0 disables truncation." json:"ipv6Subnet,omitempty" toml:"ipv6Subnet,omitempty" yaml:"ipv6Subnet,omitempty" export:"true"`
+}
+
+// SetDefaults sets the default values.
+// Both families default to a prefix so that enabling anonymization never leaves one of them logged in full.
+func (a *AccessLogAnonymization) SetDefaults() {
+	a.IPv4Subnet = 24
+	a.IPv6Subnet = 48
 }
 
 // SetDefaults sets the default values.

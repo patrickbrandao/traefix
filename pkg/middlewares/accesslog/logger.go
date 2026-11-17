@@ -77,6 +77,15 @@ type Handler struct {
 
 // NewHandler creates a new Handler.
 func NewHandler(ctx context.Context, config *otypes.AccessLog, hooks ...logrus.Hook) (*Handler, error) {
+	if a := config.Anonymization; a != nil {
+		if a.IPv4Subnet < 0 || a.IPv4Subnet > 32 {
+			return nil, fmt.Errorf("invalid access log anonymization IPv4 subnet %d: must be between 0 and 32", a.IPv4Subnet)
+		}
+		if a.IPv6Subnet < 0 || a.IPv6Subnet > 128 {
+			return nil, fmt.Errorf("invalid access log anonymization IPv6 subnet %d: must be between 0 and 128", a.IPv6Subnet)
+		}
+	}
+
 	var file io.WriteCloser = noopCloser{os.Stdout}
 	if len(config.FilePath) > 0 {
 		if config.MaxSize > 0 || config.MaxAge > 0 || config.MaxBackups > 0 || config.Compress {
@@ -298,6 +307,12 @@ func (h *Handler) ServeHTTP(rw http.ResponseWriter, req *http.Request, next http
 		core[ClientHost] = forwardedFor
 	}
 
+	// Done after the X-Forwarded-For override, which would otherwise log the full client address.
+	if a := h.config.Anonymization; a != nil {
+		core[ClientHost] = maskIPList(core[ClientHost].(string), a)
+		core[ClientAddr] = maskClientAddr(core[ClientAddr].(string), a)
+	}
+
 	ctx := req.Context()
 	capt, err := capture.FromContext(ctx)
 	if err != nil {
@@ -461,7 +476,11 @@ func (h *Handler) redactHeaders(headers http.Header, fields logrus.Fields, prefi
 		v := h.config.Fields.KeepHeader(k)
 		switch v {
 		case otypes.AccessLogKeep:
-			fields[prefix+k] = strings.Join(headers.Values(k), ",")
+			value := strings.Join(headers.Values(k), ",")
+			if a := h.config.Anonymization; a != nil && prefix == "request_" {
+				value = anonymizedHeaderValue(k, value, a)
+			}
+			fields[prefix+k] = value
 		case otypes.AccessLogRedact:
 			fields[prefix+k] = "REDACTED"
 		}
