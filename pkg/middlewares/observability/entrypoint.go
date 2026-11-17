@@ -71,6 +71,11 @@ func (e *entryPointTracing) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 
 	e.tracer.CaptureServerRequest(span, req)
 
+	// Plugins only see raw headers: without this, the outbound calls they make carry the
+	// client's trace context instead of Traefik's span and produce orphaned traces.
+	// Injected after CaptureServerRequest so the span records the headers the client sent.
+	tracing.InjectContextIntoCarrier(req)
+
 	recorder := newStatusCodeRecorder(rw, http.StatusOK)
 	e.next.ServeHTTP(recorder, req)
 
