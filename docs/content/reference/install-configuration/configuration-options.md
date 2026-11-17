@@ -239,6 +239,7 @@ THIS FILE MUST NOT BE EDITED BY HAND
 | <a id="opt-metrics-otlp-pushinterval" href="#opt-metrics-otlp-pushinterval" title="#opt-metrics-otlp-pushinterval">metrics.otlp.pushinterval</a> | Period between calls to collect a checkpoint. | 10 |
 | <a id="opt-metrics-otlp-resourceattributes-name" href="#opt-metrics-otlp-resourceattributes-name" title="#opt-metrics-otlp-resourceattributes-name">metrics.otlp.resourceattributes._name_</a> | Defines additional resource attributes (key:value). | |
 | <a id="opt-metrics-otlp-servicename" href="#opt-metrics-otlp-servicename" title="#opt-metrics-otlp-servicename">metrics.otlp.servicename</a> | Defines the service name resource attribute. | traefik |
+| <a id="opt-metrics-otlp-temporality" href="#opt-metrics-otlp-temporality" title="#opt-metrics-otlp-temporality">metrics.otlp.temporality</a> | Defines the default temporality for metrics (cumulative, delta, or lowmemory). | |
 | <a id="opt-metrics-prometheus" href="#opt-metrics-prometheus" title="#opt-metrics-prometheus">metrics.prometheus</a> | Prometheus metrics exporter type. | false |
 | <a id="opt-metrics-prometheus-addentrypointslabels" href="#opt-metrics-prometheus-addentrypointslabels" title="#opt-metrics-prometheus-addentrypointslabels">metrics.prometheus.addentrypointslabels</a> | Enable metrics on entry points. | true |
 | <a id="opt-metrics-prometheus-addrouterslabels" href="#opt-metrics-prometheus-addrouterslabels" title="#opt-metrics-prometheus-addrouterslabels">metrics.prometheus.addrouterslabels</a> | Enable metrics on routers. | false |
