@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +3/-3 em 2 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/provider/k8s/ingress-nginx |
-| Status | pendente |
+| Status | importado |
 
 ## O que faz
 
@@ -37,3 +37,21 @@ Mudança de uma linha de regex em middleware.go, com teste. Status: needs-review
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Revisão (2026-11-16)
+
+**Achados no PR original**
+
+- Com `use-regex`, o redirect gerado pelo provider ingress-nginx (`buildRedirect`) usava um regex sensível a maiúsculas, enquanto as locations com regex do NGINX/ingress-nginx usam `~*` (insensível). O router casava `/Example/...` (o matcher de path já é insensível), mas o regex do redirect não, e o redirect não era aplicado.
+- A correção acrescenta `(?i)` ao regex, igual ao que o `rewrite-target` já faz.
+- Sem risco de segurança: só muda o casamento do redirect, que já era alcançável pelo router.
+
+**Ajustes**
+
+- Nenhum.
+
+**Testes**
+
+- `go build ./...` ok.
+- `go test ./pkg/provider/kubernetes/ingress-nginx/` ok.
+- `golangci-lint run ./pkg/provider/kubernetes/ingress-nginx/...`: 0 issues.
