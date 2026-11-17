@@ -28644,6 +28644,8 @@ func TestLoadIngresses(t *testing.T) {
 				p.StrictValidatePathType = *test.strictValidatePathType
 			}
 
+			setDefaultMaxIdleConnsPerHost(test.expected)
+
 			conf := p.loadConfiguration(t.Context())
 			assert.Equal(t, test.expected, conf)
 
@@ -28653,6 +28655,39 @@ func TestLoadIngresses(t *testing.T) {
 			}
 		})
 	}
+}
+
+func setDefaultMaxIdleConnsPerHost(conf *dynamic.Configuration) {
+	if conf == nil || conf.HTTP == nil {
+		return
+	}
+
+	for _, serversTransport := range conf.HTTP.ServersTransports {
+		if serversTransport.MaxIdleConnsPerHost == 0 {
+			serversTransport.MaxIdleConnsPerHost = defaultUpstreamKeepaliveConnections
+		}
+	}
+}
+
+func TestBuildServersTransportMaxIdleConnsPerHost(t *testing.T) {
+	p := Provider{}
+	p.SetDefaults()
+
+	nst, err := p.buildServersTransport(t.Context(), "default", "whoami", IngressConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, defaultUpstreamKeepaliveConnections, nst.ServersTransport.MaxIdleConnsPerHost)
+
+	p.UpstreamKeepaliveConnections = 42
+
+	nst, err = p.buildServersTransport(t.Context(), "default", "whoami", IngressConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, 42, nst.ServersTransport.MaxIdleConnsPerHost)
+
+	p.UpstreamKeepaliveConnections = 0
+
+	nst, err = p.buildServersTransport(t.Context(), "default", "whoami", IngressConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, -1, nst.ServersTransport.MaxIdleConnsPerHost)
 }
 
 func TestNginxSizeToBytes(t *testing.T) {

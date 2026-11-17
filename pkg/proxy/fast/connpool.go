@@ -340,9 +340,10 @@ type connPool struct {
 
 // newConnPool creates a new connPool.
 func newConnPool(maxIdleConn int, idleConnTimeout, responseHeaderTimeout time.Duration, dialer func() (net.Conn, error)) *connPool {
+	// A negative MaxIdleConnsPerHost disables connection reuse, and must not panic in make.
 	c := &connPool{
 		dialer:                dialer,
-		idleConns:             make(chan *conn, maxIdleConn),
+		idleConns:             make(chan *conn, max(maxIdleConn, 0)),
 		idleConnTimeout:       idleConnTimeout,
 		responseHeaderTimeout: responseHeaderTimeout,
 		doneCh:                make(chan struct{}),

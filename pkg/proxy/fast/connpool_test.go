@@ -95,6 +95,15 @@ func TestConnPool_MaxIdleConn(t *testing.T) {
 			maxIdleConn: 5,
 			expected:    5,
 		},
+		{
+			desc: "Negative max idle connections disables reuse",
+			poolFn: func(pool *connPool) {
+				c1, _ := pool.AcquireConn()
+				pool.ReleaseConn(c1)
+			},
+			maxIdleConn: -1,
+			expected:    0,
+		},
 	}
 
 	for _, test := range testCases {

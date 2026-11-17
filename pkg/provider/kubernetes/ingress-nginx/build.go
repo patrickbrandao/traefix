@@ -660,9 +660,16 @@ func inheritServerAppRoot(loc *location, appRoot string) {
 }
 
 func (p *Provider) buildServersTransport(ctx context.Context, namespace, name string, cfg IngressConfig) (namedServersTransport, error) {
+	maxIdleConnsPerHost := p.UpstreamKeepaliveConnections
+	if maxIdleConnsPerHost <= 0 {
+		// NGINX disables keep-alive with 0, whereas the ServersTransport uses the Go default (2) for 0 and disables reuse only when negative.
+		maxIdleConnsPerHost = -1
+	}
+
 	nst := namedServersTransport{
 		name: makeKey(namespace, name),
 		ServersTransport: &dynamic.ServersTransport{
+			MaxIdleConnsPerHost: maxIdleConnsPerHost,
 			ForwardingTimeouts: &dynamic.ForwardingTimeouts{
 				DialTimeout:     ptypes.Duration(time.Duration(ptr.Deref(cfg.ProxyConnectTimeout, p.ProxyConnectTimeout)) * time.Second),
 				ReadTimeout:     ptypes.Duration(time.Duration(ptr.Deref(cfg.ProxyReadTimeout, p.ProxyReadTimeout)) * time.Second),
