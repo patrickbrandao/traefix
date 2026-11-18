@@ -185,6 +185,8 @@ Traefix exports one request record per request, once the response ends.
 
 Traefix reports these metrics to every configured metrics backend. The names below are the Prometheus and OpenTelemetry ones. Datadog, StatsD and InfluxDB use the same names with dots, for example `traefik.fingerprint.export.records.total`, and `traefik.fingerprint.export.send.duration` for the sending duration.
 
+The `forwardAuth` middleware counts its fail-opens in `traefik_forwardauth_failopen_total`, described in [ForwardAuth Fail-Open](../routing-configuration/http/middlewares/forwardauth-failopen.md).
+
 | Metric | Labels | Contains |
 |:-------|:-------|:---------|
 | <a id="opt-traefik-fingerprint-export-records-total" href="#opt-traefik-fingerprint-export-records-total" title="#opt-traefik-fingerprint-export-records-total">`traefik_fingerprint_export_records_total`</a> | `entrypoint`, `type` | Records queued for export. |

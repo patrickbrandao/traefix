@@ -75,6 +75,9 @@ type forwardAuth struct {
 	preserveLocationHeader        bool
 	preserveRequestMethod         bool
 	authSigninURL                 string
+
+	requestHeaders http.Header
+	failOpen       *failOpen
 }
 
 // NewForward creates a forward auth middleware.
@@ -240,6 +243,10 @@ func NewForward(ctx context.Context, next http.Handler, config dynamic.ForwardAu
 		fa.addAuthCookiesToResponseRegex = re
 	}
 
+	if err := fa.configureTraefix(logger, config); err != nil {
+		return nil, err
+	}
+
 	if config.TrustForwardHeader == nil {
 		logger.Warn().Msg("trustForwardHeader is not configured: this creates an inconsistent security behavior where some X-Forwarded headers (e.g. X-Forwarded-For, X-Forwarded-Proto) are removed but others (e.g. X-Forwarded-Prefix) are forwarded untouched. Please set it to false to remove all X-Forwarded headers, or true to trust them all.")
 	} else if *config.TrustForwardHeader && len(fa.authRequestHeaders) > 0 {
@@ -349,6 +356,9 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			statusCode = httputil.StatusClientClosedRequest
 			logger.Debug().Err(forwardErr).Int("statusCode", statusCode).Msgf("Error calling %s", target)
 		} else {
+			if fa.failOpenOnError(rw, req, forwardErr) {
+				return
+			}
 			logger.Error().Err(forwardErr).Int("statusCode", statusCode).Msgf("Error calling %s", target)
 			observability.SetStatusErrorf(req.Context(), "Error calling %s. Cause: %s", target, forwardErr)
 		}
@@ -367,6 +377,9 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			rw.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+		if fa.failOpenOnError(rw, req, readError) {
+			return
+		}
 		logger.Debug().Err(readError).Msgf("Error reading body %s", target)
 		observability.SetStatusErrorf(req.Context(), "Error reading body %s. Cause: %s", target, readError)
 
@@ -378,6 +391,10 @@ func (fa *forwardAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// If any errors happen earlier, this span will be close by the defer instruction.
 	if forwardSpan != nil {
 		forwardSpan.End()
+	}
+
+	if fa.failOpenOnResponse(rw, req, forwardResponse) {
+		return
 	}
 
 	if fa.headerField != "" {
@@ -569,6 +586,8 @@ func (fa *forwardAuth) readResponseBodyBytes(res *http.Response) ([]byte, error)
 // doForward issues the authentication request, either to the configured address
 // through the middleware HTTP client, or through the configured service handler.
 func (fa *forwardAuth) doForward(forwardReq *http.Request) (*http.Response, error) {
+	fa.setTraefixHeaders(forwardReq)
+
 	if fa.serviceHandler == nil {
 		return fa.client.Do(forwardReq)
 	}

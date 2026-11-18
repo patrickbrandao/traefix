@@ -15,11 +15,28 @@ type requestState struct {
 	wire    *Request
 	router  string
 	service string
+
+	// headerNames and headerValues are the headers the entry point set on the request.
+	headerNames  []string
+	headerValues []string
 }
 
 func requestStateFrom(req *http.Request) *requestState {
 	st, _ := req.Context().Value(requestStateKey{}).(*requestState)
 	return st
+}
+
+// SetHeaders sets on h the headers the fingerprint of the entry point set on the request of ctx,
+// with the values the entry point set, so that a middleware sending a request of its own, e.g. to an authentication
+// server, can send them as well.
+func SetHeaders(ctx context.Context, h http.Header) {
+	st, _ := ctx.Value(requestStateKey{}).(*requestState)
+	if st == nil {
+		return
+	}
+	for i, name := range st.headerNames {
+		h[name] = []string{st.headerValues[i]}
+	}
 }
 
 // FromRequest returns the header block read from the wire for req, if it was captured.
@@ -94,19 +111,21 @@ func (e *EntryPoint) hasPrefix(name string) bool {
 // headerSetter assigns the headers from a single backing array, as each request gets its own values,
 // which a later handler may change in place.
 type headerSetter struct {
-	h    http.Header
-	vals []string
+	h     http.Header
+	vals  []string
+	names []string
 }
 
 // set assigns a canonical name: the names are canonicalized once, when the entry point is built.
 func (s *headerSetter) set(name, value string) {
 	s.vals = append(s.vals, value)
+	s.names = append(s.names, name)
 	n := len(s.vals)
 	s.h[name] = s.vals[n-1 : n : n]
 }
 
 func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
-	s := headerSetter{h: req.Header, vals: make([]string, 0, 9)}
+	s := headerSetter{h: req.Header, vals: make([]string, 0, 9), names: make([]string, 0, 9)}
 	proto := protoOf(req)
 
 	if info := st.conn; info != nil {
@@ -130,6 +149,9 @@ func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
 	if st.wire != nil {
 		s.set(e.headers.ja4h, st.wire.JA4H())
 	}
+
+	st.headerNames = s.names
+	st.headerValues = s.vals
 }
 
 func (e *EntryPoint) exportRequest(st *requestState, req *http.Request, status int) {

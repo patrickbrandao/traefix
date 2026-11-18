@@ -322,6 +322,7 @@ nav:
               - 'EncodedCharacters': 'reference/routing-configuration/http/middlewares/encodedcharacters.md'
               - 'Errors': 'reference/routing-configuration/http/middlewares/errorpages.md'
               - 'ForwardAuth': 'reference/routing-configuration/http/middlewares/forwardauth.md'
+              - 'ForwardAuth Fail-Open': 'reference/routing-configuration/http/middlewares/forwardauth-failopen.md'
               - 'GrpcWeb': 'reference/routing-configuration/http/middlewares/grpcweb.md'
               - 'Headers': 'reference/routing-configuration/http/middlewares/headers.md'
               - '<span class="nav-link-with-icon">HMAC <img src="https://doc.traefik.io/traefik-hub/img/ps-traefik-hub-logo-light.svg" class="menu-icon" alt="Traefik Hub API Gateway"></span>' : 'reference/routing-configuration/http/middlewares/hmac.md'

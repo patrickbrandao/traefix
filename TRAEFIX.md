@@ -54,6 +54,12 @@ Especificação: `tmp/report-waf-features.md` (fases 0 a 4). Implementado até a
   `traefix.fingerprint/v1`; métricas `traefik_fingerprint_*` em todos os backends. h3 recebe
   ID, cabeçalhos e registros, sem JA4/JA4H por enquanto. Documentação:
   `docs/content/reference/install-configuration/entrypoints-fingerprint.md`.
+- **forwardAuth com fail-open** (fase 2): `requestHeaders` (cabeçalhos fixos para o servidor de
+  auth, tratados como segredo e recusados em `http://` público) e `failOpen` (erro de rede,
+  timeout, 5xx e 4xx sem `denyRequiresResponseHeader` seguem ao backend com o cabeçalho
+  marcador); métrica `traefik_forwardauth_failopen_total`. Código em
+  `pkg/middlewares/auth/forward_failopen.go`; documentação em
+  `docs/content/reference/routing-configuration/http/middlewares/forwardauth-failopen.md`.
 - Código em `pkg/fingerprint/`; ganchos no upstream em `pkg/server/server_entrypoint_tcp*.go`,
   `pkg/server/router/router.go`, `pkg/config/static/entrypoints.go` e uma linha por backend em
   `pkg/observability/metrics/` (métricas em `traefix.go`).

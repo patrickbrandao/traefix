@@ -31,6 +31,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/config/runtime"
 	"github.com/traefik/traefik/v3/pkg/config/static"
 	"github.com/traefik/traefik/v3/pkg/middlewares/accesslog"
+	"github.com/traefik/traefik/v3/pkg/middlewares/auth"
 	"github.com/traefik/traefik/v3/pkg/observability/logs"
 	"github.com/traefik/traefik/v3/pkg/observability/metrics"
 	"github.com/traefik/traefik/v3/pkg/observability/tracing"
@@ -230,6 +231,7 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 		}
 	}
 	metricsRegistry := metrics.NewMultiRegistry(metricRegistries)
+	auth.SetMetricsRegistry(metricsRegistry)
 	accessLog := setupAccessLog(ctx, staticConfiguration.AccessLog)
 	tracer, tracerCloser := setupTracing(ctx, staticConfiguration.Tracing)
 	observabilityMgr := middleware.NewObservabilityMgr(*staticConfiguration, metricsRegistry, semConvMetricRegistry, accessLog, tracer, tracerCloser, rotateTraefikLog)

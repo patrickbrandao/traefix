@@ -22,6 +22,7 @@ const (
 	fingerprintExportQueueRecordsName = MetricNamePrefix + "fingerprint_export_queue_records"
 	fingerprintExportSendName         = MetricNamePrefix + "fingerprint_export_send_seconds"
 	fingerprintCaptureTruncatedName   = MetricNamePrefix + "fingerprint_capture_truncated_total"
+	forwardAuthFailOpenName           = MetricNamePrefix + "forwardauth_failopen_total"
 
 	// The StatsD and Datadog clients add the "traefik." prefix themselves.
 	statsdFingerprintExportRecordsName      = "fingerprint.export.records.total"
@@ -30,6 +31,7 @@ const (
 	statsdFingerprintExportQueueRecordsName = "fingerprint.export.queue.records"
 	statsdFingerprintExportSendName         = "fingerprint.export.send.duration"
 	statsdFingerprintCaptureTruncatedName   = "fingerprint.capture.truncated.total"
+	statsdForwardAuthFailOpenName           = "forwardauth.failopen.total"
 
 	influxDBFingerprintPrefix = "traefik."
 
@@ -55,6 +57,9 @@ type traefixRegistry interface {
 	FingerprintExportSendHistogram() ScalableHistogram
 	// FingerprintCaptureTruncatedCounter counts the captures cut at their size limit, by entrypoint and part.
 	FingerprintCaptureTruncatedCounter() metrics.Counter
+	// ForwardAuthFailOpenCounter counts the requests let through after an authentication server failure,
+	// by middleware and reason.
+	ForwardAuthFailOpenCounter() metrics.Counter
 }
 
 type traefixMetrics struct {
@@ -64,6 +69,7 @@ type traefixMetrics struct {
 	fingerprintExportQueueRecords metrics.Gauge
 	fingerprintExportSend         ScalableHistogram
 	fingerprintCaptureTruncated   metrics.Counter
+	forwardAuthFailOpen           metrics.Counter
 }
 
 func (r *standardRegistry) FingerprintExportRecordsCounter() metrics.Counter {
@@ -90,8 +96,12 @@ func (r *standardRegistry) FingerprintCaptureTruncatedCounter() metrics.Counter 
 	return r.traefix.fingerprintCaptureTruncated
 }
 
+func (r *standardRegistry) ForwardAuthFailOpenCounter() metrics.Counter {
+	return r.traefix.forwardAuthFailOpen
+}
+
 func newMultiTraefixMetrics(registries []Registry) traefixMetrics {
-	var records, dropped, batches, truncated []metrics.Counter
+	var records, dropped, batches, truncated, failOpen []metrics.Counter
 	var queue []metrics.Gauge
 	var send []ScalableHistogram
 
@@ -114,6 +124,9 @@ func newMultiTraefixMetrics(registries []Registry) traefixMetrics {
 		if c := r.FingerprintCaptureTruncatedCounter(); c != nil {
 			truncated = append(truncated, c)
 		}
+		if c := r.ForwardAuthFailOpenCounter(); c != nil {
+			failOpen = append(failOpen, c)
+		}
 	}
 
 	return traefixMetrics{
@@ -123,6 +136,7 @@ func newMultiTraefixMetrics(registries []Registry) traefixMetrics {
 		fingerprintExportQueueRecords: multi.NewGauge(queue...),
 		fingerprintExportSend:         MultiHistogram(send),
 		fingerprintCaptureTruncated:   multi.NewCounter(truncated...),
+		forwardAuthFailOpen:           multi.NewCounter(failOpen...),
 	}
 }
 
@@ -152,6 +166,10 @@ func newPrometheusTraefixMetrics(buckets []float64) (traefixMetrics, []vector) {
 		Name: fingerprintCaptureTruncatedName,
 		Help: "How many connection captures were cut at their size limit, partitioned by entrypoint and part.",
 	}, []string{labelEntryPoint, "part"})
+	failOpen := newCounterFrom(stdprometheus.CounterOpts{
+		Name: forwardAuthFailOpenName,
+		Help: "How many requests a forwardAuth middleware let through after an authentication server failure, partitioned by middleware and reason.",
+	}, []string{"middleware", "reason"})
 
 	m := traefixMetrics{
 		fingerprintExportRecords:      records,
@@ -159,10 +177,11 @@ func newPrometheusTraefixMetrics(buckets []float64) (traefixMetrics, []vector) {
 		fingerprintExportBatches:      batches,
 		fingerprintExportQueueRecords: queue,
 		fingerprintCaptureTruncated:   truncated,
+		forwardAuthFailOpen:           failOpen,
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(send, time.Second)
 
-	return m, []vector{records.cv, dropped.cv, batches.cv, queue.gv, send.hv, truncated.cv}
+	return m, []vector{records.cv, dropped.cv, batches.cv, queue.gv, send.hv, truncated.cv, failOpen.cv}
 }
 
 func newDatadogTraefixMetrics(client *dogstatsd.Dogstatsd) traefixMetrics {
@@ -172,6 +191,7 @@ func newDatadogTraefixMetrics(client *dogstatsd.Dogstatsd) traefixMetrics {
 		fingerprintExportBatches:      client.NewCounter(statsdFingerprintExportBatchesName, 1.0),
 		fingerprintExportQueueRecords: client.NewGauge(statsdFingerprintExportQueueRecordsName),
 		fingerprintCaptureTruncated:   client.NewCounter(statsdFingerprintCaptureTruncatedName, 1.0),
+		forwardAuthFailOpen:           client.NewCounter(statsdForwardAuthFailOpenName, 1.0),
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(client.NewHistogram(statsdFingerprintExportSendName, 1.0), time.Second)
 
@@ -185,6 +205,7 @@ func newStatsdTraefixMetrics(client *statsd.Statsd) traefixMetrics {
 		fingerprintExportBatches:      client.NewCounter(statsdFingerprintExportBatchesName, 1.0),
 		fingerprintExportQueueRecords: client.NewGauge(statsdFingerprintExportQueueRecordsName),
 		fingerprintCaptureTruncated:   client.NewCounter(statsdFingerprintCaptureTruncatedName, 1.0),
+		forwardAuthFailOpen:           client.NewCounter(statsdForwardAuthFailOpenName, 1.0),
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(client.NewTiming(statsdFingerprintExportSendName, 1.0), time.Millisecond)
 
@@ -198,6 +219,7 @@ func newInfluxDB2TraefixMetrics(store *influx.Influx) traefixMetrics {
 		fingerprintExportBatches:      store.NewCounter(influxDBFingerprintPrefix + statsdFingerprintExportBatchesName),
 		fingerprintExportQueueRecords: store.NewGauge(influxDBFingerprintPrefix + statsdFingerprintExportQueueRecordsName),
 		fingerprintCaptureTruncated:   store.NewCounter(influxDBFingerprintPrefix + statsdFingerprintCaptureTruncatedName),
+		forwardAuthFailOpen:           store.NewCounter(influxDBFingerprintPrefix + statsdForwardAuthFailOpenName),
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(store.NewHistogram(influxDBFingerprintPrefix+statsdFingerprintExportSendName), time.Second)
 
@@ -216,6 +238,8 @@ func newOTLPTraefixMetrics(meter metric.Meter) traefixMetrics {
 			"How many connection fingerprint records are waiting to be sent, partitioned by entrypoint.", "1"),
 		fingerprintCaptureTruncated: newOTLPCounterFrom(meter, fingerprintCaptureTruncatedName,
 			"How many connection captures were cut at their size limit, partitioned by entrypoint and part."),
+		forwardAuthFailOpen: newOTLPCounterFrom(meter, forwardAuthFailOpenName,
+			"How many requests a forwardAuth middleware let through after an authentication server failure, partitioned by middleware and reason."),
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(newOTLPHistogramFrom(meter, fingerprintExportSendName,
 		"How long it took to send a batch of connection fingerprint records, partitioned by entrypoint.", otlpSecondsUnit), time.Second)

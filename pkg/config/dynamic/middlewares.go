@@ -368,6 +368,11 @@ type ForwardAuth struct {
 	// Timeout defines the maximum duration of the request to the authentication server, including connection time and reading the response body.
 	// Zero means the default value (30s).
 	Timeout ptypes.Duration `json:"timeout,omitempty" toml:"timeout,omitempty" yaml:"timeout,omitempty" export:"true"`
+	// RequestHeaders defines headers set on the authentication request, replacing the ones copied from the request (Traefix).
+	// Their values are treated as secrets.
+	RequestHeaders map[string]string `json:"requestHeaders,omitempty" toml:"requestHeaders,omitempty" yaml:"requestHeaders,omitempty" loggable:"false"`
+	// FailOpen lets the requests reach the backend when the authentication server cannot give a verdict (Traefix).
+	FailOpen *ForwardAuthFailOpen `json:"failOpen,omitempty" toml:"failOpen,omitempty" yaml:"failOpen,omitempty" label:"allowEmpty" file:"allowEmpty" kv:"allowEmpty" export:"true"`
 }
 
 // SetDefaults sets the default values on a ForwardAuth.
