@@ -40,6 +40,14 @@ type tlsRecord struct {
 	QUICTransportParameters []uint64 `json:"quicTransportParameters,omitempty"`
 }
 
+type tcpRecord struct {
+	JA4T      string `json:"ja4t,omitempty"`
+	P0F       string `json:"p0f,omitempty"`
+	TTL       int    `json:"ttl"`
+	RTTMicros int64  `json:"rttMicros,omitempty"`
+	SYN       []byte `json:"syn,omitempty"`
+}
+
 type http3Record struct {
 	Settings string `json:"settings,omitempty"`
 }
@@ -62,6 +70,7 @@ type connectionRecord struct {
 	TLS        *tlsRecord   `json:"tls,omitempty"`
 	HTTP2      *http2Record `json:"http2,omitempty"`
 	HTTP3      *http3Record `json:"http3,omitempty"`
+	TCP        *tcpRecord   `json:"tcp,omitempty"`
 }
 
 func (r *connectionRecord) size() int {
@@ -71,6 +80,9 @@ func (r *connectionRecord) size() int {
 	}
 	if r.HTTP2 != nil {
 		n += 64 + 4*len(r.HTTP2.Prefix)/3
+	}
+	if r.TCP != nil {
+		n += 160 + 4*len(r.TCP.SYN)/3
 	}
 	return n
 }

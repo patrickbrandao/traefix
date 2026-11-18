@@ -540,6 +540,11 @@ func (in *FingerprintList) DeepCopyInto(out *FingerprintList) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.JA4T != nil {
+		in, out := &in.JA4T, &out.JA4T
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	return
 }
 

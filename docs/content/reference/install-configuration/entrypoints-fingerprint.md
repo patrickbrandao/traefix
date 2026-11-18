@@ -1,9 +1,9 @@
 ---
 title: "Traefik EntryPoint Fingerprint Documentation"
-description: "Identify each connection of a Traefix entry point, compute its JA3, JA4, Akamai HTTP/2 and JA4H fingerprints, add them to the requests as headers, and export connection and request records to an HTTP endpoint."
+description: "Identify each connection of a Traefix entry point, compute its JA3, JA4, JA4T, p0f, Akamai HTTP/2 and JA4H fingerprints, add them to the requests as headers, and export connection and request records to an HTTP endpoint."
 ---
 
-The `fingerprint` option of an entry point identifies each connection, computes the TLS, HTTP/2 and HTTP request fingerprints from the bytes the client sent, adds them to the requests as headers, and exports connection and request records to an HTTP endpoint. The option is specific to Traefix, the fork of Traefik Proxy.
+The `fingerprint` option of an entry point identifies each connection, computes the TCP, TLS, HTTP/2 and HTTP request fingerprints from the bytes the client sent, adds them to the requests as headers, and exports connection and request records to an HTTP endpoint. The option is specific to Traefix, the fork of Traefik Proxy.
 
 Without the `fingerprint` option, the entry point behaves as in Traefik. Without the `export` block, Traefix computes the fingerprints and adds the headers, and sends nothing.
 
@@ -16,6 +16,8 @@ entryPoints:
     fingerprint:
       # Prefix of the headers added to the requests. The client headers with this prefix are removed.
       headerPrefix: X-Traefix-
+      # JA4T and p0f signature of the TCP SYN, on Linux.
+      tcp: true
       export:
         url: http://10.0.0.10:9000/ingest
         headers:
@@ -41,6 +43,7 @@ entryPoints:
   [entryPoints.websecure.fingerprint]
     # Prefix of the headers added to the requests. The client headers with this prefix are removed.
     headerPrefix = "X-Traefix-"
+    tcp = true
     [entryPoints.websecure.fingerprint.export]
       url = "http://10.0.0.10:9000/ingest"
       rawBytes = true
@@ -59,6 +62,7 @@ entryPoints:
 --entryPoints.websecure.fingerprint=true
 # The prefix and the export.
 --entryPoints.websecure.fingerprint.headerPrefix=X-Traefix-
+--entryPoints.websecure.fingerprint.tcp=true
 --entryPoints.websecure.fingerprint.export.url=http://10.0.0.10:9000/ingest
 --entryPoints.websecure.fingerprint.export.headers.Authorization=Bearer my-key
 --entryPoints.websecure.fingerprint.export.rawBytes=true
@@ -72,9 +76,10 @@ The environment variables follow the same names, for example `TRAEFIK_ENTRYPOINT
 |:------|:------------|:--------|:---------|
 | <a id="opt-fingerprint-headerPrefix" href="#opt-fingerprint-headerPrefix" title="#opt-fingerprint-headerPrefix">`fingerprint.headerPrefix`</a> | Prefix of the headers that Traefix adds to the requests, listed in [Request Headers](#request-headers). Traefix removes every client request header whose name starts with this prefix. An empty prefix fails the start of the entry point. Example: `X-Edge-`. | `X-Traefix-` | No |
 | <a id="opt-fingerprint-http3HeaderOrder" href="#opt-fingerprint-http3HeaderOrder" title="#opt-fingerprint-http3HeaderOrder">`fingerprint.http3HeaderOrder`</a> | Captures the header order and the `SETTINGS` of the HTTP/3 requests, for their JA4H and the `fieldNames` and `http3.settings` of the records. Traefix enables the qlog events of the QUIC library for that, which costs CPU on every QUIC packet. When unset, the HTTP/3 requests have no JA4H. | `false` | No |
+| <a id="opt-fingerprint-tcp" href="#opt-fingerprint-tcp" title="#opt-fingerprint-tcp">`fingerprint.tcp`</a> | Reads the SYN of each TCP connection, which the Linux kernel saves with `TCP_SAVE_SYN`, for the JA4T fingerprint, the p0f signature and the TTL of the client, and the round-trip time that the kernel measured during the handshake. On another operating system, Traefix logs a warning at start and the connections get no TCP fingerprint. Described in [TCP Fingerprint](#tcp-fingerprint). | `false` | No |
 | <a id="opt-fingerprint-export-url" href="#opt-fingerprint-export-url" title="#opt-fingerprint-export-url">`fingerprint.export.url`</a> | URL that receives the [batches of records](#exported-records), sent with `POST` requests. The URL must be absolute, with the `http` or `https` scheme, or the start of the entry point fails. | | Yes, with `export` |
 | <a id="opt-fingerprint-export-headers" href="#opt-fingerprint-export-headers" title="#opt-fingerprint-export-headers">`fingerprint.export.headers`</a> | Headers sent with each batch, for example an `Authorization` header with the key of the receiving service. Traefix treats the values as secrets and removes them from the configuration it logs. | | No |
-| <a id="opt-fingerprint-export-rawBytes" href="#opt-fingerprint-export-rawBytes" title="#opt-fingerprint-export-rawBytes">`fingerprint.export.rawBytes`</a> | Exports the raw bytes of the TLS ClientHello and of the HTTP/2 connection prefix, so that the receiving service can compute its own fingerprints. When unset, the connection records only carry the computed fingerprints. | `false` | No |
+| <a id="opt-fingerprint-export-rawBytes" href="#opt-fingerprint-export-rawBytes" title="#opt-fingerprint-export-rawBytes">`fingerprint.export.rawBytes`</a> | Exports the raw bytes of the TLS ClientHello, of the HTTP/2 connection prefix and of the TCP SYN, so that the receiving service can compute its own fingerprints. When unset, the connection records only carry the computed fingerprints. | `false` | No |
 | <a id="opt-fingerprint-export-fields" href="#opt-fingerprint-export-fields" title="#opt-fingerprint-export-fields">`fingerprint.export.fields`</a> | Request headers whose values the request records carry, in the received order. A trailing `*` matches the names starting with the given prefix, for example `Sec-Fetch-*`. Each value is cut at 512 bytes. The request records always carry the names of all the headers. | `User-Agent`, `Accept`, `Accept-Language`, `Accept-Encoding`, `Sec-CH-UA*`, `Sec-Fetch-*` | No |
 | <a id="opt-fingerprint-export-allowSensitiveFields" href="#opt-fingerprint-export-allowSensitiveFields" title="#opt-fingerprint-export-allowSensitiveFields">`fingerprint.export.allowSensitiveFields`</a> | Allows exporting the values of the `Cookie`, `Authorization`, `Proxy-Authorization` and `Set-Cookie` headers listed in `fields`. When unset, Traefix doesn't export these values, even with a `*` pattern that matches them. When set, Traefix logs a warning at start with the names of the exported credential headers. | `false` | No |
 | <a id="opt-fingerprint-export-queueSize" href="#opt-fingerprint-export-queueSize" title="#opt-fingerprint-export-queueSize">`fingerprint.export.queueSize`</a> | Maximum number of records waiting to be sent. When the queue is full, Traefix drops the new record and counts it. | `4096` | No |
@@ -107,6 +112,7 @@ Traefix adds these headers to each request of the entry point, before any router
 | <a id="opt-X-Traefix-Ja3" href="#opt-X-Traefix-Ja3" title="#opt-X-Traefix-Ja3">`X-Traefix-Ja3`</a> | MD5 hash of the [JA3](https://github.com/salesforce/ja3) fingerprint of the TLS ClientHello. |
 | <a id="opt-X-Traefix-Ja4" href="#opt-X-Traefix-Ja4" title="#opt-X-Traefix-Ja4">`X-Traefix-Ja4`</a> | [JA4](https://github.com/FoxIO-LLC/ja4) fingerprint of the TLS ClientHello. |
 | <a id="opt-X-Traefix-Alpn" href="#opt-X-Traefix-Alpn" title="#opt-X-Traefix-Alpn">`X-Traefix-Alpn`</a> | Application protocols offered in the TLS ClientHello, in the client order, separated by commas, for example `h2,http/1.1`. The bytes of a protocol name that are not visible ASCII, the comma and the percent sign are percent-encoded, for example `%2C`. |
+| <a id="opt-X-Traefix-Ja4t" href="#opt-X-Traefix-Ja4t" title="#opt-X-Traefix-Ja4t">`X-Traefix-Ja4t`</a> | [JA4T](https://github.com/FoxIO-LLC/ja4) fingerprint of the TCP SYN of the connection, with the `tcp` option. |
 | <a id="opt-X-Traefix-H2" href="#opt-X-Traefix-H2" title="#opt-X-Traefix-H2">`X-Traefix-H2`</a> | Akamai fingerprint of the HTTP/2 connection: settings, window update, priority frames and pseudo-header order. Present on HTTP/2 requests only. |
 | <a id="opt-X-Traefix-Ja4h" href="#opt-X-Traefix-Ja4h" title="#opt-X-Traefix-Ja4h">`X-Traefix-Ja4h`</a> | [JA4H](https://github.com/FoxIO-LLC/ja4) fingerprint of the request, computed with the header order and case the client sent, and with the cookie values, which only leave Traefix with `allowSensitiveFields`. |
 
@@ -117,6 +123,23 @@ The headers carry the values of the socket even when the entry point trusts the 
 !!! warning "Use one prefix per installation"
 
     Each entry point removes the client headers with its own prefix. A router that serves several entry points with different prefixes receives the headers of the other prefixes as the client sent them. Use the same `headerPrefix` on every entry point.
+
+### TCP Fingerprint
+
+With the `tcp` option, Traefix asks the Linux kernel to keep the SYN of each connection the entry point accepts, and reads it once the connection is accepted, which frees it. The SYN gives:
+
+- the JA4T fingerprint, as the FoxIO tool computes it: the window, the kinds of the TCP options, the MSS and the window scale, for example `64240_2-4-8-1-3_1460_7`;
+- the p0f v3 signature of the SYN, the `raw_sig` that `p0f` prints, for example `4:57+7:0:1460:mss*44,7:mss,sok,ts,nop,ws:df,id+:0`. Traefix doesn't embed the p0f database, so the operating system guess is left to the receiving service;
+- the TTL or hop limit of the SYN, as received.
+
+The SYN is the one of the peer that opened the TCP connection to Traefix. It tells about the client only when nothing between the client and Traefix ends the TCP connection:
+
+- On an entry point with the [`proxyProtocol`](./entrypoints.md#opt-proxyProtocol-trustedIPs) option, the connections get no TCP fingerprint, as the SYN of a connection through the PROXY protocol is the one of the proxy.
+- Behind a load balancer or a CDN that opens its own connections, the fingerprint is the one of the load balancer.
+- In a Docker container with published ports, the SYN of an IPv4 client crosses the NAT rules of Docker with its options, and keeps its fingerprint. A client that the userland proxy of Docker serves, such as an IPv6 client of an IPv4-only container, shows the SYN of the proxy, with the address of the Docker gateway.
+- The kernel doesn't keep the SYN of the connections it accepted with SYN cookies, for example during a SYN flood.
+
+The kernel keeps about 100 bytes per connection until Traefix reads them, at the accept.
 
 ### HTTP/3
 
@@ -135,6 +158,7 @@ On an entry point with the `fingerprint` option, the router rules accept these m
 | <a id="opt-JA3fp" href="#opt-JA3fp" title="#opt-JA3fp">```JA3(`fp`)```</a> | The MD5 hash of the JA3 fingerprint of the connection, the value of `X-Traefix-Ja3`. |
 | <a id="opt-JA4fp" href="#opt-JA4fp" title="#opt-JA4fp">```JA4(`fp`)```</a> | The JA4 fingerprint of the connection, the value of `X-Traefix-Ja4`. |
 | <a id="opt-JA4Hfp" href="#opt-JA4Hfp" title="#opt-JA4Hfp">```JA4H(`fp`)```</a> | The JA4H fingerprint of the request, the value of `X-Traefix-Ja4h`. |
+| <a id="opt-JA4Tfp" href="#opt-JA4Tfp" title="#opt-JA4Tfp">```JA4T(`fp`)```</a> | The JA4T fingerprint of the connection, the value of `X-Traefix-Ja4t`, with the `tcp` option. |
 
 Each matcher takes one fingerprint. A trailing `*` matches the fingerprints starting with the given prefix, for example ```JA4(`t13d1516h2_*`)```. Combine several values with `||`. A request without the fingerprint, such as a plain HTTP request for `JA4`, matches no value.
 
@@ -164,6 +188,7 @@ On the routed requests, Traefix adds the fingerprints to the access log and to t
 | <a id="opt-FingerprintJA4" href="#opt-FingerprintJA4" title="#opt-FingerprintJA4">`FingerprintJA4`</a> | `traefix.tls.client.ja4` | JA4 fingerprint. |
 | <a id="opt-FingerprintH2" href="#opt-FingerprintH2" title="#opt-FingerprintH2">`FingerprintH2`</a> | `traefix.http2.akamai` | Akamai HTTP/2 fingerprint, on HTTP/2 requests. |
 | <a id="opt-FingerprintJA4H" href="#opt-FingerprintJA4H" title="#opt-FingerprintJA4H">`FingerprintJA4H`</a> | `traefix.http.request.ja4h` | JA4H fingerprint. |
+| <a id="opt-FingerprintJA4T" href="#opt-FingerprintJA4T" title="#opt-FingerprintJA4T">`FingerprintJA4T`</a> | `traefix.tcp.client.ja4t` | JA4T fingerprint, with the `tcp` option. |
 
 The access log shows the fields in the JSON format, and its `fields` options filter them as the other fields. A request that no router matched has no fingerprint field.
 
@@ -219,6 +244,12 @@ Traefix exports one connection record per connection, at the first request, or w
 | <a id="opt-http2-headersPriority" href="#opt-http2-headersPriority" title="#opt-http2-headersPriority">`http2.headersPriority`</a> | Priority fields of the first `HEADERS` frame, as `stream:exclusive:dependency:weight`, for example `1:1:0:256`. The Akamai fingerprint leaves them out. Absent when the frame has no priority fields. |
 | <a id="opt-http2-prefix" href="#opt-http2-prefix" title="#opt-http2-prefix">`http2.prefix`</a> | Raw bytes the client sent after the HTTP/2 preface, up to the end of the first header block, in base64. Present with `rawBytes`. |
 | <a id="opt-http2-prefixTruncated" href="#opt-http2-prefixTruncated" title="#opt-http2-prefixTruncated">`http2.prefixTruncated`</a> | `true` when these bytes exceed 16 KiB, in which case Traefix keeps the first 16 KiB. |
+| <a id="opt-http3-settings" href="#opt-http3-settings" title="#opt-http3-settings">`http3.settings`</a> | `SETTINGS` of the HTTP/3 connection, as `id:value` separated by `;`, with `http3HeaderOrder`. |
+| <a id="opt-tcp-ja4t" href="#opt-tcp-ja4t" title="#opt-tcp-ja4t">`tcp.ja4t`</a> | JA4T fingerprint of the SYN, the value of `X-Traefix-Ja4t`. Present with the `tcp` option, as the whole `tcp` object. |
+| <a id="opt-tcp-p0f" href="#opt-tcp-p0f" title="#opt-tcp-p0f">`tcp.p0f`</a> | p0f v3 signature of the SYN. |
+| <a id="opt-tcp-ttl" href="#opt-tcp-ttl" title="#opt-tcp-ttl">`tcp.ttl`</a> | TTL, or hop limit, of the SYN as received. |
+| <a id="opt-tcp-rttMicros" href="#opt-tcp-rttMicros" title="#opt-tcp-rttMicros">`tcp.rttMicros`</a> | Round-trip time that the kernel measured during the TCP handshake, in microseconds. |
+| <a id="opt-tcp-syn" href="#opt-tcp-syn" title="#opt-tcp-syn">`tcp.syn`</a> | Raw bytes of the SYN, from its IP header, in base64. Present with `rawBytes`. |
 
 ### HTTP/2 Fingerprint
 
@@ -272,4 +303,4 @@ The `forwardAuth` middleware counts its fail-opens in `traefik_forwardauth_failo
 
 ## Resource Use
 
-Traefix reads the bytes the server already reads, and never changes them. While the ClientHello and the HTTP/2 prefix are captured, a connection holds up to 16 KiB for each. To follow the header order of every HTTP/2 request, a connection also keeps its own HPACK decoder, bounded by `http2.maxDecoderHeaderTableSize`, for its whole life.
+Traefix reads the bytes the server already reads, and never changes them. Measured on Linux (Xeon Gold 6148, HTTPS keep-alive connections, a handler without a backend, so the shares below are upper bounds), the option adds about 14 µs of CPU per HTTP/1 request and 18 µs per HTTP/2 request without `export`, about +21% and +16%, and about twice that with `export`. The cost is per request: reading the header block from the wire, the JA4H, and the added headers. The `tcp` option adds one system call per connection. While the ClientHello and the HTTP/2 prefix are captured, a connection holds up to 16 KiB for each. To follow the header order of every HTTP/2 request, a connection also keeps its own HPACK decoder, bounded by `http2.maxDecoderHeaderTableSize`, for its whole life.

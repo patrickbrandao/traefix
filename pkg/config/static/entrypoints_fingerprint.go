@@ -15,6 +15,8 @@ type Fingerprint struct {
 	Export       *FingerprintExport `description:"Exports the connection and request records to an HTTP endpoint." json:"export,omitempty" toml:"export,omitempty" yaml:"export,omitempty" export:"true"`
 	// HTTP3HeaderOrder enables the qlog events of the QUIC library, which carry the HTTP/3 header order.
 	HTTP3HeaderOrder bool `description:"Captures the header order and the SETTINGS of the HTTP/3 requests, for their JA4H. It enables the qlog events of the QUIC library, which cost CPU on every QUIC packet." json:"http3HeaderOrder,omitempty" toml:"http3HeaderOrder,omitempty" yaml:"http3HeaderOrder,omitempty" export:"true"`
+	// TCP reads the SYN that the Linux kernel saves with TCP_SAVE_SYN.
+	TCP bool `description:"Reads the SYN of each TCP connection, which the Linux kernel saves, for its JA4T and p0f signature, and the round-trip time of the handshake. Linux only." json:"tcp,omitempty" toml:"tcp,omitempty" yaml:"tcp,omitempty" export:"true"`
 }
 
 // SetDefaults sets the default values.

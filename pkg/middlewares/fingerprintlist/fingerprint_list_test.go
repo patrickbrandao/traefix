@@ -16,6 +16,7 @@ var (
 		JA3:  "a0e9f5d64349fb13191bc781f81f42e1",
 		JA4:  "t13d4907h2_0d8feac7bc37_7395dae3b2f3",
 		JA4H: "ge11nn030000_fe444ad14866_000000000000_000000000000",
+		JA4T: "64240_2-4-8-1-3_1460_7",
 	}
 	chrome = fingerprint.Fingerprints{
 		JA3:   "cd08e31494f9531f560d64c695473da9",
@@ -95,6 +96,18 @@ func TestFingerprintList(t *testing.T) {
 			request:  &chrome,
 			h2:       true,
 			expected: http.StatusForbidden,
+		},
+		{
+			desc:     "deny by JA4T",
+			config:   dynamic.FingerprintList{Mode: "deny", JA4T: []string{"64240_2-4-8-1-3_*"}},
+			request:  &curl,
+			expected: http.StatusForbidden,
+		},
+		{
+			desc:     "deny lets a request without JA4T through",
+			config:   dynamic.FingerprintList{Mode: "deny", JA4T: []string{"64240_*"}},
+			request:  &chrome,
+			expected: http.StatusOK,
 		},
 		{
 			desc:     "deny lets a request without fingerprint through",

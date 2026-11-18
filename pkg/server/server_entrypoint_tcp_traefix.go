@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
 
+	"github.com/pires/go-proxyproto"
 	"github.com/traefik/traefik/v3/pkg/config/static"
 	"github.com/traefik/traefik/v3/pkg/fingerprint"
 	"github.com/traefik/traefik/v3/pkg/observability/metrics"
@@ -52,6 +54,31 @@ func newFingerprint(ctx context.Context, name string, config *static.EntryPoint,
 	}
 
 	return fp, nil
+}
+
+// saveFingerprintSYN asks the kernel to keep the SYN of the accepted connections, for the tcp option.
+func saveFingerprintSYN(fp *fingerprint.EntryPoint, listener net.Listener) error {
+	if fp == nil {
+		return nil
+	}
+
+	for {
+		switch l := listener.(type) {
+		case *onceCloseListener:
+			listener = l.Listener
+		case *proxyproto.Listener:
+			listener = l.Listener
+		case tcpKeepAliveListener:
+			listener = l.TCPListener
+		case *net.TCPListener:
+			if err := fp.SaveSYN(l); err != nil {
+				return fmt.Errorf("saving the SYN for the fingerprint: %w", err)
+			}
+			return nil
+		default:
+			return fmt.Errorf("saving the SYN for the fingerprint: unexpected listener type %T", listener)
+		}
+	}
 }
 
 // closeFingerprint stops the export of an entry point that failed to start.

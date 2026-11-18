@@ -50,8 +50,9 @@ The Kubernetes `Middleware` resource doesn't support this middleware yet.
 | <a id="opt-ja4" href="#opt-ja4" title="#opt-ja4">`ja4`</a> | JA4 fingerprints, for example `t13d1516h2_8daaf6152771_e5627efa2ab1`. | | No |
 | <a id="opt-ja4h" href="#opt-ja4h" title="#opt-ja4h">`ja4h`</a> | JA4H fingerprints. | | No |
 | <a id="opt-http2" href="#opt-http2" title="#opt-http2">`http2`</a> | Akamai HTTP/2 fingerprints, checked on HTTP/2 requests only. | | No |
+| <a id="opt-ja4t" href="#opt-ja4t" title="#opt-ja4t">`ja4t`</a> | JA4T fingerprints of the TCP SYN, for example `64240_2-4-8-1-3_1460_7`. They need the [`tcp` option](../../../install-configuration/entrypoints-fingerprint.md#opt-fingerprint-tcp) of the entry point. | | No |
 | <a id="opt-rejectStatusCode" href="#opt-rejectStatusCode" title="#opt-rejectStatusCode">`rejectStatusCode`</a> | HTTP status code of the rejected requests. | `403` | No |
 
 In each list, a trailing `*` matches the fingerprints starting with the given prefix, for example `t13d1516h2_*`. A lone `*` fails the middleware at load, and so does a configuration without any listed fingerprint.
 
-A request is listed when one of its fingerprints matches its list. A fingerprint the entry point didn't compute matches nothing: JA3 and JA4 over plain HTTP, JA4H over HTTP/3 without the `http3HeaderOrder` option, and every fingerprint on an entry point without the `fingerprint` option. In `allow` mode, such requests are rejected.
+A request is listed when one of its fingerprints matches its list. A fingerprint the entry point didn't compute matches nothing: JA3 and JA4 over plain HTTP, JA4H over HTTP/3 without the `http3HeaderOrder` option, JA4T without the `tcp` option or over HTTP/3, and every fingerprint on an entry point without the `fingerprint` option. In `allow` mode, such requests are rejected.

@@ -77,6 +77,19 @@ func (r *connectionRecord) appendJSON(b []byte) []byte {
 		b = closeObject(b, start)
 	}
 
+	if t := r.TCP; t != nil {
+		b = append(b, `,"tcp":{`...)
+		start := len(b)
+		b = appendOptString(b, "ja4t", t.JA4T)
+		b = appendOptString(b, "p0f", t.P0F)
+		b = strconv.AppendInt(appendKey(b, "ttl"), int64(t.TTL), 10)
+		if t.RTTMicros != 0 {
+			b = strconv.AppendInt(appendKey(b, "rttMicros"), t.RTTMicros, 10)
+		}
+		b = appendOptBytes(b, "syn", t.SYN)
+		b = closeObject(b, start)
+	}
+
 	return append(b, '}')
 }
 

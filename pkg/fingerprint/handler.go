@@ -145,6 +145,9 @@ func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
 		if info.alpn != "" {
 			s.set(e.headers.alpn, info.alpn)
 		}
+		if info.ja4t != "" {
+			s.set(e.headers.ja4t, info.ja4t)
+		}
 		if proto == "h2" && info.akamai != "" {
 			s.set(e.headers.h2, info.akamai)
 		}
@@ -251,6 +254,7 @@ type Fingerprints struct {
 	JA4   string
 	JA4H  string
 	HTTP2 string
+	JA4T  string
 }
 
 // FingerprintsFromRequest returns the fingerprints of req, and false when its entry point has no fingerprint option.
@@ -262,7 +266,7 @@ func FingerprintsFromRequest(req *http.Request) (Fingerprints, bool) {
 
 	var f Fingerprints
 	if c := st.conn; c != nil {
-		f.JA3, f.JA4 = c.ja3, c.ja4
+		f.JA3, f.JA4, f.JA4T = c.ja3, c.ja4, c.ja4t
 		if req.ProtoMajor == 2 {
 			f.HTTP2 = c.akamai
 		}
@@ -277,7 +281,7 @@ func FingerprintsFromRequest(req *http.Request) (Fingerprints, bool) {
 // ContextWithFingerprints returns a context carrying the given fingerprints, as the entry point sets them,
 // for the handlers served outside an entry point, such as in tests.
 func ContextWithFingerprints(ctx context.Context, f Fingerprints) context.Context {
-	st := &requestState{start: time.Now(), conn: &connInfo{ja3: f.JA3, ja4: f.JA4, akamai: f.HTTP2}}
+	st := &requestState{start: time.Now(), conn: &connInfo{ja3: f.JA3, ja4: f.JA4, akamai: f.HTTP2, ja4t: f.JA4T}}
 	if f.JA4H != "" {
 		st.wire = &Request{ja4h: f.JA4H}
 	}

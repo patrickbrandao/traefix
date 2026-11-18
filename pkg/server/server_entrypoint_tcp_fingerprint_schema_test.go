@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -60,7 +61,8 @@ func TestFingerprintExport_schema(t *testing.T) {
 	addr := ln.Addr().String()
 	require.NoError(t, ln.Close())
 
-	fp := &static.Fingerprint{HeaderPrefix: "X-Edge-", HTTP3HeaderOrder: true, Export: &static.FingerprintExport{URL: dest.URL, RawBytes: true}}
+	// The tcp option only gives records on Linux, elsewhere the entry point logs a warning.
+	fp := &static.Fingerprint{HeaderPrefix: "X-Edge-", HTTP3HeaderOrder: true, TCP: true, Export: &static.FingerprintExport{URL: dest.URL, RawBytes: true}}
 	fp.Export.SetDefaults()
 	fp.Export.FlushInterval = ptypes.Duration(20 * time.Millisecond)
 
@@ -186,7 +188,11 @@ func TestFingerprintExport_schema(t *testing.T) {
 	assert.Empty(t, undeclared)
 
 	// The traffic above reaches the TLS, HTTP/2 and HTTP/3 parts of the records.
-	for _, path := range []string{"records.tls.ja4", "records.tls.ja4r", "records.tls.ja3n", "records.http2.akamai", "records.http3.settings", "records.ja4h"} {
+	expected := []string{"records.tls.ja4", "records.tls.ja4r", "records.tls.ja3n", "records.http2.akamai", "records.http3.settings", "records.ja4h"}
+	if runtime.GOOS == "linux" {
+		expected = append(expected, "records.tcp.ja4t", "records.tcp.p0f", "records.tcp.syn")
+	}
+	for _, path := range expected {
 		assert.True(t, seen[path], path)
 	}
 	if t.Failed() {

@@ -214,6 +214,10 @@ func NewTCPEntryPoint(ctx context.Context, name string, config *static.EntryPoin
 	if err != nil {
 		return nil, err
 	}
+	if err := saveFingerprintSYN(fp, listener); err != nil {
+		closeFingerprint(fp)
+		return nil, err
+	}
 
 	httpServer, err := newHTTPServer(ctx, listener, config, true, reqDecorator, withFingerprint(fp))
 	if err != nil {

@@ -52,6 +52,10 @@ type connInfo struct {
 
 	quicParams []uint64
 
+	// syn is the SYN the kernel saved for the connection, and rtt the round-trip time of the handshake.
+	syn []byte
+	rtt time.Duration
+
 	// finalize computes the connection record once, on the first request or when the connection closes.
 	finalize sync.Once
 	proto    string
@@ -59,6 +63,7 @@ type connInfo struct {
 	ja3Str   string
 	ja4      string
 	alpn     string
+	ja4t     string
 	akamai   string
 	record   *connectionRecord
 }

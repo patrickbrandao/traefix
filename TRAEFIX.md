@@ -69,6 +69,14 @@ Especificação: `tmp/report-waf-features.md` (fases 0 a 4). Implementado até a
   QUIC: JA3/JA4 `q…` pelo ClientHello do handshake, ClientHello cru e transport parameters
   decifrando o Initial (com `rawBytes`), ordem dos cabeçalhos h3 e SETTINGS pelo qlog
   (`http3HeaderOrder`). Código em `pkg/middlewares/coraza/` e `pkg/fingerprint/quic*.go`.
+- **Pedidos do finger-sniffer** (fase 5): `sender` e `traefik version` com `fork-point-<n>-g<sha>`,
+  rótulos OCI e `NOTICE`; cabeçalho `<prefixo>Alpn`; `tls.ja3n`, `tls.ja4r`, `tls.ja4o` e
+  `http2.headersPriority`; JSON Schema do lote
+  (`docs/content/reference/install-configuration/traefix-fingerprint-v1.schema.json`, `v2` só com
+  mudança incompatível) validado nos testes; goldens do finger-sniffer em
+  `pkg/fingerprint/testdata/golden/`; opção `fingerprint.tcp` (Linux, `TCP_SAVE_SYN`): JA4T, assinatura
+  p0f, TTL e RTT do handshake no registro, cabeçalho `<prefixo>Ja4t`, matcher `JA4T` e `ja4t` no
+  `fingerprintList`; forwardAuth recusa valor vazio em `requestHeaders`.
 - Código em `pkg/fingerprint/`; ganchos no upstream em `pkg/server/server_entrypoint_tcp*.go`,
   `pkg/server/router/router.go`, `pkg/config/static/entrypoints.go` e uma linha por backend em
   `pkg/observability/metrics/` (métricas em `traefix.go`).

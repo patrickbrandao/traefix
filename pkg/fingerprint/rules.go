@@ -22,9 +22,10 @@ const (
 	matcherJA3  = "JA3"
 	matcherJA4  = "JA4"
 	matcherJA4H = "JA4H"
+	matcherJA4T = "JA4T"
 )
 
-var ruleMatchers = []string{matcherJA3, matcherJA4, matcherJA4H}
+var ruleMatchers = []string{matcherJA3, matcherJA4, matcherJA4H, matcherJA4T}
 
 func init() {
 	httpmuxer.RegisterMatcher(matcherJA3, fingerprintMatcher(matcherJA3, func(st *requestState) string {
@@ -38,6 +39,12 @@ func init() {
 			return ""
 		}
 		return st.conn.ja4
+	}))
+	httpmuxer.RegisterMatcher(matcherJA4T, fingerprintMatcher(matcherJA4T, func(st *requestState) string {
+		if st.conn == nil {
+			return ""
+		}
+		return st.conn.ja4t
 	}))
 	httpmuxer.RegisterMatcher(matcherJA4H, fingerprintMatcher(matcherJA4H, func(st *requestState) string {
 		if st.wire == nil {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/textproto"
 	"net/url"
 	"strings"
@@ -32,7 +33,7 @@ func Enabled() bool {
 }
 
 type headerNames struct {
-	srcIP, srcPort, dstPort, connID, proto, ja3, ja4, h2, ja4h, alpn string
+	srcIP, srcPort, dstPort, connID, proto, ja3, ja4, h2, ja4h, alpn, ja4t string
 }
 
 // EntryPoint identifies and fingerprints the connections and requests of an entry point.
@@ -45,6 +46,7 @@ type EntryPoint struct {
 	captureCfg       Config
 	rawBytes         bool
 	http3HeaderOrder bool
+	tcp              bool
 	exporter         *exporter
 
 	quic quicPending
@@ -76,6 +78,12 @@ func NewEntryPoint(ctx context.Context, name string, cfg *static.Fingerprint, h2
 		truncatedCounter: registry.FingerprintCaptureTruncatedCounter(),
 		pending:          make(map[string]*connInfo),
 		http3HeaderOrder: cfg.HTTP3HeaderOrder,
+		tcp:              cfg.TCP,
+	}
+	if e.tcp && !savedSYNSupported {
+		log.Ctx(ctx).Warn().Str("entryPointName", name).
+			Msg("The fingerprint tcp option needs the saved SYN of Linux: the connections get no TCP fingerprint")
+		e.tcp = false
 	}
 	e.headers = headerNames{
 		srcIP:   textproto.CanonicalMIMEHeaderKey(prefix + "Src-Ip"),
@@ -88,6 +96,7 @@ func NewEntryPoint(ctx context.Context, name string, cfg *static.Fingerprint, h2
 		h2:      textproto.CanonicalMIMEHeaderKey(prefix + "H2"),
 		ja4h:    textproto.CanonicalMIMEHeaderKey(prefix + "Ja4h"),
 		alpn:    textproto.CanonicalMIMEHeaderKey(prefix + "Alpn"),
+		ja4t:    textproto.CanonicalMIMEHeaderKey(prefix + "Ja4t"),
 	}
 
 	if h2 != nil && h2.MaxDecoderHeaderTableSize > 0 {
@@ -162,10 +171,28 @@ func (e *EntryPoint) Close(ctx context.Context) {
 	}
 }
 
+// SaveSYN asks the kernel to keep the SYN of the connections the listener accepts, when the tcp option is set.
+func (e *EntryPoint) SaveSYN(l *net.TCPListener) error {
+	if !e.tcp {
+		return nil
+	}
+	return saveSYN(l)
+}
+
 // Accept wraps a connection as it is accepted, before the TCP router reads its first bytes.
 func (e *EntryPoint) Accept(c tcp.WriteCloser) tcp.WriteCloser {
 	info := newConnInfo(c)
 	key := connKey(c)
+
+	// A connection that went through the PROXY protocol is not a *net.TCPConn: its SYN, the one of the proxy,
+	// would not tell about the client.
+	if tc, ok := c.(*net.TCPConn); ok && e.tcp {
+		syn, rtt, err := readSYN(tc)
+		if err != nil {
+			log.Debug().Err(err).Msg("Reading the saved SYN")
+		}
+		info.syn, info.rtt = syn, rtt
+	}
 
 	e.mu.Lock()
 	e.pending[key] = info
@@ -349,6 +376,11 @@ func (e *EntryPoint) finalizeConn(info *connInfo, proto string) {
 		}
 	}
 
+	if len(info.syn) > 0 {
+		rec.TCP = e.tcpRecord(info)
+		info.syn = nil
+	}
+
 	info.record = rec
 
 	// The raw bytes are only kept for the record: the queued record holds them until it is sent.
@@ -385,4 +417,26 @@ func alpnHeaderValue(protocols []string) string {
 		}
 	}
 	return b.String()
+}
+
+// tcpRecord reads the saved SYN of the connection. A SYN from another address than the one of the connection,
+// which no known setup gives, is left out.
+func (e *EntryPoint) tcpRecord(info *connInfo) *tcpRecord {
+	syn, err := ParseSYN(info.syn)
+	if err != nil {
+		log.Debug().Err(err).Msg("Parsing the saved SYN")
+		return nil
+	}
+	if src, ok := netip.AddrFromSlice(syn.Src); !ok || src.Unmap() != info.src.Addr() {
+		log.Debug().Str("src", info.src.Addr().String()).Msg("Ignoring a saved SYN from another address")
+		return nil
+	}
+
+	info.ja4t = syn.JA4T
+	rec := &tcpRecord{JA4T: syn.JA4T, P0F: syn.P0F, TTL: syn.TTL, RTTMicros: info.rtt.Microseconds()}
+	if e.rawBytes {
+		rec.SYN = info.syn
+	}
+
+	return rec
 }

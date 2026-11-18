@@ -64,7 +64,7 @@ type fingerprintList struct {
 	allow            bool
 	rejectStatusCode int
 
-	ja3, ja4, ja4h, http2 *patterns
+	ja3, ja4, ja4h, http2, ja4t *patterns
 }
 
 // New builds a middleware denying or allowing the requests by their fingerprints.
@@ -82,7 +82,7 @@ func New(ctx context.Context, next http.Handler, config dynamic.FingerprintList,
 		return nil, fmt.Errorf("invalid mode %q: it must be %s or %s", config.Mode, modeAllow, modeDeny)
 	}
 
-	if len(config.JA3)+len(config.JA4)+len(config.JA4H)+len(config.HTTP2) == 0 {
+	if len(config.JA3)+len(config.JA4)+len(config.JA4H)+len(config.HTTP2)+len(config.JA4T) == 0 {
 		return nil, errors.New("no fingerprint listed")
 	}
 
@@ -106,6 +106,9 @@ func New(ctx context.Context, next http.Handler, config dynamic.FingerprintList,
 	if f.http2, err = newPatterns(config.HTTP2); err != nil {
 		return nil, err
 	}
+	if f.ja4t, err = newPatterns(config.JA4T); err != nil {
+		return nil, err
+	}
 
 	return f, nil
 }
@@ -117,7 +120,7 @@ func (f *fingerprintList) GetTracingInformation() (string, string) {
 func (f *fingerprintList) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	fps, _ := fingerprint.FingerprintsFromRequest(req)
 
-	listed := f.ja3.match(fps.JA3) || f.ja4.match(fps.JA4) || f.ja4h.match(fps.JA4H) || f.http2.match(fps.HTTP2)
+	listed := f.ja3.match(fps.JA3) || f.ja4.match(fps.JA4) || f.ja4h.match(fps.JA4H) || f.http2.match(fps.HTTP2) || f.ja4t.match(fps.JA4T)
 
 	if listed != f.allow {
 		logger := middlewares.GetLogger(req.Context(), f.name, typeName)

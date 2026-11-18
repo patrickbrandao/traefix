@@ -39,6 +39,9 @@ type FingerprintList struct {
 	JA4H []string `json:"ja4h,omitempty" toml:"ja4h,omitempty" yaml:"ja4h,omitempty" export:"true"`
 	// HTTP2 lists Akamai HTTP/2 fingerprints. A trailing * matches the fingerprints starting with the given prefix.
 	HTTP2 []string `json:"http2,omitempty" toml:"http2,omitempty" yaml:"http2,omitempty" export:"true"`
+	// JA4T lists JA4T fingerprints of the TCP SYN, which need the tcp option of the entry point fingerprint.
+	// A trailing * matches the fingerprints starting with the given prefix.
+	JA4T []string `json:"ja4t,omitempty" toml:"ja4t,omitempty" yaml:"ja4t,omitempty" export:"true"`
 	// RejectStatusCode defines the HTTP status code used for refused requests.
 	// If not set, the default is 403 (Forbidden).
 	RejectStatusCode int `json:"rejectStatusCode,omitempty" toml:"rejectStatusCode,omitempty" yaml:"rejectStatusCode,omitempty" export:"true"`
