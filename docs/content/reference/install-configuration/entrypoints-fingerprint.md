@@ -185,6 +185,8 @@ Each batch is a JSON object sent with `Content-Type: application/json`:
 
 `sender` carries the version shown by `traefik version`. The published images and the deployment scripts set it to the output of `git describe`, `fork-point-<n>-g<commit>`, which names the commit of the build, and the image carries the same commit in its `org.opencontainers.image.revision` label. The `records` array mixes the two record types, told apart by their `type` field. Traefix omits the fields with no value.
 
+The [JSON Schema of the batches](traefix-fingerprint-v1.schema.json) describes every field below. The Traefix tests check the batches of HTTP/1, HTTP/2 and HTTP/3 connections against it, and the fingerprints against the outputs of tshark, of the FoxIO ja4 tool and of p0f on real client captures.
+
 ### Schema Versioning
 
 The `schema` field changes only with an incompatible change of the batches or of the request headers:

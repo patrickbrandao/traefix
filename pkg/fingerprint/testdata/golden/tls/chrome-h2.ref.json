@@ -1,0 +1,54 @@
+{
+ "case": "chrome-h2",
+ "clientHellos": [
+  {
+   "tcp_stream": 1,
+   "ja3": "26f87593bb92874818103f1bc6624d34",
+   "ja3_full": "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-51-43-18-51764-35-11-45-5-17613-65037-16-27-13-65281-23-10,4588-29-23-24,0",
+   "ja4_tool": "t13d1517h2_8daaf6152771_cb7bf5808d99",
+   "ja4_r_tool": "t13d1517h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,0023,002b,002d,0033,44cd,ca34,fe0d,ff01_0904,0905,0906,0403,0804,0401,0503,0805,0501,0806,0601",
+   "sni": "vps602.tmsoft.com.br",
+   "alpn": [
+    "h2",
+    "http/1.1"
+   ]
+  },
+  {
+   "tcp_stream": 0,
+   "ja3": "ee9e0970caad800121c5b2c57dd8b519",
+   "ja3_full": "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,18-0-5-10-13-27-23-11-65281-17613-51764-51-43-65037-35-45-16,4588-29-23-24,0",
+   "ja4_tool": "t13d1517h2_8daaf6152771_cb7bf5808d99",
+   "ja4_r_tool": "t13d1517h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,0023,002b,002d,0033,44cd,ca34,fe0d,ff01_0904,0905,0906,0403,0804,0401,0503,0805,0501,0806,0601",
+   "sni": "vps602.tmsoft.com.br",
+   "alpn": [
+    "h2",
+    "http/1.1"
+   ]
+  }
+ ],
+ "akamai": [
+  {
+   "tcp_stream": 1,
+   "akamai": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+   "headersPriority": {
+    "exclusive": 1,
+    "depends_on": 0,
+    "weight": 256,
+    "stream": 1
+   }
+  }
+ ],
+ "ja4h": [
+  {
+   "tcp_stream": 1,
+   "ja4h": "ge20nn13ptbr_0c2c1d640f3e_000000000000_000000000000",
+   "ja4h_r": "ge20nn13ptbr_sec-ch-ua,sec-ch-ua-mobile,sec-ch-ua-platform,upgrade-insecure-requests,user-agent,accept,sec-fetch-site,sec-fetch-mode,sec-fetch-user,sec-fetch-dest,accept-encoding,accept-language,priority__"
+  },
+  {
+   "tcp_stream": 1,
+   "ja4h": "ge20nr11ptbr_33778c32ea55_000000000000_000000000000",
+   "ja4h_r": "ge20nr11ptbr_sec-ch-ua-platform,user-agent,sec-ch-ua,sec-ch-ua-mobile,accept,sec-fetch-site,sec-fetch-mode,sec-fetch-dest,accept-encoding,accept-language,priority__"
+  }
+ ],
+ "clientH2TcpStream": 1
+}
