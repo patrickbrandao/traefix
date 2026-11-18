@@ -40,6 +40,7 @@ type Middleware struct {
 	IPWhiteList           *IPWhiteList           `json:"ipWhiteList,omitempty" toml:"ipWhiteList,omitempty" yaml:"ipWhiteList,omitempty" export:"true"`
 	IPAllowList           *IPAllowList           `json:"ipAllowList,omitempty" toml:"ipAllowList,omitempty" yaml:"ipAllowList,omitempty" export:"true"`
 	FingerprintList       *FingerprintList       `json:"fingerprintList,omitempty" toml:"fingerprintList,omitempty" yaml:"fingerprintList,omitempty" export:"true"`
+	Coraza                *Coraza                `json:"coraza,omitempty" toml:"coraza,omitempty" yaml:"coraza,omitempty" export:"true"`
 	Headers               *Headers               `json:"headers,omitempty" toml:"headers,omitempty" yaml:"headers,omitempty" export:"true"`
 	EncodedCharacters     *EncodedCharacters     `json:"encodedCharacters,omitempty" toml:"encodedCharacters,omitempty" yaml:"encodedCharacters,omitempty" export:"true"`
 	Errors                *ErrorPage             `json:"errors,omitempty" toml:"errors,omitempty" yaml:"errors,omitempty" export:"true"`

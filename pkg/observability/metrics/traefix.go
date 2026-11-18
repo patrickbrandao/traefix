@@ -23,6 +23,9 @@ const (
 	fingerprintExportSendName         = MetricNamePrefix + "fingerprint_export_send_seconds"
 	fingerprintCaptureTruncatedName   = MetricNamePrefix + "fingerprint_capture_truncated_total"
 	forwardAuthFailOpenName           = MetricNamePrefix + "forwardauth_failopen_total"
+	wafRequestsName                   = MetricNamePrefix + "waf_requests_total"
+	wafDurationName                   = MetricNamePrefix + "waf_duration_seconds"
+	wafRuleMatchesName                = MetricNamePrefix + "waf_rule_matches_total"
 
 	// The StatsD and Datadog clients add the "traefik." prefix themselves.
 	statsdFingerprintExportRecordsName      = "fingerprint.export.records.total"
@@ -32,11 +35,15 @@ const (
 	statsdFingerprintExportSendName         = "fingerprint.export.send.duration"
 	statsdFingerprintCaptureTruncatedName   = "fingerprint.capture.truncated.total"
 	statsdForwardAuthFailOpenName           = "forwardauth.failopen.total"
+	statsdWAFRequestsName                   = "waf.requests.total"
+	statsdWAFDurationName                   = "waf.duration"
+	statsdWAFRuleMatchesName                = "waf.rule.matches.total"
 
 	influxDBFingerprintPrefix = "traefik."
 
 	labelEntryPoint = "entrypoint"
 	labelCode       = "code"
+	labelMiddleware = "middleware"
 )
 
 // otlpSecondsUnit is a variable, not a constant, so that the upstream newOTLPHistogramFrom keeps receiving a unit
@@ -60,6 +67,12 @@ type traefixRegistry interface {
 	// ForwardAuthFailOpenCounter counts the requests let through after an authentication server failure,
 	// by middleware and reason.
 	ForwardAuthFailOpenCounter() metrics.Counter
+	// WAFRequestsCounter counts the requests the Coraza middleware processed, by middleware and result.
+	WAFRequestsCounter() metrics.Counter
+	// WAFDurationHistogram is the processing time of the Coraza middleware, without the next handlers, by middleware.
+	WAFDurationHistogram() ScalableHistogram
+	// WAFRuleMatchesCounter counts the rules with a message that matched, by middleware and rule_id.
+	WAFRuleMatchesCounter() metrics.Counter
 }
 
 type traefixMetrics struct {
@@ -70,6 +83,9 @@ type traefixMetrics struct {
 	fingerprintExportSend         ScalableHistogram
 	fingerprintCaptureTruncated   metrics.Counter
 	forwardAuthFailOpen           metrics.Counter
+	wafRequests                   metrics.Counter
+	wafDuration                   ScalableHistogram
+	wafRuleMatches                metrics.Counter
 }
 
 func (r *standardRegistry) FingerprintExportRecordsCounter() metrics.Counter {
@@ -100,10 +116,22 @@ func (r *standardRegistry) ForwardAuthFailOpenCounter() metrics.Counter {
 	return r.traefix.forwardAuthFailOpen
 }
 
+func (r *standardRegistry) WAFRequestsCounter() metrics.Counter {
+	return r.traefix.wafRequests
+}
+
+func (r *standardRegistry) WAFDurationHistogram() ScalableHistogram {
+	return r.traefix.wafDuration
+}
+
+func (r *standardRegistry) WAFRuleMatchesCounter() metrics.Counter {
+	return r.traefix.wafRuleMatches
+}
+
 func newMultiTraefixMetrics(registries []Registry) traefixMetrics {
-	var records, dropped, batches, truncated, failOpen []metrics.Counter
+	var records, dropped, batches, truncated, failOpen, wafRequests, wafRuleMatches []metrics.Counter
 	var queue []metrics.Gauge
-	var send []ScalableHistogram
+	var send, wafDuration []ScalableHistogram
 
 	for _, r := range registries {
 		if c := r.FingerprintExportRecordsCounter(); c != nil {
@@ -127,6 +155,15 @@ func newMultiTraefixMetrics(registries []Registry) traefixMetrics {
 		if c := r.ForwardAuthFailOpenCounter(); c != nil {
 			failOpen = append(failOpen, c)
 		}
+		if c := r.WAFRequestsCounter(); c != nil {
+			wafRequests = append(wafRequests, c)
+		}
+		if h := r.WAFDurationHistogram(); h != nil {
+			wafDuration = append(wafDuration, h)
+		}
+		if c := r.WAFRuleMatchesCounter(); c != nil {
+			wafRuleMatches = append(wafRuleMatches, c)
+		}
 	}
 
 	return traefixMetrics{
@@ -137,6 +174,9 @@ func newMultiTraefixMetrics(registries []Registry) traefixMetrics {
 		fingerprintExportSend:         MultiHistogram(send),
 		fingerprintCaptureTruncated:   multi.NewCounter(truncated...),
 		forwardAuthFailOpen:           multi.NewCounter(failOpen...),
+		wafRequests:                   multi.NewCounter(wafRequests...),
+		wafDuration:                   MultiHistogram(wafDuration),
+		wafRuleMatches:                multi.NewCounter(wafRuleMatches...),
 	}
 }
 
@@ -169,7 +209,20 @@ func newPrometheusTraefixMetrics(buckets []float64) (traefixMetrics, []vector) {
 	failOpen := newCounterFrom(stdprometheus.CounterOpts{
 		Name: forwardAuthFailOpenName,
 		Help: "How many requests a forwardAuth middleware let through after an authentication server failure, partitioned by middleware and reason.",
-	}, []string{"middleware", "reason"})
+	}, []string{labelMiddleware, "reason"})
+	wafRequests := newCounterFrom(stdprometheus.CounterOpts{
+		Name: wafRequestsName,
+		Help: "How many requests a Coraza middleware processed, partitioned by middleware and result.",
+	}, []string{labelMiddleware, "result"})
+	wafDuration := newHistogramFrom(stdprometheus.HistogramOpts{
+		Name:    wafDurationName,
+		Help:    "How long a Coraza middleware took to process a request, without the next handlers, partitioned by middleware.",
+		Buckets: []float64{0.0005, 0.001, 0.005, 0.01, 0.05, 0.1},
+	}, []string{labelMiddleware})
+	wafRuleMatches := newCounterFrom(stdprometheus.CounterOpts{
+		Name: wafRuleMatchesName,
+		Help: "How many times the rules with a message of a Coraza middleware matched, partitioned by middleware and rule identifier.",
+	}, []string{labelMiddleware, "rule_id"})
 
 	m := traefixMetrics{
 		fingerprintExportRecords:      records,
@@ -178,10 +231,13 @@ func newPrometheusTraefixMetrics(buckets []float64) (traefixMetrics, []vector) {
 		fingerprintExportQueueRecords: queue,
 		fingerprintCaptureTruncated:   truncated,
 		forwardAuthFailOpen:           failOpen,
+		wafRequests:                   wafRequests,
+		wafRuleMatches:                wafRuleMatches,
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(send, time.Second)
+	m.wafDuration, _ = NewHistogramWithScale(wafDuration, time.Second)
 
-	return m, []vector{records.cv, dropped.cv, batches.cv, queue.gv, send.hv, truncated.cv, failOpen.cv}
+	return m, []vector{records.cv, dropped.cv, batches.cv, queue.gv, send.hv, truncated.cv, failOpen.cv, wafRequests.cv, wafDuration.hv, wafRuleMatches.cv}
 }
 
 func newDatadogTraefixMetrics(client *dogstatsd.Dogstatsd) traefixMetrics {
@@ -192,8 +248,11 @@ func newDatadogTraefixMetrics(client *dogstatsd.Dogstatsd) traefixMetrics {
 		fingerprintExportQueueRecords: client.NewGauge(statsdFingerprintExportQueueRecordsName),
 		fingerprintCaptureTruncated:   client.NewCounter(statsdFingerprintCaptureTruncatedName, 1.0),
 		forwardAuthFailOpen:           client.NewCounter(statsdForwardAuthFailOpenName, 1.0),
+		wafRequests:                   client.NewCounter(statsdWAFRequestsName, 1.0),
+		wafRuleMatches:                client.NewCounter(statsdWAFRuleMatchesName, 1.0),
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(client.NewHistogram(statsdFingerprintExportSendName, 1.0), time.Second)
+	m.wafDuration, _ = NewHistogramWithScale(client.NewHistogram(statsdWAFDurationName, 1.0), time.Second)
 
 	return m
 }
@@ -206,8 +265,11 @@ func newStatsdTraefixMetrics(client *statsd.Statsd) traefixMetrics {
 		fingerprintExportQueueRecords: client.NewGauge(statsdFingerprintExportQueueRecordsName),
 		fingerprintCaptureTruncated:   client.NewCounter(statsdFingerprintCaptureTruncatedName, 1.0),
 		forwardAuthFailOpen:           client.NewCounter(statsdForwardAuthFailOpenName, 1.0),
+		wafRequests:                   client.NewCounter(statsdWAFRequestsName, 1.0),
+		wafRuleMatches:                client.NewCounter(statsdWAFRuleMatchesName, 1.0),
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(client.NewTiming(statsdFingerprintExportSendName, 1.0), time.Millisecond)
+	m.wafDuration, _ = NewHistogramWithScale(client.NewTiming(statsdWAFDurationName, 1.0), time.Millisecond)
 
 	return m
 }
@@ -220,8 +282,11 @@ func newInfluxDB2TraefixMetrics(store *influx.Influx) traefixMetrics {
 		fingerprintExportQueueRecords: store.NewGauge(influxDBFingerprintPrefix + statsdFingerprintExportQueueRecordsName),
 		fingerprintCaptureTruncated:   store.NewCounter(influxDBFingerprintPrefix + statsdFingerprintCaptureTruncatedName),
 		forwardAuthFailOpen:           store.NewCounter(influxDBFingerprintPrefix + statsdForwardAuthFailOpenName),
+		wafRequests:                   store.NewCounter(influxDBFingerprintPrefix + statsdWAFRequestsName),
+		wafRuleMatches:                store.NewCounter(influxDBFingerprintPrefix + statsdWAFRuleMatchesName),
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(store.NewHistogram(influxDBFingerprintPrefix+statsdFingerprintExportSendName), time.Second)
+	m.wafDuration, _ = NewHistogramWithScale(store.NewHistogram(influxDBFingerprintPrefix+statsdWAFDurationName), time.Second)
 
 	return m
 }
@@ -240,9 +305,15 @@ func newOTLPTraefixMetrics(meter metric.Meter) traefixMetrics {
 			"How many connection captures were cut at their size limit, partitioned by entrypoint and part."),
 		forwardAuthFailOpen: newOTLPCounterFrom(meter, forwardAuthFailOpenName,
 			"How many requests a forwardAuth middleware let through after an authentication server failure, partitioned by middleware and reason."),
+		wafRequests: newOTLPCounterFrom(meter, wafRequestsName,
+			"How many requests a Coraza middleware processed, partitioned by middleware and result."),
+		wafRuleMatches: newOTLPCounterFrom(meter, wafRuleMatchesName,
+			"How many times the rules with a message of a Coraza middleware matched, partitioned by middleware and rule identifier."),
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(newOTLPHistogramFrom(meter, fingerprintExportSendName,
 		"How long it took to send a batch of connection fingerprint records, partitioned by entrypoint.", otlpSecondsUnit), time.Second)
+	m.wafDuration, _ = NewHistogramWithScale(newOTLPHistogramFrom(meter, wafDurationName,
+		"How long a Coraza middleware took to process a request, without the next handlers, partitioned by middleware.", otlpSecondsUnit), time.Second)
 
 	return m
 }

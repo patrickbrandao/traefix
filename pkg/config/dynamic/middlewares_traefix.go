@@ -43,3 +43,18 @@ type FingerprintList struct {
 	// If not set, the default is 403 (Forbidden).
 	RejectStatusCode int `json:"rejectStatusCode,omitempty" toml:"rejectStatusCode,omitempty" yaml:"rejectStatusCode,omitempty" export:"true"`
 }
+
+// +k8s:deepcopy-gen=true
+
+// Coraza holds the native OWASP Coraza WAF middleware configuration (Traefix).
+// It takes the same options as the Coraza middleware of Traefik Hub, and plugin.coraza is read as this middleware
+// when no plugin of that name is declared.
+type Coraza struct {
+	// Directives lists the SecLang directives of the WAF.
+	Directives []string `json:"directives,omitempty" toml:"directives,omitempty" yaml:"directives,omitempty" export:"true"`
+	// CRSEnabled makes the embedded OWASP Core Rule Set files available to the Include directives:
+	// @coraza.conf-recommended, @crs-setup.conf.example and @owasp_crs/*.conf.
+	CRSEnabled bool `json:"crsEnabled,omitempty" toml:"crsEnabled,omitempty" yaml:"crsEnabled,omitempty" export:"true"`
+	// FailOpen lets the requests through when the WAF fails to process them, instead of answering 500.
+	FailOpen bool `json:"failOpen,omitempty" toml:"failOpen,omitempty" yaml:"failOpen,omitempty" export:"true"`
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/middlewares/circuitbreaker"
 	"github.com/traefik/traefik/v3/pkg/middlewares/compress"
 	"github.com/traefik/traefik/v3/pkg/middlewares/contenttype"
+	corazamw "github.com/traefik/traefik/v3/pkg/middlewares/coraza"
 	"github.com/traefik/traefik/v3/pkg/middlewares/customerrors"
 	"github.com/traefik/traefik/v3/pkg/middlewares/encodedcharacters"
 	"github.com/traefik/traefik/v3/pkg/middlewares/fingerprintlist"
@@ -455,8 +456,22 @@ func (b *Builder) buildConstructor(ctx context.Context, middlewareName string) (
 		}
 	}
 
+	// Coraza (Traefix)
+	corazaConfig, corazaFromPlugin, err := b.corazaConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	if corazaConfig != nil {
+		if middleware != nil {
+			return nil, badConf
+		}
+		middleware = func(next http.Handler) (http.Handler, error) {
+			return corazamw.New(ctx, next, *corazaConfig, middlewareName)
+		}
+	}
+
 	// Plugin
-	if config.Plugin != nil && !reflect.ValueOf(b.pluginBuilder).IsNil() { // Using "reflect" because "b.pluginBuilder" is an interface.
+	if config.Plugin != nil && !corazaFromPlugin && !reflect.ValueOf(b.pluginBuilder).IsNil() { // Using "reflect" because "b.pluginBuilder" is an interface.
 		if middleware != nil {
 			return nil, badConf
 		}

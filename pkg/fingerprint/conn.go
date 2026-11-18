@@ -48,6 +48,9 @@ type connInfo struct {
 	capture *Capture
 	tls     *tls.Conn
 	quic    *quic.Conn
+	h3      *quicTrace
+
+	quicParams []uint64
 
 	// finalize computes the connection record once, on the first request or when the connection closes.
 	finalize sync.Once

@@ -54,4 +54,4 @@ The Kubernetes `Middleware` resource doesn't support this middleware yet.
 
 In each list, a trailing `*` matches the fingerprints starting with the given prefix, for example `t13d1516h2_*`. A lone `*` fails the middleware at load, and so does a configuration without any listed fingerprint.
 
-A request is listed when one of its fingerprints matches its list. A fingerprint the entry point didn't compute matches nothing: JA3 and JA4 over plain HTTP or HTTP/3, JA4H over HTTP/3, and every fingerprint on an entry point without the `fingerprint` option. In `allow` mode, such requests are rejected.
+A request is listed when one of its fingerprints matches its list. A fingerprint the entry point didn't compute matches nothing: JA3 and JA4 over plain HTTP, JA4H over HTTP/3 without the `http3HeaderOrder` option, and every fingerprint on an entry point without the `fingerprint` option. In `allow` mode, such requests are rejected.

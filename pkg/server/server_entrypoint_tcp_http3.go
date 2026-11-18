@@ -85,6 +85,11 @@ func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint,
 		}
 	}
 
+	fp := httpsServer.fingerprint
+	if fp != nil {
+		conn = fp.WrapPacketConn(conn)
+	}
+
 	h3 := &http3server{
 		http3conn: conn,
 		getter: func(data tcpmuxer.ConnData) (*tls.Config, string, error) {
@@ -121,7 +126,7 @@ func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint,
 				fast.ReleaseConnPoolsOnContext(ctx)
 			})
 
-			if fp := httpsServer.fingerprint; fp != nil {
+			if fp != nil {
 				ctx = fp.QUICConnContext(ctx, c)
 			}
 
@@ -133,6 +138,13 @@ func newHTTP3Server(ctx context.Context, name string, config *static.EntryPoint,
 
 			return tcp.AddTLSOptionsNameInContext(ctx, tlsOptionsName)
 		},
+	}
+
+	if fp != nil {
+		h3.Server.TLSConfig.GetConfigForClient = fp.QUICGetConfigForClient(h3.Server.TLSConfig.GetConfigForClient)
+		if fp.HTTP3HeaderOrder() {
+			h3.Server.QUICConfig.Tracer = fp.QUICTracer
+		}
 	}
 
 	previousHandler := httpsServer.Server.(*http.Server).Handler

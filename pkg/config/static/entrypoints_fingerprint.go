@@ -13,6 +13,8 @@ const DefaultFingerprintHeaderPrefix = "X-Traefix-"
 type Fingerprint struct {
 	HeaderPrefix string             `description:"Prefix of the request headers carrying the connection data and fingerprints. The client request headers with this prefix are removed." json:"headerPrefix,omitempty" toml:"headerPrefix,omitempty" yaml:"headerPrefix,omitempty" export:"true"`
 	Export       *FingerprintExport `description:"Exports the connection and request records to an HTTP endpoint." json:"export,omitempty" toml:"export,omitempty" yaml:"export,omitempty" export:"true"`
+	// HTTP3HeaderOrder enables the qlog events of the QUIC library, which carry the HTTP/3 header order.
+	HTTP3HeaderOrder bool `description:"Captures the header order and the SETTINGS of the HTTP/3 requests, for their JA4H. It enables the qlog events of the QUIC library, which cost CPU on every QUIC packet." json:"http3HeaderOrder,omitempty" toml:"http3HeaderOrder,omitempty" yaml:"http3HeaderOrder,omitempty" export:"true"`
 }
 
 // SetDefaults sets the default values.

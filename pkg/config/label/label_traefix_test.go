@@ -75,3 +75,16 @@ func TestFingerprintList_decode(t *testing.T) {
 		RejectStatusCode: 429,
 	}, cfg.HTTP.Middlewares["bots"].FingerprintList)
 }
+
+func TestCoraza_decode(t *testing.T) {
+	cfg, err := DecodeConfiguration(map[string]string{
+		"traefik.http.middlewares.waf.coraza.crsEnabled": "true",
+		"traefik.http.middlewares.waf.coraza.directives": "SecRuleEngine On,Include @owasp_crs/*.conf",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, &dynamic.Coraza{
+		CRSEnabled: true,
+		Directives: []string{"SecRuleEngine On", "Include @owasp_crs/*.conf"},
+	}, cfg.HTTP.Middlewares["waf"].Coraza)
+}

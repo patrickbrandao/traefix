@@ -55,8 +55,11 @@ func (e *EntryPoint) Handler(next http.Handler) http.Handler {
 
 		st := &requestState{start: time.Now(), conn: connInfoFromContext(req.Context())}
 		if info := st.conn; info != nil {
-			if info.capture != nil {
+			switch {
+			case info.capture != nil:
 				st.wire = info.capture.take(req)
+			case info.h3 != nil:
+				st.wire = info.h3.take(req)
 			}
 			e.finishConn(info, protoOf(req))
 		}

@@ -1,0 +1,331 @@
+package fingerprint
+
+import (
+	"context"
+	"crypto/tls"
+	"maps"
+	"net"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/quic-go/quic-go"
+	h3qlog "github.com/quic-go/quic-go/http3/qlog"
+	"github.com/quic-go/quic-go/qlogwriter"
+)
+
+const (
+	// quicPendingTTL bounds the life of the ClientHellos of the QUIC handshakes that never become a connection.
+	quicPendingTTL = 30 * time.Second
+
+	// maxQUICPending bounds the QUIC handshakes followed at once, e.g. under a flood of Initial packets.
+	maxQUICPending = 4096
+)
+
+// quicHello is what the QUIC handshake tells of a client, until its connection is identified.
+type quicHello struct {
+	at        time.Time
+	fromInfo  *ClientHello
+	raw       []byte
+	fromRaw   *ClientHello
+	params    []uint64
+	assembler *QUICClientHelloAssembler
+	truncated bool
+}
+
+type quicPending struct {
+	mu    sync.Mutex
+	byKey map[string]*quicHello
+}
+
+func (p *quicPending) get(key string, create bool) *quicHello {
+	if p.byKey == nil {
+		p.byKey = make(map[string]*quicHello)
+	}
+
+	h, ok := p.byKey[key]
+	if ok || !create {
+		return h
+	}
+
+	now := time.Now()
+	if len(p.byKey) >= maxQUICPending {
+		for k, v := range p.byKey {
+			if now.Sub(v.at) > quicPendingTTL {
+				delete(p.byKey, k)
+			}
+		}
+		if len(p.byKey) >= maxQUICPending {
+			return nil
+		}
+	}
+
+	h = &quicHello{at: now}
+	p.byKey[key] = h
+	return h
+}
+
+func (p *quicPending) take(key string) *quicHello {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	h := p.byKey[key]
+	delete(p.byKey, key)
+	return h
+}
+
+// QUICGetConfigForClient records the ClientHello of the QUIC handshakes, which the QUIC library only exposes
+// through the TLS callback, before calling next.
+func (e *EntryPoint) QUICGetConfigForClient(next func(*tls.ClientHelloInfo) (*tls.Config, error)) func(*tls.ClientHelloInfo) (*tls.Config, error) {
+	return func(info *tls.ClientHelloInfo) (*tls.Config, error) {
+		if info.Conn != nil {
+			hello := clientHelloFromInfo(info)
+			e.quic.mu.Lock()
+			if h := e.quic.get(info.Conn.RemoteAddr().String(), true); h != nil {
+				h.fromInfo = hello
+			}
+			e.quic.mu.Unlock()
+		}
+		return next(info)
+	}
+}
+
+func clientHelloFromInfo(info *tls.ClientHelloInfo) *ClientHello {
+	h := &ClientHello{
+		// QUIC requires TLS 1.3, whose ClientHello carries the TLS 1.2 legacy version.
+		LegacyVersion:     tls.VersionTLS12,
+		CipherSuites:      slices.Clone(info.CipherSuites),
+		Extensions:        slices.Clone(info.Extensions),
+		ServerName:        info.ServerName,
+		ALPN:              slices.Clone(info.SupportedProtos),
+		PointFormats:      slices.Clone(info.SupportedPoints),
+		SupportedVersions: slices.Clone(info.SupportedVersions),
+	}
+	for _, c := range info.SupportedCurves {
+		h.SupportedGroups = append(h.SupportedGroups, uint16(c))
+	}
+	for _, s := range info.SignatureSchemes {
+		h.SignatureAlgorithms = append(h.SignatureAlgorithms, uint16(s))
+	}
+	return h
+}
+
+// WrapPacketConn returns a packet connection recording the ClientHello bytes of the Initial packets, when the
+// export carries the raw bytes. The QUIC library uses the batch reads and the offloads of a UDP socket only when
+// it gets the socket itself, which the wrapper hides: the raw bytes cost these optimizations.
+func (e *EntryPoint) WrapPacketConn(c net.PacketConn) net.PacketConn {
+	if !e.rawBytes {
+		return c
+	}
+	return &initialConn{PacketConn: c, ep: e}
+}
+
+type initialConn struct {
+	net.PacketConn
+
+	ep *EntryPoint
+}
+
+func (c *initialConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	n, addr, err := c.PacketConn.ReadFrom(p)
+	// Only the long header packets carry an Initial packet.
+	if n > 0 && addr != nil && p[0]&0x80 != 0 {
+		c.ep.observeInitial(addr.String(), p[:n])
+	}
+	return n, addr, err
+}
+
+func (e *EntryPoint) observeInitial(key string, datagram []byte) {
+	e.quic.mu.Lock()
+	defer e.quic.mu.Unlock()
+
+	h := e.quic.get(key, true)
+	if h == nil || h.raw != nil || h.truncated {
+		return
+	}
+
+	_, frames, err := DecryptQUICInitials(datagram)
+	if err != nil || len(frames) == 0 {
+		return
+	}
+
+	if h.assembler == nil {
+		h.assembler = &QUICClientHelloAssembler{}
+	}
+	for _, f := range frames {
+		msg, done, err := h.assembler.Add(f)
+		if err != nil {
+			h.truncated = true
+			h.assembler = nil
+			e.truncated("client_hello")
+			return
+		}
+		if done {
+			h.raw = msg
+			h.assembler = nil
+			if parsed, err := ParseClientHelloMessage(msg); err == nil {
+				h.fromRaw = parsed
+			}
+			h.params, _ = QUICTransportParameterIDs(msg)
+			return
+		}
+	}
+}
+
+// quicTrace follows the HTTP/3 frames the client sends, from the qlog events of the QUIC library,
+// for the header order of the requests and the SETTINGS of the connection.
+type quicTrace struct {
+	fields *fieldMatcher
+
+	mu       sync.Mutex
+	pending  []*Request
+	streams  map[quic.StreamID]struct{}
+	settings string
+}
+
+// QUICTracer is the qlog tracer of the connections, for the http3HeaderOrder option.
+func (e *EntryPoint) QUICTracer(_ context.Context, isClient bool, _ quic.ConnectionID) qlogwriter.Trace {
+	if isClient {
+		return nil
+	}
+	return &quicTrace{fields: e.captureCfg.fields, streams: make(map[quic.StreamID]struct{})}
+}
+
+func (t *quicTrace) AddProducer() qlogwriter.Recorder {
+	return quicRecorder{t}
+}
+
+type quicRecorder struct {
+	t *quicTrace
+}
+
+func (r quicRecorder) Close() error { return nil }
+
+func (r quicRecorder) RecordEvent(ev qlogwriter.Event) {
+	parsed, ok := ev.(h3qlog.FrameParsed)
+	if !ok {
+		return
+	}
+
+	switch f := parsed.Frame.Frame.(type) {
+	case h3qlog.HeadersFrame:
+		r.t.addHeaders(parsed.StreamID, f)
+	case h3qlog.SettingsFrame:
+		r.t.setSettings(f)
+	}
+}
+
+func (t *quicTrace) Settings() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.settings
+}
+
+func (t *quicTrace) addHeaders(id quic.StreamID, f h3qlog.HeadersFrame) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// A second header section on a stream is its trailers.
+	if _, seen := t.streams[id]; seen {
+		return
+	}
+	if len(t.streams) >= maxPendingRequests {
+		clear(t.streams)
+	}
+	t.streams[id] = struct{}{}
+
+	r := &Request{ProtoMajor: 3, streamID: uint32(id)}
+	for _, hf := range f.HeaderFields {
+		if strings.HasPrefix(hf.Name, ":") {
+			r.PseudoNames = append(r.PseudoNames, hf.Name)
+			switch hf.Name {
+			case ":method":
+				r.Method = hf.Value
+			case ":path":
+				r.Target = hf.Value
+			case ":authority":
+				r.Authority = hf.Value
+			}
+			continue
+		}
+		if len(r.Names) >= maxH2Fields {
+			r.Truncated = true
+			continue
+		}
+		r.Names = append(r.Names, hf.Name)
+		if t.fields.match(hf.Name) {
+			r.Fields = append(r.Fields, Field{Name: hf.Name, Value: truncateValue(hf.Value)})
+		}
+		switch hf.Name {
+		case "cookie":
+			r.Cookies = append(r.Cookies, hf.Value)
+		case "accept-language":
+			if !r.HasAcceptLanguage {
+				r.AcceptLanguage = hf.Value
+				r.HasAcceptLanguage = true
+			}
+		}
+	}
+
+	if r.Method == "" {
+		return
+	}
+	if len(t.pending) >= maxPendingRequests {
+		t.pending[0] = nil
+		t.pending = t.pending[1:]
+	}
+	t.pending = append(t.pending, r)
+}
+
+// setSettings records the SETTINGS of the client, sorted by identifier as the QUIC library does not keep their order.
+func (t *quicTrace) setSettings(f h3qlog.SettingsFrame) {
+	settings := maps.Clone(f.Other)
+	if settings == nil {
+		settings = map[uint64]uint64{}
+	}
+	if f.MaxFieldSectionSize >= 0 {
+		settings[0x6] = uint64(f.MaxFieldSectionSize)
+	}
+	if f.ExtendedConnect >= 0 {
+		settings[0x8] = uint64(f.ExtendedConnect)
+	}
+	if f.Datagram >= 0 {
+		settings[0x33] = uint64(f.Datagram)
+	}
+
+	ids := make([]uint64, 0, len(settings))
+	for id := range settings {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+
+	var b strings.Builder
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteByte(';')
+		}
+		b.WriteString(strconv.FormatUint(id, 10))
+		b.WriteByte(':')
+		b.WriteString(strconv.FormatUint(settings[id], 10))
+	}
+
+	t.mu.Lock()
+	t.settings = b.String()
+	t.mu.Unlock()
+}
+
+func (t *quicTrace) take(req *http.Request) *Request {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for i, r := range t.pending {
+		if r.matches(req) {
+			t.pending = append(t.pending[:i], t.pending[i+1:]...)
+			return r
+		}
+	}
+	return nil
+}

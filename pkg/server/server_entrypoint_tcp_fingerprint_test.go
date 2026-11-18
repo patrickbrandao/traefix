@@ -18,14 +18,17 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/config/static"
 	"github.com/traefik/traefik/v3/pkg/fingerprint"
 	tcprouter "github.com/traefik/traefik/v3/pkg/server/router/tcp"
@@ -529,8 +532,142 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 		assert.Equal(t, "127.0.0.1", got["X-Fs-Src-Ip"])
 		assert.Equal(t, "h3", got["X-Fs-Proto"])
 		assert.Len(t, got["X-Fs-Conn-Id"], 26)
-		// The HTTP/3 header order and the QUIC ClientHello are not captured yet.
+		// The JA4 of QUIC comes from the ClientHello the QUIC library gives to the TLS callback.
+		assert.Regexp(t, `^q13d\d{4}h3_`, got["X-Fs-Ja4"])
+		// Without http3HeaderOrder, the HTTP/3 header order is not captured.
 		assert.NotContains(t, got, "X-Fs-Ja4h")
-		assert.NotContains(t, got, "X-Fs-Ja4")
 	})
+}
+
+// TestFingerprintEntryPoint_http3 covers the HTTP/3 options: the raw ClientHello and the transport parameters from
+// the Initial packets, the header order from the qlog events, and the identifier kept across a path migration.
+func TestFingerprintEntryPoint_http3(t *testing.T) {
+	certContent, err := localhostCert.Read()
+	require.NoError(t, err)
+	keyContent, err := localhostKey.Read()
+	require.NoError(t, err)
+	tlsCert, err := tls.X509KeyPair(certContent, keyContent)
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	var records []map[string]any
+	dest := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) {
+		var b struct {
+			Records []map[string]any `json:"records"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&b); err == nil {
+			mu.Lock()
+			records = append(records, b.Records...)
+			mu.Unlock()
+		}
+	}))
+	t.Cleanup(dest.Close)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	fp := &static.Fingerprint{HeaderPrefix: "X-Fs-", HTTP3HeaderOrder: true, Export: &static.FingerprintExport{URL: dest.URL, RawBytes: true}}
+	fp.Export.SetDefaults()
+	fp.Export.FlushInterval = ptypes.Duration(20 * time.Millisecond)
+
+	epConfig := &static.EntryPointsTransport{}
+	epConfig.SetDefaults()
+	entryPoint, err := NewTCPEntryPoint(t.Context(), "websecure", &static.EntryPoint{
+		Address:          addr,
+		Transport:        epConfig,
+		ForwardedHeaders: &static.ForwardedHeaders{},
+		HTTP2:            &static.HTTP2Config{},
+		HTTP3:            &static.HTTP3Config{},
+		Fingerprint:      fp,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	router, err := tcprouter.NewRouter(nil)
+	require.NoError(t, err)
+	router.AddHTTPTLSConfig("example.com", &tls.Config{Certificates: []tls.Certificate{tlsCert}}, traefiktls.DefaultTLSConfigName)
+	router.SetHTTPSHandler(http.HandlerFunc(echoFingerprintHeaders), nil)
+
+	go entryPoint.Start(t.Context())
+	entryPoint.SwitchRouter(router)
+	t.Cleanup(func() { entryPoint.Shutdown(context.Background()) })
+
+	certPool := x509.NewCertPool()
+	certPool.AppendCertsFromPEM(certContent)
+	tlsConf := &tls.Config{RootCAs: certPool, ServerName: "example.com", NextProtos: []string{http3.NextProtoH3}}
+
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	require.NoError(t, err)
+
+	newTransport := func() *quic.Transport {
+		pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		require.NoError(t, err)
+		tr := &quic.Transport{Conn: pc}
+		t.Cleanup(func() { _ = tr.Close() })
+		return tr
+	}
+
+	tr1 := newTransport()
+	var conn *quic.Conn
+	// The HTTP/3 server starts with the entry point, in its own goroutine.
+	require.Eventually(t, func() bool {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		conn, err = tr1.Dial(ctx, udpAddr, tlsConf, &quic.Config{})
+		return err == nil
+	}, 5*time.Second, 100*time.Millisecond)
+	t.Cleanup(func() { _ = conn.CloseWithError(0, "") })
+
+	client := (&http3.Transport{}).NewClientConn(conn)
+	get := func() map[string]string {
+		req, err := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+		require.NoError(t, err)
+		req.Header.Set("User-Agent", "h3-client")
+		req.Header.Set("Accept-Language", "pt-BR,pt;q=0.9")
+		resp, err := client.RoundTrip(req)
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+
+		var got map[string]string
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+		return got
+	}
+
+	first := get()
+	assert.Equal(t, "h3", first["X-Fs-Proto"])
+	assert.Regexp(t, `^q13d\d{4}h3_`, first["X-Fs-Ja4"])
+	assert.Regexp(t, `^ge30nn\d\dptbr_`, first["X-Fs-Ja4h"])
+
+	// The client moves to another socket: the connection keeps its identifier.
+	path, err := conn.AddPath(newTransport())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, path.Probe(ctx))
+	require.NoError(t, path.Switch())
+
+	second := get()
+	assert.Equal(t, first["X-Fs-Conn-Id"], second["X-Fs-Conn-Id"])
+	assert.Equal(t, first["X-Fs-Ja4"], second["X-Fs-Ja4"])
+
+	var conns []map[string]any
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		conns = conns[:0]
+		for _, r := range records {
+			if r["type"] == "connection" {
+				conns = append(conns, r)
+			}
+		}
+		return len(conns) == 1
+	}, 5*time.Second, 20*time.Millisecond)
+
+	tlsRec := conns[0]["tls"].(map[string]any)
+	assert.Equal(t, first["X-Fs-Ja4"], tlsRec["ja4"])
+	assert.NotEmpty(t, tlsRec["clientHello"])
+	assert.NotEmpty(t, tlsRec["quicTransportParameters"])
+	assert.Equal(t, "h3", tlsRec["alpn"])
+	assert.Equal(t, "example.com", tlsRec["sni"])
 }

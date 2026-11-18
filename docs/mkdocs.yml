@@ -317,6 +317,7 @@ nav:
               - 'Circuit Breaker' : 'reference/routing-configuration/http/middlewares/circuitbreaker.md'
               - 'Compress': 'reference/routing-configuration/http/middlewares/compress.md'
               - 'ContentType': 'reference/routing-configuration/http/middlewares/contenttype.md'
+              - 'Coraza': 'reference/routing-configuration/http/middlewares/coraza.md'
               - 'DigestAuth': 'reference/routing-configuration/http/middlewares/digestauth.md'
               - '<span class="nav-link-with-icon">Distributed RateLimit <img src="https://doc.traefik.io/traefik-hub/img/ps-traefik-hub-logo-light.svg" class="menu-icon" alt="Traefik Hub API Gateway"></span>' : 'reference/routing-configuration/http/middlewares/distributed-ratelimit.md'
               - 'EncodedCharacters': 'reference/routing-configuration/http/middlewares/encodedcharacters.md'

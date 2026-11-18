@@ -37,6 +37,11 @@ func TestAppendJSON_matchesEncodingJSON(t *testing.T) {
 			},
 			HTTP2: &http2Record{Akamai: "1:65536|0|0|m,a,s,p", Prefix: []byte("prefix"), PrefixTruncated: true},
 		},
+		&connectionRecord{
+			Type: recordConnection, ConnID: "id", Time: now, EntryPoint: "ep", Proto: "h3",
+			TLS:   &tlsRecord{JA4: "q13d", QUICTransportParameters: []uint64{4, 5, 0x0f, 0x1a2a3a4a}},
+			HTTP3: &http3Record{Settings: "1:0;6:16384"},
+		},
 	}
 
 	for _, r := range records {

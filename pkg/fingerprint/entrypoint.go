@@ -42,9 +42,12 @@ type EntryPoint struct {
 	prefix  string
 	headers headerNames
 
-	captureCfg Config
-	rawBytes   bool
-	exporter   *exporter
+	captureCfg       Config
+	rawBytes         bool
+	http3HeaderOrder bool
+	exporter         *exporter
+
+	quic quicPending
 
 	truncatedCounter gokitmetrics.Counter
 
@@ -72,6 +75,7 @@ func NewEntryPoint(ctx context.Context, name string, cfg *static.Fingerprint, h2
 		prefix:           strings.ToLower(strings.ReplaceAll(prefix, "_", "-")),
 		truncatedCounter: registry.FingerprintCaptureTruncatedCounter(),
 		pending:          make(map[string]*connInfo),
+		http3HeaderOrder: cfg.HTTP3HeaderOrder,
 	}
 	e.headers = headerNames{
 		srcIP:   textproto.CanonicalMIMEHeaderKey(prefix + "Src-Ip"),
@@ -210,11 +214,30 @@ func (e *EntryPoint) ConnClosed(c net.Conn) {
 	}
 }
 
+// HTTP3HeaderOrder reports whether the QUIC connections need the qlog tracer of the fingerprint.
+func (e *EntryPoint) HTTP3HeaderOrder() bool {
+	return e.http3HeaderOrder
+}
+
 // QUICConnContext identifies an HTTP/3 connection, and attaches its data to the context of its requests.
+// The connection keeps its identifier when it migrates to another path, as it is bound to the connection.
 func (e *EntryPoint) QUICConnContext(ctx context.Context, c *quic.Conn) context.Context {
 	info := newConnInfo(c)
 	info.quic = c
 	info.claimed = true
+
+	if h := e.quic.take(c.RemoteAddr().String()); h != nil {
+		info.parsedHello = h.fromInfo
+		if h.fromRaw != nil {
+			info.parsedHello = h.fromRaw
+		}
+		info.hello = h.raw
+		info.helloTruncated = h.truncated
+		info.quicParams = h.params
+	}
+	if t, ok := c.QlogTrace().(*quicTrace); ok {
+		info.h3 = t
+	}
 
 	context.AfterFunc(c.Context(), func() { e.finishConn(info, "h3") })
 
@@ -280,7 +303,7 @@ func (e *EntryPoint) finalizeConn(info *connInfo, proto string) {
 		if hello != nil {
 			info.ja3Str = hello.JA3()
 			info.ja3 = hello.JA3Hash()
-			info.ja4 = hello.JA4(false)
+			info.ja4 = hello.JA4(info.quic != nil)
 			t.SNI = hello.ServerName
 			t.ALPNOffered = hello.ALPN
 			t.JA3, t.JA3String, t.JA4 = info.ja3, info.ja3Str, info.ja4
@@ -296,6 +319,7 @@ func (e *EntryPoint) finalizeConn(info *connInfo, proto string) {
 		if e.rawBytes {
 			t.ClientHello = raw
 		}
+		t.QUICTransportParameters = info.quicParams
 		rec.TLS = t
 	}
 
@@ -310,6 +334,12 @@ func (e *EntryPoint) finalizeConn(info *connInfo, proto string) {
 			if prefixTruncated {
 				e.truncated("h2_prefix")
 			}
+		}
+	}
+
+	if info.h3 != nil {
+		if settings := info.h3.Settings(); settings != "" {
+			rec.HTTP3 = &http3Record{Settings: settings}
 		}
 	}
 

@@ -32,6 +32,12 @@ type tlsRecord struct {
 	JA4                  string   `json:"ja4,omitempty"`
 	ClientHello          []byte   `json:"clientHello,omitempty"`
 	ClientHelloTruncated bool     `json:"clientHelloTruncated,omitempty"`
+	// QUICTransportParameters are the identifiers of the QUIC transport parameters, in the client order.
+	QUICTransportParameters []uint64 `json:"quicTransportParameters,omitempty"`
+}
+
+type http3Record struct {
+	Settings string `json:"settings,omitempty"`
 }
 
 type http2Record struct {
@@ -50,6 +56,7 @@ type connectionRecord struct {
 	Proto      string       `json:"proto,omitempty"`
 	TLS        *tlsRecord   `json:"tls,omitempty"`
 	HTTP2      *http2Record `json:"http2,omitempty"`
+	HTTP3      *http3Record `json:"http3,omitempty"`
 }
 
 func (r *connectionRecord) size() int {

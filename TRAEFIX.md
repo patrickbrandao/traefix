@@ -63,6 +63,12 @@ Especificação: `tmp/report-waf-features.md` (fases 0 a 4). Implementado até a
 - **Uso local dos fingerprints** (fase 3): campos `Fingerprint*` no access log e atributos de
   trace no span do router; matchers `JA3`, `JA4` e `JA4H` nas regras (router com erro se o
   entrypoint não tem `fingerprint`); middleware `fingerprintList` (modos `allow` e `deny`).
+- **WAF Coraza nativo e QUIC** (fase 4): middleware `coraza` (`directives`, `crsEnabled`,
+  `failOpen`), também lido como `plugin.coraza` quando nenhum plugin com esse nome está
+  declarado; Coraza 3.8.1 e CRS 4.25.0 compilados no binário; métricas `traefik_waf_*`.
+  QUIC: JA3/JA4 `q…` pelo ClientHello do handshake, ClientHello cru e transport parameters
+  decifrando o Initial (com `rawBytes`), ordem dos cabeçalhos h3 e SETTINGS pelo qlog
+  (`http3HeaderOrder`). Código em `pkg/middlewares/coraza/` e `pkg/fingerprint/quic*.go`.
 - Código em `pkg/fingerprint/`; ganchos no upstream em `pkg/server/server_entrypoint_tcp*.go`,
   `pkg/server/router/router.go`, `pkg/config/static/entrypoints.go` e uma linha por backend em
   `pkg/observability/metrics/` (métricas em `traefix.go`).

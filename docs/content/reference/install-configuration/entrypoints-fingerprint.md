@@ -71,6 +71,7 @@ The environment variables follow the same names, for example `TRAEFIK_ENTRYPOINT
 | Field | Description | Default | Required |
 |:------|:------------|:--------|:---------|
 | <a id="opt-fingerprint-headerPrefix" href="#opt-fingerprint-headerPrefix" title="#opt-fingerprint-headerPrefix">`fingerprint.headerPrefix`</a> | Prefix of the headers that Traefix adds to the requests, listed in [Request Headers](#request-headers). Traefix removes every client request header whose name starts with this prefix. An empty prefix fails the start of the entry point. Example: `X-Fs-`. | `X-Traefix-` | No |
+| <a id="opt-fingerprint-http3HeaderOrder" href="#opt-fingerprint-http3HeaderOrder" title="#opt-fingerprint-http3HeaderOrder">`fingerprint.http3HeaderOrder`</a> | Captures the header order and the `SETTINGS` of the HTTP/3 requests, for their JA4H and the `fieldNames` and `http3.settings` of the records. Traefix enables the qlog events of the QUIC library for that, which costs CPU on every QUIC packet. When unset, the HTTP/3 requests have no JA4H. | `false` | No |
 | <a id="opt-fingerprint-export-url" href="#opt-fingerprint-export-url" title="#opt-fingerprint-export-url">`fingerprint.export.url`</a> | URL that receives the [batches of records](#exported-records), sent with `POST` requests. The URL must be absolute, with the `http` or `https` scheme, or the start of the entry point fails. | | Yes, with `export` |
 | <a id="opt-fingerprint-export-headers" href="#opt-fingerprint-export-headers" title="#opt-fingerprint-export-headers">`fingerprint.export.headers`</a> | Headers sent with each batch, for example an `Authorization` header with the key of the receiving service. Traefix treats the values as secrets and removes them from the configuration it logs. | | No |
 | <a id="opt-fingerprint-export-rawBytes" href="#opt-fingerprint-export-rawBytes" title="#opt-fingerprint-export-rawBytes">`fingerprint.export.rawBytes`</a> | Exports the raw bytes of the TLS ClientHello and of the HTTP/2 connection prefix, so that the receiving service can compute its own fingerprints. When unset, the connection records only carry the computed fingerprints. | `false` | No |
@@ -110,7 +111,7 @@ Traefix adds these headers to each request of the entry point, before any router
 
 The headers carry the values of the socket even when the entry point trusts the forwarded headers of its peer. `X-Real-Ip` and `X-Forwarded-For` keep their own rules, set by [`forwardedHeaders`](./entrypoints.md#forwarded-headers).
 
-`X-Traefix-Ja3` and `X-Traefix-Ja4` are absent when the connection isn't TLS, and when the ClientHello is longer than 16 KiB. `X-Traefix-Ja4h` is absent when Traefix couldn't follow the header blocks of the connection, for example after a malformed request.
+`X-Traefix-Ja3` and `X-Traefix-Ja4` are absent when the connection isn't TLS, and when the ClientHello over TCP is longer than 16 KiB. `X-Traefix-Ja4h` is absent when Traefix couldn't follow the header blocks of the connection, for example after a malformed request.
 
 !!! warning "Use one prefix per installation"
 
@@ -118,7 +119,11 @@ The headers carry the values of the socket even when the entry point trusts the 
 
 ### HTTP/3
 
-On HTTP/3 connections, Traefix adds `X-Traefix-Src-Ip`, `X-Traefix-Src-Port`, `X-Traefix-Dst-Port`, `X-Traefix-Conn-Id` and `X-Traefix-Proto`, and exports the connection and request records. The request records of HTTP/3 carry no header names and no JA4H, and the connection records carry no ClientHello fingerprint, because the QUIC library doesn't expose the received header order nor the ClientHello of the Initial packet.
+On HTTP/3 connections, Traefix adds the same headers, with `X-Traefix-Proto` set to `h3`. The connection keeps its identifier when the client migrates it to another network path.
+
+- `X-Traefix-Ja3` and `X-Traefix-Ja4` come from the ClientHello that the QUIC library hands to the TLS handshake. The JA4 starts with `q`.
+- `X-Traefix-Ja4h`, and the `fieldNames` of the request records, need the `http3HeaderOrder` option, described in [Configuration Options](#opt-fingerprint-http3HeaderOrder).
+- With `export.rawBytes`, Traefix also decrypts the Initial packets of each new connection, with the keys that RFC 9001 derives from their connection identifier, to export the raw ClientHello and the order of the QUIC transport parameters. Traefix then reads the UDP socket through a wrapper, which disables the batch reads and the offloads of the QUIC library on that socket.
 
 ## Rule Matchers
 
@@ -161,7 +166,7 @@ On the routed requests, Traefix adds the fingerprints to the access log and to t
 
 The access log shows the fields in the JSON format, and its `fields` options filter them as the other fields. A request that no router matched has no fingerprint field.
 
-A WAF middleware on the router, such as the Coraza plugin, reads the fingerprints from the request headers, for example with the `REQUEST_HEADERS:X-Traefix-Ja4` SecLang variable.
+A WAF middleware on the router, such as the [`coraza`](../routing-configuration/http/middlewares/coraza.md) middleware, reads the fingerprints from the request headers, for example with the `REQUEST_HEADERS:X-Traefix-Ja4` SecLang variable.
 
 ## Exported Records
 

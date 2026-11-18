@@ -146,7 +146,7 @@ func (r *Request) ja4hCookies(buf []byte) ([]byte, []byte) {
 		pairs = append(pairs, cookiePair{name: name, value: value, hasValue: ok})
 	}
 
-	if r.ProtoMajor == 2 {
+	if r.ProtoMajor >= 2 {
 		pairs = make([]cookiePair, 0, len(r.Cookies))
 		for _, crumb := range r.Cookies {
 			addCrumb(crumb)

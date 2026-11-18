@@ -43,6 +43,16 @@ func (r *connectionRecord) appendJSON(b []byte) []byte {
 		b = appendOptString(b, "ja4", t.JA4)
 		b = appendOptBytes(b, "clientHello", t.ClientHello)
 		b = appendOptBool(b, "clientHelloTruncated", t.ClientHelloTruncated)
+		if len(t.QUICTransportParameters) > 0 {
+			b = append(appendKey(b, "quicTransportParameters"), '[')
+			for i, id := range t.QUICTransportParameters {
+				if i > 0 {
+					b = append(b, ',')
+				}
+				b = strconv.AppendUint(b, id, 10)
+			}
+			b = append(b, ']')
+		}
 		b = closeObject(b, start)
 	}
 
@@ -52,6 +62,13 @@ func (r *connectionRecord) appendJSON(b []byte) []byte {
 		b = appendOptString(b, "akamai", h.Akamai)
 		b = appendOptBytes(b, "prefix", h.Prefix)
 		b = appendOptBool(b, "prefixTruncated", h.PrefixTruncated)
+		b = closeObject(b, start)
+	}
+
+	if h := r.HTTP3; h != nil {
+		b = append(b, `,"http3":{`...)
+		start := len(b)
+		b = appendOptString(b, "settings", h.Settings)
 		b = closeObject(b, start)
 	}
 
