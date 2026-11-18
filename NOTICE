@@ -1,0 +1,43 @@
+Traefix
+Copyright 2026 Patrick Brandão
+
+Traefix is a fork of Traefik (https://github.com/traefik/traefik),
+Copyright (c) 2016-2020 Containous SAS; 2020-2025 Traefik Labs,
+distributed under the MIT License (LICENSE.md).
+
+The Traefix additions are distributed under the same MIT License.
+
+This product includes software and data developed by third parties:
+
+- OWASP Coraza WAF (https://github.com/corazawaf/coraza), v3.8.1,
+  Copyright 2022 Juan Pablo Tosso and the OWASP Coraza contributors,
+  Apache License 2.0.
+
+- OWASP Core Rule Set, embedded through coraza-coreruleset
+  (https://github.com/corazawaf/coraza-coreruleset), v4.25.0,
+  Copyright 2006-2020 Trustwave and contributors, Copyright 2021-2026 the
+  OWASP Core Rule Set contributors, Apache License 2.0.
+
+The Go modules compiled into the binary, listed in go.mod, keep their own
+licenses, found in their module sources.
+
+Fingerprinting methods:
+
+- JA3 (https://github.com/salesforce/ja3) is a method by Salesforce,
+  BSD 3-Clause License. The Traefix implementation is its own.
+
+- JA4 (TLS client) is a method by FoxIO, LLC
+  (https://github.com/FoxIO-LLC/ja4), BSD 3-Clause License. The Traefix
+  implementation is its own, checked against the output of the FoxIO tool.
+
+- JA4H (HTTP client) and JA4T (TCP client) belong to the JA4+ suite of
+  FoxIO, LLC, under the FoxIO License 1.1
+  (https://github.com/FoxIO-LLC/ja4/blob/main/LICENSE), which allows
+  non-commercial use only. The Traefix implementation is its own, but the
+  license covers the methods: read it before using JA4H or JA4T in a
+  commercial product or service.
+
+- The p0f TCP signature format is the one of p0f v3 by Michal Zalewski
+  (https://lcamtuf.coredump.cx/p0f3/). Traefix computes the signature of
+  the SYN only, and embeds neither the p0f code nor its p0f.fp database
+  (LGPL 2.1).

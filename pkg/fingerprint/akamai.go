@@ -94,3 +94,42 @@ func AkamaiH2(prefix []byte, pseudoNames []string) string {
 
 	return strings.Join(settings, ";") + "|" + windowUpdate + "|" + priority + "|" + strings.Join(pseudo, ",")
 }
+
+// H2HeadersPriority returns the priority fields of the first HEADERS frame in the client bytes after the preface,
+// in the form of a priority entry of the Akamai fingerprint (stream:exclusive:dependency:weight), which leaves them
+// out, e.g. "1:1:0:256" for Chrome. It returns "" when the frame has no priority fields, or is not there.
+func H2HeadersPriority(prefix []byte) string {
+	for len(prefix) >= h2FrameHeaderLength {
+		length := int(prefix[0])<<16 | int(prefix[1])<<8 | int(prefix[2])
+		typ, flags := prefix[3], prefix[4]
+		streamID := binary.BigEndian.Uint32(prefix[5:9]) & 0x7fffffff
+		if len(prefix)-h2FrameHeaderLength < length {
+			return ""
+		}
+		payload := prefix[h2FrameHeaderLength : h2FrameHeaderLength+length]
+		prefix = prefix[h2FrameHeaderLength+length:]
+
+		if typ != h2FrameHeaders {
+			continue
+		}
+		if flags&h2FlagPriority == 0 {
+			return ""
+		}
+		if flags&h2FlagPadded != 0 {
+			if len(payload) == 0 {
+				return ""
+			}
+			payload = payload[1:]
+		}
+		if len(payload) < 5 {
+			return ""
+		}
+		dep := binary.BigEndian.Uint32(payload)
+		return strconv.FormatUint(uint64(streamID), 10) + ":" +
+			strconv.FormatUint(uint64(dep>>31), 10) + ":" +
+			strconv.FormatUint(uint64(dep&0x7fffffff), 10) + ":" +
+			strconv.Itoa(int(payload[4])+1)
+	}
+
+	return ""
+}

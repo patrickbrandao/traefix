@@ -33,9 +33,10 @@ func TestAppendJSON_matchesEncodingJSON(t *testing.T) {
 			Src: addrRecord{IP: "1.2.3.4", Port: 5555}, Dst: addrRecord{IP: "5.6.7.8", Port: 443},
 			TLS: &tlsRecord{
 				SNI: hostile, ALPNOffered: []string{"h2", "http/1.1"}, ALPN: "h2", Version: "TLS 1.3", Cipher: "TLS_AES_128_GCM_SHA256",
-				JA3: "abc", JA3String: "771,4865,0-23,29,0", JA4: "t13d", ClientHello: []byte{0x16, 3, 1, 0, 0xff},
+				JA3: "abc", JA3String: "771,4865,0-23,29,0", JA3N: "def", JA3NString: "771,4865,0-23,29,0",
+				JA4: "t13d", JA4R: "t13d_1301_000a", JA4O: "t13d_o", ClientHello: []byte{0x16, 3, 1, 0, 0xff},
 			},
-			HTTP2: &http2Record{Akamai: "1:65536|0|0|m,a,s,p", Prefix: []byte("prefix"), PrefixTruncated: true},
+			HTTP2: &http2Record{Akamai: "1:65536|0|0|m,a,s,p", HeadersPriority: "1:1:0:256", Prefix: []byte("prefix"), PrefixTruncated: true},
 		},
 		&connectionRecord{
 			Type: recordConnection, ConnID: "id", Time: now, EntryPoint: "ep", Proto: "h3",

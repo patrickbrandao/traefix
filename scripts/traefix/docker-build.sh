@@ -33,6 +33,8 @@ docker buildx build \
   -f Dockerfile.traefix \
   --platform "$PLATFORMS" \
   --build-arg VERSION="$TAG" \
+  --build-arg REVISION="$(git rev-parse HEAD)" \
+  --build-arg CREATED="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
   "${TAGS[@]}" \
   "${OUTPUT[@]}" \
   .

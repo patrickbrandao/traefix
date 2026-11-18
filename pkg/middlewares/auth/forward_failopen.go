@@ -74,6 +74,9 @@ func (fa *forwardAuth) configureTraefix(logger *zerolog.Logger, config dynamic.F
 
 		fa.requestHeaders = make(http.Header, len(config.RequestHeaders))
 		for name, value := range config.RequestHeaders {
+			if err := checkRequestHeaderValue(name, value); err != nil {
+				return err
+			}
 			fa.requestHeaders.Set(name, value)
 		}
 
@@ -94,6 +97,25 @@ func (fa *forwardAuth) configureTraefix(logger *zerolog.Logger, config dynamic.F
 			fo.headerValue = h.Value
 		}
 		fa.failOpen = fo
+	}
+
+	return nil
+}
+
+// checkRequestHeaderValue refuses an empty value, or a credentials header with a scheme and no credentials,
+// which is what an unset environment variable gives, e.g. "Bearer ${KEY}". With failOpen, the authentication
+// server rejecting it would go unnoticed.
+func checkRequestHeaderValue(name, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("forward authentication requestHeaders %q has an empty value", name)
+	}
+
+	switch http.CanonicalHeaderKey(name) {
+	case "Authorization", "Proxy-Authorization":
+		if _, credentials, _ := strings.Cut(value, " "); strings.TrimSpace(credentials) == "" {
+			return fmt.Errorf("forward authentication requestHeaders %q has no credentials after the scheme %q", name, value)
+		}
 	}
 
 	return nil

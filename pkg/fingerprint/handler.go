@@ -128,7 +128,7 @@ func (s *headerSetter) set(name, value string) {
 }
 
 func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
-	s := headerSetter{h: req.Header, vals: make([]string, 0, 9), names: make([]string, 0, 9)}
+	s := headerSetter{h: req.Header, vals: make([]string, 0, 11), names: make([]string, 0, 11)}
 	proto := protoOf(req)
 
 	if info := st.conn; info != nil {
@@ -141,6 +141,9 @@ func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
 		}
 		if info.ja4 != "" {
 			s.set(e.headers.ja4, info.ja4)
+		}
+		if info.alpn != "" {
+			s.set(e.headers.alpn, info.alpn)
 		}
 		if proto == "h2" && info.akamai != "" {
 			s.set(e.headers.h2, info.akamai)

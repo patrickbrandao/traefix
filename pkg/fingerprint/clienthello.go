@@ -279,28 +279,29 @@ func joinDecimal(b *strings.Builder, v []uint16) {
 
 // JA3 returns the JA3 string of the ClientHello (github.com/salesforce/ja3), with the GREASE values removed.
 func (h *ClientHello) JA3() string {
-	var b strings.Builder
-	b.WriteString(strconv.Itoa(int(h.LegacyVersion)))
-	b.WriteByte(',')
-	joinDecimal(&b, withoutGREASE(h.CipherSuites))
-	b.WriteByte(',')
-	joinDecimal(&b, withoutGREASE(h.Extensions))
-	b.WriteByte(',')
-	joinDecimal(&b, withoutGREASE(h.SupportedGroups))
-	b.WriteByte(',')
-	for i, f := range h.PointFormats {
-		if i > 0 {
-			b.WriteByte('-')
-		}
-		b.WriteString(strconv.Itoa(int(f)))
-	}
-
-	return b.String()
+	return h.ja3(withoutGREASE(h.Extensions))
 }
 
 // JA3Hash returns the MD5 of the JA3 string, which is the usual form of JA3.
 func (h *ClientHello) JA3Hash() string {
-	sum := md5.Sum([]byte(h.JA3()))
+	return md5Hex(h.JA3())
+}
+
+// JA3N returns the JA3 string with the extensions sorted, which stays the same when a client shuffles its extensions
+// on each connection, as Chrome does since version 110.
+func (h *ClientHello) JA3N() string {
+	exts := withoutGREASE(h.Extensions)
+	slices.Sort(exts)
+	return h.ja3(exts)
+}
+
+// JA3NHash returns the MD5 of the JA3N string.
+func (h *ClientHello) JA3NHash() string {
+	return md5Hex(h.JA3N())
+}
+
+func md5Hex(s string) string {
+	sum := md5.Sum([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -361,6 +362,22 @@ func ja4Hash12(s string) string {
 
 // JA4 returns the FoxIO JA4 fingerprint of the ClientHello (github.com/FoxIO-LLC/ja4, rust/ja4/src/tls.rs).
 func (h *ClientHello) JA4(quic bool) string {
+	return h.JA4Variants(quic).JA4
+}
+
+// JA4Variants are the forms of JA4 the FoxIO tool prints: sorted or in the client order, hashed or raw.
+type JA4Variants struct {
+	// JA4 is sorted and hashed.
+	JA4 string
+	// R (JA4_r) is sorted and raw.
+	R string
+	// O (JA4_o) is in the client order and hashed: the order of the extensions tells apart clients
+	// with the same JA4, but a client shuffling its extensions gets a new JA4_o on each connection.
+	O string
+}
+
+// JA4Variants returns the JA4, JA4_r and JA4_o fingerprints of the ClientHello.
+func (h *ClientHello) JA4Variants(quic bool) JA4Variants {
 	var b strings.Builder
 	if quic {
 		b.WriteByte('q')
@@ -395,8 +412,23 @@ func (h *ClientHello) JA4(quic bool) string {
 		alpn = h.ALPN[0]
 	}
 	b.WriteString(ja4ALPNChars(alpn))
+	prefix := b.String()
 
-	slices.Sort(ciphers)
+	sigs := hex4List(withoutGREASE(h.SignatureAlgorithms))
+	// The specification ends the string without an underscore when there are no signature algorithms.
+	withSigs := func(exts string) string {
+		if sigs == "" {
+			return exts
+		}
+		return exts + "_" + sigs
+	}
+
+	// The client order keeps the server name and ALPN extensions, which the sorted form leaves out.
+	origCiphers := hex4List(ciphers)
+	origExts := withSigs(hex4List(exts))
+
+	sortedCiphers := slices.Clone(ciphers)
+	slices.Sort(sortedCiphers)
 	sortedExts := make([]uint16, 0, len(exts))
 	for _, e := range exts {
 		if e != tlsExtServerName && e != tlsExtALPN {
@@ -404,17 +436,32 @@ func (h *ClientHello) JA4(quic bool) string {
 		}
 	}
 	slices.Sort(sortedExts)
+	ciphersHex := hex4List(sortedCiphers)
+	extsHex := withSigs(hex4List(sortedExts))
 
-	extsSigs := hex4List(sortedExts)
-	// The specification ends the string without an underscore when there are no signature algorithms.
-	if sigs := hex4List(withoutGREASE(h.SignatureAlgorithms)); sigs != "" {
-		extsSigs += "_" + sigs
+	return JA4Variants{
+		JA4: prefix + "_" + ja4Hash12(ciphersHex) + "_" + ja4Hash12(extsHex),
+		R:   prefix + "_" + ciphersHex + "_" + extsHex,
+		O:   prefix + "_" + ja4Hash12(origCiphers) + "_" + ja4Hash12(origExts),
 	}
+}
 
-	b.WriteByte('_')
-	b.WriteString(ja4Hash12(hex4List(ciphers)))
-	b.WriteByte('_')
-	b.WriteString(ja4Hash12(extsSigs))
+func (h *ClientHello) ja3(exts []uint16) string {
+	var b strings.Builder
+	b.WriteString(strconv.Itoa(int(h.LegacyVersion)))
+	b.WriteByte(',')
+	joinDecimal(&b, withoutGREASE(h.CipherSuites))
+	b.WriteByte(',')
+	joinDecimal(&b, exts)
+	b.WriteByte(',')
+	joinDecimal(&b, withoutGREASE(h.SupportedGroups))
+	b.WriteByte(',')
+	for i, f := range h.PointFormats {
+		if i > 0 {
+			b.WriteByte('-')
+		}
+		b.WriteString(strconv.Itoa(int(f)))
+	}
 
 	return b.String()
 }

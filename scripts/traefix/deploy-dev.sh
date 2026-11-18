@@ -58,7 +58,9 @@ if [[ "${WEBUI:-0}" == "1" || ! -f webui/static/index.html ]]; then
   rm -rf dist/webui-out
 fi
 
-VERSION="dev-$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- . ':!webui/static' || echo -dirty)"
+# Same version as the published images (fork-point-<n>-g<sha>), so that the sender of the fingerprint
+# batches points at the commit.
+VERSION="$(git describe --tags --always --match 'fork-point*')$(git diff --quiet HEAD -- . ':!webui/static' || echo -dirty)"
 echo ">> go build linux/amd64 ($VERSION)"
 mkdir -p dist/deploy
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w \

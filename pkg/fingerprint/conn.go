@@ -58,6 +58,7 @@ type connInfo struct {
 	ja3      string
 	ja3Str   string
 	ja4      string
+	alpn     string
 	akamai   string
 	record   *connectionRecord
 }

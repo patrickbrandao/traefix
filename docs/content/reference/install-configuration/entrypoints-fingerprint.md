@@ -106,12 +106,13 @@ Traefix adds these headers to each request of the entry point, before any router
 | <a id="opt-X-Traefix-Proto" href="#opt-X-Traefix-Proto" title="#opt-X-Traefix-Proto">`X-Traefix-Proto`</a> | HTTP version of the request: `h1`, `h2` or `h3`. |
 | <a id="opt-X-Traefix-Ja3" href="#opt-X-Traefix-Ja3" title="#opt-X-Traefix-Ja3">`X-Traefix-Ja3`</a> | MD5 hash of the [JA3](https://github.com/salesforce/ja3) fingerprint of the TLS ClientHello. |
 | <a id="opt-X-Traefix-Ja4" href="#opt-X-Traefix-Ja4" title="#opt-X-Traefix-Ja4">`X-Traefix-Ja4`</a> | [JA4](https://github.com/FoxIO-LLC/ja4) fingerprint of the TLS ClientHello. |
+| <a id="opt-X-Traefix-Alpn" href="#opt-X-Traefix-Alpn" title="#opt-X-Traefix-Alpn">`X-Traefix-Alpn`</a> | Application protocols offered in the TLS ClientHello, in the client order, separated by commas, for example `h2,http/1.1`. The bytes of a protocol name that are not visible ASCII, the comma and the percent sign are percent-encoded, for example `%2C`. |
 | <a id="opt-X-Traefix-H2" href="#opt-X-Traefix-H2" title="#opt-X-Traefix-H2">`X-Traefix-H2`</a> | Akamai fingerprint of the HTTP/2 connection: settings, window update, priority frames and pseudo-header order. Present on HTTP/2 requests only. |
 | <a id="opt-X-Traefix-Ja4h" href="#opt-X-Traefix-Ja4h" title="#opt-X-Traefix-Ja4h">`X-Traefix-Ja4h`</a> | [JA4H](https://github.com/FoxIO-LLC/ja4) fingerprint of the request, computed with the header order and case the client sent, and with the cookie values, which only leave Traefix with `allowSensitiveFields`. |
 
 The headers carry the values of the socket even when the entry point trusts the forwarded headers of its peer. `X-Real-Ip` and `X-Forwarded-For` keep their own rules, set by [`forwardedHeaders`](./entrypoints.md#forwarded-headers).
 
-`X-Traefix-Ja3` and `X-Traefix-Ja4` are absent when the connection isn't TLS, and when the ClientHello over TCP is longer than 16 KiB. `X-Traefix-Ja4h` is absent when Traefix couldn't follow the header blocks of the connection, for example after a malformed request.
+`X-Traefix-Ja3`, `X-Traefix-Ja4` and `X-Traefix-Alpn` are absent when the connection isn't TLS, and when the ClientHello over TCP is longer than 16 KiB. `X-Traefix-Ja4h` is absent when Traefix couldn't follow the header blocks of the connection, for example after a malformed request.
 
 !!! warning "Use one prefix per installation"
 
@@ -175,14 +176,21 @@ Each batch is a JSON object sent with `Content-Type: application/json`:
 ```json
 {
   "schema": "traefix.fingerprint/v1",
-  "sender": "traefix/3.8.0",
+  "sender": "traefix/fork-point-215-g1a2b3c4d5",
   "entryPoint": "websecure",
   "sentAt": "2026-11-17T21:30:00.123456789Z",
   "records": []
 }
 ```
 
-`sender` carries the version shown by `traefik version`. The `records` array mixes the two record types, told apart by their `type` field. Traefix omits the fields with no value.
+`sender` carries the version shown by `traefik version`. The published images and the deployment scripts set it to the output of `git describe`, `fork-point-<n>-g<commit>`, which names the commit of the build, and the image carries the same commit in its `org.opencontainers.image.revision` label. The `records` array mixes the two record types, told apart by their `type` field. Traefix omits the fields with no value.
+
+### Schema Versioning
+
+The `schema` field changes only with an incompatible change of the batches or of the request headers:
+
+- A new field, a new record type, a new header or a new value of an enumerated field keeps `traefix.fingerprint/v1`. A receiving service must ignore the fields and record types it doesn't know.
+- Removing or renaming a field or a header, changing the type, the unit or the meaning of a field, or making an optional field required, gives `traefix.fingerprint/v2`. Traefix then states the change in this page before the release that makes it.
 
 ### Connection Record
 
@@ -201,11 +209,27 @@ Traefix exports one connection record per connection, at the first request, or w
 | <a id="opt-tls-alpn" href="#opt-tls-alpn" title="#opt-tls-alpn">`tls.alpn`</a> | Application protocol negotiated. |
 | <a id="opt-tls-version-tls-cipher" href="#opt-tls-version-tls-cipher" title="#opt-tls-version-tls-cipher">`tls.version`, `tls.cipher`</a> | TLS version and cipher suite negotiated, with their IANA names, for example `TLS 1.3` and `TLS_AES_128_GCM_SHA256`. |
 | <a id="opt-tls-ja3-tls-ja3String-tls-ja4" href="#opt-tls-ja3-tls-ja3String-tls-ja4" title="#opt-tls-ja3-tls-ja3String-tls-ja4">`tls.ja3`, `tls.ja3String`, `tls.ja4`</a> | JA3 hash, JA3 string before hashing, and JA4. |
+| <a id="opt-tls-ja3n-tls-ja3nString" href="#opt-tls-ja3n-tls-ja3nString" title="#opt-tls-ja3n-tls-ja3nString">`tls.ja3n`, `tls.ja3nString`</a> | JA3N hash and string: the JA3 with the extensions sorted, which stays the same when a client shuffles its extensions on each connection, as Chrome does. |
+| <a id="opt-tls-ja4r-tls-ja4o" href="#opt-tls-ja4r-tls-ja4o" title="#opt-tls-ja4r-tls-ja4o">`tls.ja4r`, `tls.ja4o`</a> | JA4_r, the JA4 before hashing, with the sorted cipher suites, extensions and signature algorithms in hexadecimal, and JA4_o, the JA4 hashed in the client order, with the server name and ALPN extensions, as the FoxIO tool prints them. With these fields and `ja3String`, a receiving service gets the ClientHello lists without `rawBytes`. |
 | <a id="opt-tls-clientHello" href="#opt-tls-clientHello" title="#opt-tls-clientHello">`tls.clientHello`</a> | Raw bytes of the ClientHello, records included, in base64. Present with `rawBytes`. |
 | <a id="opt-tls-clientHelloTruncated" href="#opt-tls-clientHelloTruncated" title="#opt-tls-clientHelloTruncated">`tls.clientHelloTruncated`</a> | `true` when the ClientHello is longer than 16 KiB, in which case Traefix keeps the first 16 KiB and computes no TLS fingerprint. |
-| <a id="opt-http2-akamai" href="#opt-http2-akamai" title="#opt-http2-akamai">`http2.akamai`</a> | Akamai fingerprint of the HTTP/2 connection. |
+| <a id="opt-http2-akamai" href="#opt-http2-akamai" title="#opt-http2-akamai">`http2.akamai`</a> | Akamai fingerprint of the HTTP/2 connection, described in [HTTP/2 Fingerprint](#http2-fingerprint). |
+| <a id="opt-http2-headersPriority" href="#opt-http2-headersPriority" title="#opt-http2-headersPriority">`http2.headersPriority`</a> | Priority fields of the first `HEADERS` frame, as `stream:exclusive:dependency:weight`, for example `1:1:0:256`. The Akamai fingerprint leaves them out. Absent when the frame has no priority fields. |
 | <a id="opt-http2-prefix" href="#opt-http2-prefix" title="#opt-http2-prefix">`http2.prefix`</a> | Raw bytes the client sent after the HTTP/2 preface, up to the end of the first header block, in base64. Present with `rawBytes`. |
 | <a id="opt-http2-prefixTruncated" href="#opt-http2-prefixTruncated" title="#opt-http2-prefixTruncated">`http2.prefixTruncated`</a> | `true` when these bytes exceed 16 KiB, in which case Traefix keeps the first 16 KiB. |
+
+### HTTP/2 Fingerprint
+
+`http2.akamai` and `X-Traefix-H2` follow the format of the Akamai white paper, as tls.peet.ws computes it: four parts separated by `|`, for example `1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p`.
+
+| Part | Contains |
+|:-----|:---------|
+| <a id="opt-SETTINGS" href="#opt-SETTINGS" title="#opt-SETTINGS">`SETTINGS`</a> | The settings of the first `SETTINGS` frames, as `id:value` separated by `;`, in the client order. |
+| <a id="opt-WINDOW-UPDATE" href="#opt-WINDOW-UPDATE" title="#opt-WINDOW-UPDATE">`WINDOW_UPDATE`</a> | The increment of the first `WINDOW_UPDATE` frame of the connection, or `00` when the client sent none before its first request. |
+| <a id="opt-PRIORITY" href="#opt-PRIORITY" title="#opt-PRIORITY">`PRIORITY`</a> | The `PRIORITY` frames, as `stream:exclusive:dependency:weight` separated by `,`, with the weight of RFC 9113, from 1 to 256, or `0` when the client sent none. |
+| <a id="opt-pseudo-headers" href="#opt-pseudo-headers" title="#opt-pseudo-headers">pseudo-headers</a> | The order of the pseudo-headers of the first request, by their first letter: `m` for `:method`, `a` for `:authority`, `s` for `:scheme`, `p` for `:path`. |
+
+Splitting the string on `|`, then on `;` or `,`, gives these values without the raw bytes of `http2.prefix`.
 
 ### Request Record
 

@@ -506,6 +506,7 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 		// The SNI is in the ClientHello read by the accept wrapper.
 		assert.Regexp(t, `^t13d\d{4}h2_`, got["X-Edge-Ja4"])
 		assert.Regexp(t, `^[0-9a-f]{32}$`, got["X-Edge-Ja3"])
+		assert.Equal(t, "h2", got["X-Edge-Alpn"])
 		assert.NotEmpty(t, got["X-Edge-H2"])
 		assert.Regexp(t, `^ge20`, got["X-Edge-Ja4h"])
 	})
@@ -534,6 +535,7 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 		assert.Len(t, got["X-Edge-Conn-Id"], 26)
 		// The JA4 of QUIC comes from the ClientHello the QUIC library gives to the TLS callback.
 		assert.Regexp(t, `^q13d\d{4}h3_`, got["X-Edge-Ja4"])
+		assert.Equal(t, "h3", got["X-Edge-Alpn"])
 		// Without http3HeaderOrder, the HTTP/3 header order is not captured.
 		assert.NotContains(t, got, "X-Edge-Ja4h")
 	})

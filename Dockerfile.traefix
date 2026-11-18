@@ -48,9 +48,18 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM alpine:3.24
 RUN apk add --no-cache --no-progress ca-certificates tzdata
 COPY --from=builder /out/traefik /traefik
+COPY LICENSE.md NOTICE /usr/share/licenses/traefix/
+ARG VERSION=dev
+ARG REVISION=unknown
+ARG CREATED=unknown
 LABEL org.opencontainers.image.title="traefix" \
       org.opencontainers.image.source="https://github.com/patrickbrandao/traefix" \
-      org.opencontainers.image.description="Traefix - fork do Traefik"
+      org.opencontainers.image.description="Traefix - fork do Traefik" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${CREATED}" \
+      org.opencontainers.image.licenses="MIT AND Apache-2.0 AND LicenseRef-FoxIO-1.1" \
+      org.opencontainers.image.base.name="docker.io/library/alpine:3.24"
 EXPOSE 80
 VOLUME ["/tmp"]
 ENTRYPOINT ["/traefik"]

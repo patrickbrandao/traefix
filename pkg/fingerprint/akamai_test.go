@@ -109,3 +109,56 @@ func FuzzAkamaiH2(f *testing.F) {
 		_ = AkamaiH2(prefix, []string{":method", ":path"})
 	})
 }
+
+func TestH2HeadersPriority(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		frames   func(fr *http2.Framer) error
+		expected string
+	}{
+		{
+			desc: "Chrome",
+			frames: func(fr *http2.Framer) error {
+				if err := fr.WriteSettings(http2.Setting{ID: http2.SettingEnablePush, Val: 0}); err != nil {
+					return err
+				}
+				return fr.WriteHeaders(http2.HeadersFrameParam{
+					StreamID: 1, BlockFragment: []byte{0x82}, EndHeaders: true, EndStream: true,
+					Priority: http2.PriorityParam{Exclusive: true, Weight: 255},
+				})
+			},
+			expected: "1:1:0:256",
+		},
+		{
+			desc: "padded",
+			frames: func(fr *http2.Framer) error {
+				return fr.WriteHeaders(http2.HeadersFrameParam{
+					StreamID: 3, BlockFragment: []byte{0x82}, EndHeaders: true, PadLength: 4,
+					Priority: http2.PriorityParam{StreamDep: 1, Weight: 41},
+				})
+			},
+			expected: "3:0:1:42",
+		},
+		{
+			desc: "no priority",
+			frames: func(fr *http2.Framer) error {
+				return fr.WriteHeaders(http2.HeadersFrameParam{StreamID: 1, BlockFragment: []byte{0x82}, EndHeaders: true})
+			},
+		},
+		{
+			desc: "no headers frame",
+			frames: func(fr *http2.Framer) error {
+				return fr.WriteSettings(http2.Setting{ID: http2.SettingEnablePush, Val: 0})
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, test.frames(http2.NewFramer(&buf, nil)))
+
+			assert.Equal(t, test.expected, H2HeadersPriority(buf.Bytes()))
+		})
+	}
+}

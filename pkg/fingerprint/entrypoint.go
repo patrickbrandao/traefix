@@ -32,7 +32,7 @@ func Enabled() bool {
 }
 
 type headerNames struct {
-	srcIP, srcPort, dstPort, connID, proto, ja3, ja4, h2, ja4h string
+	srcIP, srcPort, dstPort, connID, proto, ja3, ja4, h2, ja4h, alpn string
 }
 
 // EntryPoint identifies and fingerprints the connections and requests of an entry point.
@@ -87,6 +87,7 @@ func NewEntryPoint(ctx context.Context, name string, cfg *static.Fingerprint, h2
 		ja4:     textproto.CanonicalMIMEHeaderKey(prefix + "Ja4"),
 		h2:      textproto.CanonicalMIMEHeaderKey(prefix + "H2"),
 		ja4h:    textproto.CanonicalMIMEHeaderKey(prefix + "Ja4h"),
+		alpn:    textproto.CanonicalMIMEHeaderKey(prefix + "Alpn"),
 	}
 
 	if h2 != nil && h2.MaxDecoderHeaderTableSize > 0 {
@@ -302,11 +303,16 @@ func (e *EntryPoint) finalizeConn(info *connInfo, proto string) {
 		t := &tlsRecord{ClientHelloTruncated: truncated}
 		if hello != nil {
 			info.ja3Str = hello.JA3()
-			info.ja3 = hello.JA3Hash()
-			info.ja4 = hello.JA4(info.quic != nil)
+			info.ja3 = md5Hex(info.ja3Str)
+			ja4 := hello.JA4Variants(info.quic != nil)
+			info.ja4 = ja4.JA4
+			info.alpn = alpnHeaderValue(hello.ALPN)
 			t.SNI = hello.ServerName
 			t.ALPNOffered = hello.ALPN
 			t.JA3, t.JA3String, t.JA4 = info.ja3, info.ja3Str, info.ja4
+			t.JA3NString = hello.JA3N()
+			t.JA3N = md5Hex(t.JA3NString)
+			t.JA4R, t.JA4O = ja4.R, ja4.O
 		}
 		if state.HandshakeComplete {
 			if t.SNI == "" {
@@ -326,7 +332,7 @@ func (e *EntryPoint) finalizeConn(info *connInfo, proto string) {
 	if info.capture != nil {
 		if prefix, prefixTruncated := info.capture.H2Prefix(); prefix != nil {
 			info.akamai = AkamaiH2(prefix, info.capture.FirstPseudoNames())
-			h := &http2Record{Akamai: info.akamai, PrefixTruncated: prefixTruncated}
+			h := &http2Record{Akamai: info.akamai, HeadersPriority: H2HeadersPriority(prefix), PrefixTruncated: prefixTruncated}
 			if e.rawBytes {
 				h.Prefix = prefix
 			}
@@ -357,4 +363,26 @@ func (e *EntryPoint) finalizeConn(info *connInfo, proto string) {
 	if e.exporter != nil {
 		e.exporter.enqueue(recordConnection, rec, rec.size())
 	}
+}
+
+// alpnHeaderValue joins the offered protocols in the client order. A protocol name is an opaque byte string:
+// the bytes that are not visible ASCII, the comma and the percent sign are percent-encoded, so that the list
+// stays a valid header value and splits on the commas.
+func alpnHeaderValue(protocols []string) string {
+	var b strings.Builder
+	for i, p := range protocols {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		for j := range len(p) {
+			c := p[j]
+			if c <= ' ' || c >= 0x7f || c == ',' || c == '%' {
+				const upperHex = "0123456789ABCDEF"
+				b.Write([]byte{'%', upperHex[c>>4], upperHex[c&0xf]})
+				continue
+			}
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }

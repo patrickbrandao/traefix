@@ -29,7 +29,11 @@ type tlsRecord struct {
 	Cipher               string   `json:"cipher,omitempty"`
 	JA3                  string   `json:"ja3,omitempty"`
 	JA3String            string   `json:"ja3String,omitempty"`
+	JA3N                 string   `json:"ja3n,omitempty"`
+	JA3NString           string   `json:"ja3nString,omitempty"`
 	JA4                  string   `json:"ja4,omitempty"`
+	JA4R                 string   `json:"ja4r,omitempty"`
+	JA4O                 string   `json:"ja4o,omitempty"`
 	ClientHello          []byte   `json:"clientHello,omitempty"`
 	ClientHelloTruncated bool     `json:"clientHelloTruncated,omitempty"`
 	// QUICTransportParameters are the identifiers of the QUIC transport parameters, in the client order.
@@ -42,6 +46,7 @@ type http3Record struct {
 
 type http2Record struct {
 	Akamai          string `json:"akamai,omitempty"`
+	HeadersPriority string `json:"headersPriority,omitempty"`
 	Prefix          []byte `json:"prefix,omitempty"`
 	PrefixTruncated bool   `json:"prefixTruncated,omitempty"`
 }
@@ -62,7 +67,7 @@ type connectionRecord struct {
 func (r *connectionRecord) size() int {
 	n := 256
 	if r.TLS != nil {
-		n += 256 + len(r.TLS.JA3String) + 4*len(r.TLS.ClientHello)/3
+		n += 320 + 2*len(r.TLS.JA3String) + len(r.TLS.JA4R) + 4*len(r.TLS.ClientHello)/3
 	}
 	if r.HTTP2 != nil {
 		n += 64 + 4*len(r.HTTP2.Prefix)/3

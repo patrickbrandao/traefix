@@ -352,6 +352,39 @@ func TestForwardAuth_requestHeadersTransport(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestForwardAuth_requestHeadersEmptyValue(t *testing.T) {
+	testCases := []struct {
+		desc    string
+		headers map[string]string
+		wantErr string
+	}{
+		{desc: "empty", headers: map[string]string{"X-Api-Key": ""}, wantErr: "empty value"},
+		{desc: "blank", headers: map[string]string{"X-Api-Key": "  "}, wantErr: "empty value"},
+		{desc: "scheme without credentials", headers: map[string]string{"Authorization": "Bearer "}, wantErr: "no credentials"},
+		{desc: "scheme alone", headers: map[string]string{"proxy-authorization": "Basic"}, wantErr: "no credentials"},
+		{desc: "credentials", headers: map[string]string{"Authorization": "Bearer my-key"}},
+		{desc: "other header with one word", headers: map[string]string{"X-Api-Key": "my-key"}},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			// A private address: the value is checked whatever the transport.
+			cfg := dynamic.ForwardAuth{
+				Address:            "http://10.0.0.10:9000/auth",
+				RequestHeaders:     test.headers,
+				AuthRequestHeaders: []string{"User-Agent"},
+			}
+
+			_, err := NewForward(t.Context(), backendEcho(), cfg, nil, "bot")
+			if test.wantErr != "" {
+				require.ErrorContains(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestForwardAuth_requestHeadersAuthorizationWarning(t *testing.T) {
 	testCases := []struct {
 		desc               string

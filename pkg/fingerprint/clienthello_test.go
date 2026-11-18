@@ -273,3 +273,67 @@ func FuzzParseClientHello(f *testing.F) {
 		_, _ = ClientHelloLen(raw)
 	})
 }
+
+func TestClientHello_JA3N(t *testing.T) {
+	// Two connections of Chrome 156, which shuffles its extensions on each connection.
+	first := &ClientHello{
+		LegacyVersion:   0x0303,
+		CipherSuites:    []uint16{0x1301, 0x1302},
+		Extensions:      []uint16{0x0a0a, 0, 51, 43, 18},
+		SupportedGroups: []uint16{29, 23},
+		PointFormats:    []uint8{0},
+	}
+	second := &ClientHello{
+		LegacyVersion:   0x0303,
+		CipherSuites:    []uint16{0x1301, 0x1302},
+		Extensions:      []uint16{18, 0x1a1a, 43, 0, 51},
+		SupportedGroups: []uint16{29, 23},
+		PointFormats:    []uint8{0},
+	}
+
+	assert.NotEqual(t, first.JA3(), second.JA3())
+	assert.Equal(t, "771,4865-4866,0-18-43-51,29-23,0", first.JA3N())
+	assert.Equal(t, first.JA3N(), second.JA3N())
+	assert.Equal(t, first.JA3NHash(), second.JA3NHash())
+	assert.Len(t, first.JA3NHash(), 32)
+}
+
+// The forms follow rust/ja4/src/tls.rs of the FoxIO tool; the golden tests check JA4_r against its output.
+func TestClientHello_JA4Variants(t *testing.T) {
+	hello := &ClientHello{
+		LegacyVersion:       0x0303,
+		CipherSuites:        []uint16{0x2a2a, 0xc02b, 0x1301},
+		Extensions:          []uint16{0x0a0a, 0, 16, 43, 13, 10},
+		ALPN:                []string{"h2"},
+		SupportedGroups:     []uint16{29},
+		PointFormats:        []uint8{0},
+		SignatureAlgorithms: []uint16{0x0804, 0x0403},
+		SupportedVersions:   []uint16{0x0304},
+	}
+
+	v := hello.JA4Variants(false)
+	assert.Equal(t, hello.JA4(false), v.JA4)
+	// Sorted, without the server name and ALPN extensions; signature algorithms in the client order.
+	assert.Equal(t, "t13d0205h2_1301,c02b_000a,000d,002b_0804,0403", v.R)
+	assert.Equal(t, "t13d0205h2_"+ja4Hash12("1301,c02b")+"_"+ja4Hash12("000a,000d,002b_0804,0403"), v.JA4)
+	// Client order, with the server name and ALPN extensions.
+	assert.Equal(t, "t13d0205h2_"+ja4Hash12("c02b,1301")+"_"+ja4Hash12("0000,0010,002b,000d,000a_0804,0403"), v.O)
+}
+
+func TestALPNHeaderValue(t *testing.T) {
+	testCases := []struct {
+		desc      string
+		protocols []string
+		expected  string
+	}{
+		{desc: "none", expected: ""},
+		{desc: "client order", protocols: []string{"h2", "http/1.1"}, expected: "h2,http/1.1"},
+		{desc: "opaque bytes", protocols: []string{"a,b", "x%\x00\xff y"}, expected: "a%2Cb,x%25%00%FF%20y"},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			assert.Equal(t, test.expected, alpnHeaderValue(test.protocols))
+		})
+	}
+}
