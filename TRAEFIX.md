@@ -20,6 +20,25 @@ Traefix têm prioridade** sobre mudanças do oficial.
 
 No Claude Code: _"use o agente upstream-tracker para verificar o upstream"_.
 
+## Forks de bibliotecas
+
+As bibliotecas que o fingerprint usa são forks com o prefixo `traefix-`, ligados por `replace` no fim do
+`go.mod`, com um agente responsável por cada um:
+
+| Módulo | Fork | Agente | Mudança local |
+|---|---|---|---|
+| `github.com/quic-go/quic-go` | `patrickbrandao/traefix-quic-go` | `.claude/agents/traefix-quic-go.md` | Ordem dos SETTINGS do HTTP/3 no qlog |
+| `github.com/quic-go/qpack` | `patrickbrandao/traefix-qpack` | `.claude/agents/traefix-qpack.md` | Nenhuma |
+| `golang.org/x/net` | `patrickbrandao/traefix-net` | `.claude/agents/traefix-net.md` | Nenhuma |
+
+- Branch `traefix` = release oficial + commits "(Traefix)"; tags `<versão oficial>-traefix.<n>`.
+- Clones locais em `~/Projects/traefix-forks/`, com o remote `upstream`.
+- `scripts/traefix/check-forks.sh` exige que o `require` e a base do `replace` sejam a mesma versão; o
+  `docker-build.sh` e o `deploy-dev.sh` rodam a verificação. Um bump vindo do Traefik oficial passa pelo
+  agente do fork.
+- Registros em `tasks/forks/<fork>/` (`INDEX.md`, `.last-sync`, propostas ao oficial).
+- No Claude Code: _"use o agente traefix-quic-go para verificar o upstream"_.
+
 ## Imagens Docker
 
 `docker.io/tmsoftbrasil/traefix` (pública), `linux/amd64` + `linux/arm64`.

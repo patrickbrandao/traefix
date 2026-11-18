@@ -432,6 +432,14 @@ replace (
 	github.com/gorilla/mux => github.com/containous/mux v0.0.0-20250523120546-41b6ec3aed59
 )
 
+// Traefix forks of the libraries the fingerprint relies on (see TRAEFIX.md and .claude/agents/traefix-*.md).
+// Each replace pins the same upstream release as the require above: scripts/traefix/check-forks.sh fails otherwise.
+replace (
+	github.com/quic-go/qpack => github.com/patrickbrandao/traefix-qpack v0.6.0-traefix.1
+	github.com/quic-go/quic-go => github.com/patrickbrandao/traefix-quic-go v0.65.0-traefix.1
+	golang.org/x/net => github.com/patrickbrandao/traefix-net v0.62.0-traefix.1
+)
+
 // ambiguous import: found package github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/http in multiple modules
 // tencentcloud uses monorepo with multimodule but the go.mod files are incomplete.
 exclude github.com/tencentcloud/tencentcloud-sdk-go v3.0.83+incompatible

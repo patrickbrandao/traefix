@@ -244,7 +244,7 @@ Traefix exports one connection record per connection, at the first request, or w
 | <a id="opt-http2-headersPriority" href="#opt-http2-headersPriority" title="#opt-http2-headersPriority">`http2.headersPriority`</a> | Priority fields of the first `HEADERS` frame, as `stream:exclusive:dependency:weight`, for example `1:1:0:256`. The Akamai fingerprint leaves them out. Absent when the frame has no priority fields. |
 | <a id="opt-http2-prefix" href="#opt-http2-prefix" title="#opt-http2-prefix">`http2.prefix`</a> | Raw bytes the client sent after the HTTP/2 preface, up to the end of the first header block, in base64. Present with `rawBytes`. |
 | <a id="opt-http2-prefixTruncated" href="#opt-http2-prefixTruncated" title="#opt-http2-prefixTruncated">`http2.prefixTruncated`</a> | `true` when these bytes exceed 16 KiB, in which case Traefix keeps the first 16 KiB. |
-| <a id="opt-http3-settings" href="#opt-http3-settings" title="#opt-http3-settings">`http3.settings`</a> | `SETTINGS` of the HTTP/3 connection, as `id:value` separated by `;`, with `http3HeaderOrder`. |
+| <a id="opt-http3-settings" href="#opt-http3-settings" title="#opt-http3-settings">`http3.settings`</a> | `SETTINGS` of the HTTP/3 connection, as `id:value` separated by `;`, in the client order, GREASE identifiers included, with `http3HeaderOrder`. |
 | <a id="opt-tcp-ja4t" href="#opt-tcp-ja4t" title="#opt-tcp-ja4t">`tcp.ja4t`</a> | JA4T fingerprint of the SYN, the value of `X-Traefix-Ja4t`. Present with the `tcp` option, as the whole `tcp` object. |
 | <a id="opt-tcp-p0f" href="#opt-tcp-p0f" title="#opt-tcp-p0f">`tcp.p0f`</a> | p0f v3 signature of the SYN. |
 | <a id="opt-tcp-ttl" href="#opt-tcp-ttl" title="#opt-tcp-ttl">`tcp.ttl`</a> | TTL, or hop limit, of the SYN as received. |

@@ -25,6 +25,15 @@ oficial anular ou contradizer uma decisão local, marque a task como `conflito` 
 - Mudanças locais do Traefix = `git log --no-merges upstream/master..HEAD` e
   `git diff fork-point...HEAD` (desconsiderando merges vindos do upstream).
 
+## Dependências com fork
+
+`github.com/quic-go/quic-go`, `github.com/quic-go/qpack` e `golang.org/x/net` são usados pelo Traefix por
+`replace` para os forks `traefix-quic-go`, `traefix-qpack` e `traefix-net` (bloco no fim do `go.mod`). Um PR
+oficial que suba uma dessas versões no `require` **não pode** ser aplicado sozinho: o `replace` anularia o
+bump. A task desse PR fica com tipo `deps`, marca `Conflito com Traefix: sim (fork)` e manda o plano para o
+agente do fork (`.claude/agents/traefix-<nome>.md`), que rebaseia o fork na versão nova e atualiza o
+`require` e o `replace` juntos. `scripts/traefix/check-forks.sh` confere a sincronia.
+
 ## Procedimento
 
 1. `git fetch upstream --tags --prune`.

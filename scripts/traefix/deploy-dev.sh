@@ -48,6 +48,9 @@ case "${1:-deploy}" in
     ;;
 esac
 
+# Os forks traefix-* do go.mod precisam estar na mesma base do require.
+scripts/traefix/check-forks.sh
+
 # WebUI (embutida no binário) — só reconstrói se não existir ou WEBUI=1
 if [[ "${WEBUI:-0}" == "1" || ! -f webui/static/index.html ]]; then
   echo ">> build WebUI"

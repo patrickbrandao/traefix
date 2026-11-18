@@ -10,6 +10,9 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
+# Os forks traefix-* do go.mod precisam estar na mesma base do require.
+scripts/traefix/check-forks.sh
+
 IMAGE="${IMAGE:-tmsoftbrasil/traefix}"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 TAG="${TAG:-$(git describe --tags --always --dirty)}"

@@ -280,7 +280,8 @@ func (t *quicTrace) addHeaders(id quic.StreamID, f h3qlog.HeadersFrame) {
 	t.pending = append(t.pending, r)
 }
 
-// setSettings records the SETTINGS of the client, sorted by identifier as the QUIC library does not keep their order.
+// setSettings records the SETTINGS of the client, in the order of the wire, which the Traefix fork of the QUIC library
+// gives with the qlog event (traefix-quic-go). A frame without that order is sorted by identifier.
 func (t *quicTrace) setSettings(f h3qlog.SettingsFrame) {
 	settings := maps.Clone(f.Other)
 	if settings == nil {
@@ -297,10 +298,18 @@ func (t *quicTrace) setSettings(f h3qlog.SettingsFrame) {
 	}
 
 	ids := make([]uint64, 0, len(settings))
-	for id := range settings {
-		ids = append(ids, id)
+	for _, id := range f.Order {
+		if _, ok := settings[id]; ok {
+			ids = append(ids, id)
+		}
 	}
-	slices.Sort(ids)
+	if len(ids) != len(settings) {
+		ids = ids[:0]
+		for id := range settings {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+	}
 
 	var b strings.Builder
 	for i, id := range ids {

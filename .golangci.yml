@@ -88,6 +88,10 @@ linters:
       replace-allow-list:
         - github.com/abbot/go-http-auth
         - github.com/gorilla/mux
+        # Traefix forks (see TRAEFIX.md).
+        - github.com/quic-go/qpack
+        - github.com/quic-go/quic-go
+        - golang.org/x/net
         - github.com/mailgun/minheap
         - github.com/mailgun/multibuf
         - github.com/jaguilar/vt100

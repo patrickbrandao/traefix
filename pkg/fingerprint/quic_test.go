@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go"
+	h3qlog "github.com/quic-go/quic-go/http3/qlog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/traefik/traefik/v3/pkg/config/static"
@@ -66,6 +67,40 @@ func TestQUIC_clientHelloSources(t *testing.T) {
 			assert.Equal(t, h.fromRaw.JA3(), h.fromInfo.JA3())
 			assert.Regexp(t, `^q13d\d{4}h3_`, h.fromRaw.JA4(true))
 			assert.Contains(t, h.params, uint64(0x04))
+		})
+	}
+}
+
+func TestQUICTrace_settings(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		frame    h3qlog.SettingsFrame
+		expected string
+	}{
+		{
+			desc: "wire order, GREASE included",
+			frame: h3qlog.SettingsFrame{
+				MaxFieldSectionSize: 16384, Datagram: -1, ExtendedConnect: 1,
+				Other: map[uint64]uint64{0x1: 65536, 0x7: 100, 0x1f*7 + 0x21: 99},
+				Order: []uint64{0x1f*7 + 0x21, 0x8, 0x1, 0x6, 0x7},
+			},
+			expected: "250:99;8:1;1:65536;6:16384;7:100",
+		},
+		{
+			desc: "no order",
+			frame: h3qlog.SettingsFrame{
+				MaxFieldSectionSize: 16384, Datagram: 1, ExtendedConnect: -1,
+				Other: map[uint64]uint64{0x7: 100, 0x1: 65536},
+			},
+			expected: "1:65536;6:16384;7:100;51:1",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			tr := &quicTrace{}
+			tr.setSettings(test.frame)
+			assert.Equal(t, test.expected, tr.Settings())
 		})
 	}
 }
