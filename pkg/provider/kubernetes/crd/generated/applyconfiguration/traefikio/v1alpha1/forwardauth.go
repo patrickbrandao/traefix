@@ -83,7 +83,7 @@ type ForwardAuthApplyConfiguration struct {
 	// Timeout defines the maximum duration of the request to the authentication server, including connection time and reading the response body.
 	// The value of timeout should be provided in seconds or as a valid duration format,
 	// see https://pkg.go.dev/time#ParseDuration.
-	// Zero means no timeout. Default is 30s.
+	// Zero means the default value (30s).
 	Timeout *intstr.IntOrString `json:"timeout,omitempty"`
 }
 
