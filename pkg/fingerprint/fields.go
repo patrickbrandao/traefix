@@ -21,6 +21,10 @@ type fieldMatcher struct {
 	exact          []string
 	prefixes       []string
 	allowSensitive bool
+
+	// The patterns in lowercase, for matchBytes.
+	exactLower    []string
+	prefixesLower []string
 }
 
 func newFieldMatcher(patterns []string, allowSensitive bool) *fieldMatcher {
@@ -28,9 +32,11 @@ func newFieldMatcher(patterns []string, allowSensitive bool) *fieldMatcher {
 	for _, p := range patterns {
 		if prefix, ok := strings.CutSuffix(p, "*"); ok {
 			m.prefixes = append(m.prefixes, prefix)
+			m.prefixesLower = append(m.prefixesLower, strings.ToLower(prefix))
 			continue
 		}
 		m.exact = append(m.exact, p)
+		m.exactLower = append(m.exactLower, strings.ToLower(p))
 	}
 
 	return m
@@ -55,6 +61,42 @@ func (m *fieldMatcher) match(name string) bool {
 	if !m.allowSensitive {
 		for _, s := range sensitiveFields {
 			if strings.EqualFold(name, s) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// matchBytes is match for a name read from the wire, which it does not copy.
+func (m *fieldMatcher) matchBytes(name []byte) bool {
+	if m == nil {
+		return false
+	}
+
+	matched := false
+	for _, e := range m.exactLower {
+		if asciiEqualFold(name, e) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		for _, p := range m.prefixesLower {
+			if len(name) >= len(p) && asciiEqualFold(name[:len(p)], p) {
+				matched = true
+				break
+			}
+		}
+	}
+	if !matched {
+		return false
+	}
+
+	if !m.allowSensitive {
+		for _, s := range sensitiveFields {
+			if asciiEqualFold(name, s) {
 				return false
 			}
 		}

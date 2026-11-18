@@ -41,11 +41,39 @@ type h1Parser struct {
 	contentLength int64
 	chunked       bool
 
-	fields *fieldMatcher
+	// The strings of the current header block are gathered in arena, and cut from a single string at its end,
+	// which saves an allocation per field.
+	arena          []byte
+	method, target span
+	names          []span
+	fields         []fieldSpan
+	cookies        []span
+	language       span
+
+	matcher *fieldMatcher
+}
+
+// span locates a string in the arena of the parser.
+type span struct {
+	start, end int
+}
+
+type fieldSpan struct {
+	name  int
+	value span
+}
+
+// maxH1Arena is the arena capacity kept between two header blocks.
+const maxH1Arena = 16 << 10
+
+func (p *h1Parser) keep(b []byte) span {
+	start := len(p.arena)
+	p.arena = append(p.arena, b...)
+	return span{start: start, end: len(p.arena)}
 }
 
 func newH1Parser(fields *fieldMatcher) *h1Parser {
-	return &h1Parser{fields: fields}
+	return &h1Parser{matcher: fields}
 }
 
 func (p *h1Parser) feed(b []byte, emit func(*Request)) error {
@@ -170,9 +198,18 @@ func (p *h1Parser) startRequest(line []byte) error {
 		return errors.New("invalid HTTP version")
 	}
 
+	if cap(p.arena) > maxH1Arena {
+		p.arena = nil
+	}
+	p.arena = p.arena[:0]
+	p.names = p.names[:0]
+	p.fields = p.fields[:0]
+	p.cookies = p.cookies[:0]
+	p.language = span{}
+	p.method = p.keep(method)
+	p.target = p.keep(target)
+
 	p.cur = &Request{
-		Method:     string(method),
-		Target:     string(target),
 		ProtoMajor: major,
 		ProtoMinor: minor,
 	}
@@ -211,10 +248,10 @@ func (p *h1Parser) addField(line []byte, overflow bool) {
 	}
 	value = bytes.Trim(value, " \t")
 
-	if len(r.Names) < maxH1Names {
-		r.Names = append(r.Names, string(name))
-		if p.fields.match(r.Names[len(r.Names)-1]) {
-			r.Fields = append(r.Fields, Field{Name: r.Names[len(r.Names)-1], Value: truncateValue(string(value))})
+	if len(p.names) < maxH1Names {
+		p.names = append(p.names, p.keep(name))
+		if p.matcher.matchBytes(name) {
+			p.fields = append(p.fields, fieldSpan{name: len(p.names) - 1, value: p.keep(value[:min(len(value), maxFieldValue)])})
 		}
 	} else {
 		r.Truncated = true
@@ -222,10 +259,10 @@ func (p *h1Parser) addField(line []byte, overflow bool) {
 
 	switch {
 	case asciiEqualFold(name, "cookie"):
-		r.Cookies = append(r.Cookies, string(value))
+		p.cookies = append(p.cookies, p.keep(value))
 	case asciiEqualFold(name, "accept-language"):
 		if !r.HasAcceptLanguage {
-			r.AcceptLanguage = string(value)
+			p.language = p.keep(value)
 			r.HasAcceptLanguage = true
 		}
 	case asciiEqualFold(name, "content-length"):
@@ -240,7 +277,35 @@ func (p *h1Parser) addField(line []byte, overflow bool) {
 }
 
 func (p *h1Parser) endHeaders(emit func(*Request)) {
-	emit(p.cur)
+	r := p.cur
+	all := string(p.arena)
+	str := func(sp span) string { return all[sp.start:sp.end] }
+
+	r.Method = str(p.method)
+	r.Target = str(p.target)
+	if len(p.names) > 0 {
+		r.Names = make([]string, len(p.names))
+		for i, sp := range p.names {
+			r.Names[i] = str(sp)
+		}
+	}
+	if len(p.fields) > 0 {
+		r.Fields = make([]Field, len(p.fields))
+		for i, f := range p.fields {
+			r.Fields[i] = Field{Name: r.Names[f.name], Value: str(f.value)}
+		}
+	}
+	if len(p.cookies) > 0 {
+		r.Cookies = make([]string, len(p.cookies))
+		for i, sp := range p.cookies {
+			r.Cookies[i] = str(sp)
+		}
+	}
+	if r.HasAcceptLanguage {
+		r.AcceptLanguage = str(p.language)
+	}
+
+	emit(r)
 	p.cur = nil
 
 	switch {

@@ -92,7 +92,7 @@ func startFingerprintEntryPoint(tb testing.TB, enabled bool) string {
 		fp = &static.Fingerprint{}
 		fp.SetDefaults()
 		if url := os.Getenv("FINGERPRINT_EXPORT_URL"); url != "" {
-			fp.Export = &static.FingerprintExport{URL: url, RawBytes: true}
+			fp.Export = &static.FingerprintExport{URL: url, RawBytes: os.Getenv("FINGERPRINT_EXPORT_RAW") != "0"}
 			fp.Export.SetDefaults()
 		}
 	}
