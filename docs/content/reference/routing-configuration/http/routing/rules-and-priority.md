@@ -31,6 +31,7 @@ The table below lists all the available matchers:
 | <a id="opt-Querykey-value" href="#opt-Querykey-value" title="#opt-Querykey-value">[```Query(`key`, `value`)```](#query-and-queryregexp)</a> | Matches requests query parameters named `key` set to `value`.                  |
 | <a id="opt-QueryRegexpkey-regexp" href="#opt-QueryRegexpkey-regexp" title="#opt-QueryRegexpkey-regexp">[```QueryRegexp(`key`, `regexp`)```](#query-and-queryregexp)</a> | Matches requests query parameters named `key` matching `regexp`.               |
 | <a id="opt-ClientIPip" href="#opt-ClientIPip" title="#opt-ClientIPip">[```ClientIP(`ip`)```](#clientip)</a> | Matches requests client IP using `ip`. It accepts IPv4, IPv6 and CIDR formats. |
+| <a id="opt-JA3fp-JA4fp-JA4Hfp" href="#opt-JA3fp-JA4fp-JA4Hfp" title="#opt-JA3fp-JA4fp-JA4Hfp">```JA3(`fp`)```, ```JA4(`fp`)```, ```JA4H(`fp`)```</a> | Matches requests by their fingerprint, on an entry point with the `fingerprint` option (Traefix). See [Rule Matchers](../../../install-configuration/entrypoints-fingerprint.md#rule-matchers). |
 
 ### Header and HeaderRegexp
 

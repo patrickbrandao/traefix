@@ -19,6 +19,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/middlewares/contenttype"
 	"github.com/traefik/traefik/v3/pkg/middlewares/customerrors"
 	"github.com/traefik/traefik/v3/pkg/middlewares/encodedcharacters"
+	"github.com/traefik/traefik/v3/pkg/middlewares/fingerprintlist"
 	"github.com/traefik/traefik/v3/pkg/middlewares/gatewayapi/headermodifier"
 	gapiredirect "github.com/traefik/traefik/v3/pkg/middlewares/gatewayapi/redirect"
 	"github.com/traefik/traefik/v3/pkg/middlewares/gatewayapi/requestmirror"
@@ -270,6 +271,16 @@ func (b *Builder) buildConstructor(ctx context.Context, middlewareName string) (
 		}
 		middleware = func(next http.Handler) (http.Handler, error) {
 			return ipallowlist.New(ctx, next, *config.IPAllowList, middlewareName)
+		}
+	}
+
+	// FingerprintList
+	if config.FingerprintList != nil {
+		if middleware != nil {
+			return nil, badConf
+		}
+		middleware = func(next http.Handler) (http.Handler, error) {
+			return fingerprintlist.New(ctx, next, *config.FingerprintList, middlewareName)
 		}
 	}
 

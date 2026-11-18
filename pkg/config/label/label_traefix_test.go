@@ -58,3 +58,20 @@ http:
 		assert.Equal(t, map[string]string{"Authorization": "Bearer key"}, fa.RequestHeaders)
 	})
 }
+
+func TestFingerprintList_decode(t *testing.T) {
+	cfg, err := DecodeConfiguration(map[string]string{
+		"traefik.http.middlewares.bots.fingerprintlist.mode":             "deny",
+		"traefik.http.middlewares.bots.fingerprintlist.ja4":              "t13d4907*,t13d1516h2_8daaf6152771_e5627efa2ab1",
+		"traefik.http.middlewares.bots.fingerprintlist.ja4h":             "ge11nn*",
+		"traefik.http.middlewares.bots.fingerprintlist.rejectstatuscode": "429",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, &dynamic.FingerprintList{
+		Mode:             "deny",
+		JA4:              []string{"t13d4907*", "t13d1516h2_8daaf6152771_e5627efa2ab1"},
+		JA4H:             []string{"ge11nn*"},
+		RejectStatusCode: 429,
+	}, cfg.HTTP.Middlewares["bots"].FingerprintList)
+}

@@ -287,6 +287,12 @@ func (m *Manager) buildEntryPointHandler(ctx context.Context, entryPointName str
 			continue
 		}
 
+		if err = fingerprint.CheckRule(entryPointName, routerConfig.Rule); err != nil {
+			routerConfig.AddError(err, true)
+			logger.Error().Err(err).Send()
+			continue
+		}
+
 		if err = muxer.AddRoute(routerConfig.Rule, routerConfig.RuleSyntax, routerConfig.Priority, providerName(routerName), handler); err != nil {
 			routerConfig.AddError(err, true)
 			logger.Error().Err(err).Send()
@@ -537,6 +543,12 @@ func (m *Manager) buildChildRoutersMuxer(ctx context.Context, entryPointName str
 		// Build the child router handler.
 		childHandler, err := m.buildRouterHandler(ctxChild, entryPointName, childName, childRouter)
 		if err != nil {
+			childRouter.AddError(err, true)
+			logger.Error().Err(err).Send()
+			continue
+		}
+
+		if err = fingerprint.CheckRule(entryPointName, childRouter.Rule); err != nil {
 			childRouter.AddError(err, true)
 			logger.Error().Err(err).Send()
 			continue

@@ -60,6 +60,9 @@ Especificação: `tmp/report-waf-features.md` (fases 0 a 4). Implementado até a
   marcador); métrica `traefik_forwardauth_failopen_total`. Código em
   `pkg/middlewares/auth/forward_failopen.go`; documentação em
   `docs/content/reference/routing-configuration/http/middlewares/forwardauth-failopen.md`.
+- **Uso local dos fingerprints** (fase 3): campos `Fingerprint*` no access log e atributos de
+  trace no span do router; matchers `JA3`, `JA4` e `JA4H` nas regras (router com erro se o
+  entrypoint não tem `fingerprint`); middleware `fingerprintList` (modos `allow` e `deny`).
 - Código em `pkg/fingerprint/`; ganchos no upstream em `pkg/server/server_entrypoint_tcp*.go`,
   `pkg/server/router/router.go`, `pkg/config/static/entrypoints.go` e uma linha por backend em
   `pkg/observability/metrics/` (métricas em `traefix.go`).

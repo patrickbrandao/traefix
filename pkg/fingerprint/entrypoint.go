@@ -106,6 +106,7 @@ func NewEntryPoint(ctx context.Context, name string, cfg *static.Fingerprint, h2
 	}
 
 	enabled.Store(true)
+	entryPoints.Store(name, struct{}{})
 
 	return e, nil
 }

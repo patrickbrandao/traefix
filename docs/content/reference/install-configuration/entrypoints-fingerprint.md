@@ -120,6 +120,49 @@ The headers carry the values of the socket even when the entry point trusts the 
 
 On HTTP/3 connections, Traefix adds `X-Traefix-Src-Ip`, `X-Traefix-Src-Port`, `X-Traefix-Dst-Port`, `X-Traefix-Conn-Id` and `X-Traefix-Proto`, and exports the connection and request records. The request records of HTTP/3 carry no header names and no JA4H, and the connection records carry no ClientHello fingerprint, because the QUIC library doesn't expose the received header order nor the ClientHello of the Initial packet.
 
+## Rule Matchers
+
+On an entry point with the `fingerprint` option, the router rules accept these matchers, in the v3 rule syntax:
+
+| Matcher | Matches |
+|:--------|:--------|
+| <a id="opt-JA3fp" href="#opt-JA3fp" title="#opt-JA3fp">```JA3(`fp`)```</a> | The MD5 hash of the JA3 fingerprint of the connection, the value of `X-Traefix-Ja3`. |
+| <a id="opt-JA4fp" href="#opt-JA4fp" title="#opt-JA4fp">```JA4(`fp`)```</a> | The JA4 fingerprint of the connection, the value of `X-Traefix-Ja4`. |
+| <a id="opt-JA4Hfp" href="#opt-JA4Hfp" title="#opt-JA4Hfp">```JA4H(`fp`)```</a> | The JA4H fingerprint of the request, the value of `X-Traefix-Ja4h`. |
+
+Each matcher takes one fingerprint. A trailing `*` matches the fingerprints starting with the given prefix, for example ```JA4(`t13d1516h2_*`)```. Combine several values with `||`. A request without the fingerprint, such as a plain HTTP request for `JA4`, matches no value.
+
+A router whose rule uses one of these matchers on an entry point without the `fingerprint` option gets an error and isn't served, as with any invalid rule.
+
+```yaml tab="Structured (YAML)"
+http:
+  routers:
+    bots:
+      entryPoints:
+        - websecure
+      # Sends the curl clients to a dedicated service.
+      rule: "Host(`example.com`) && JA4(`t13d4907h2_*`)"
+      service: bots
+```
+
+To deny or allow requests by fingerprint without a router per fingerprint, use the [`fingerprintList`](../routing-configuration/http/middlewares/fingerprintlist.md) middleware.
+
+## Access Logs and Traces
+
+On the routed requests, Traefix adds the fingerprints to the access log and to the span of the router:
+
+| Access log field | Trace attribute | Contains |
+|:-----------------|:----------------|:---------|
+| <a id="opt-FingerprintConnId" href="#opt-FingerprintConnId" title="#opt-FingerprintConnId">`FingerprintConnId`</a> | `traefix.connection.id` | Identifier of the connection. |
+| <a id="opt-FingerprintJA3" href="#opt-FingerprintJA3" title="#opt-FingerprintJA3">`FingerprintJA3`</a> | `tls.client.ja3` | MD5 hash of the JA3 fingerprint. |
+| <a id="opt-FingerprintJA4" href="#opt-FingerprintJA4" title="#opt-FingerprintJA4">`FingerprintJA4`</a> | `traefix.tls.client.ja4` | JA4 fingerprint. |
+| <a id="opt-FingerprintH2" href="#opt-FingerprintH2" title="#opt-FingerprintH2">`FingerprintH2`</a> | `traefix.http2.akamai` | Akamai HTTP/2 fingerprint, on HTTP/2 requests. |
+| <a id="opt-FingerprintJA4H" href="#opt-FingerprintJA4H" title="#opt-FingerprintJA4H">`FingerprintJA4H`</a> | `traefix.http.request.ja4h` | JA4H fingerprint. |
+
+The access log shows the fields in the JSON format, and its `fields` options filter them as the other fields. A request that no router matched has no fingerprint field.
+
+A WAF middleware on the router, such as the Coraza plugin, reads the fingerprints from the request headers, for example with the `REQUEST_HEADERS:X-Traefix-Ja4` SecLang variable.
+
 ## Exported Records
 
 Each batch is a JSON object sent with `Content-Type: application/json`:

@@ -326,6 +326,7 @@ nav:
               - 'GrpcWeb': 'reference/routing-configuration/http/middlewares/grpcweb.md'
               - 'Headers': 'reference/routing-configuration/http/middlewares/headers.md'
               - '<span class="nav-link-with-icon">HMAC <img src="https://doc.traefik.io/traefik-hub/img/ps-traefik-hub-logo-light.svg" class="menu-icon" alt="Traefik Hub API Gateway"></span>' : 'reference/routing-configuration/http/middlewares/hmac.md'
+              - 'FingerprintList': 'reference/routing-configuration/http/middlewares/fingerprintlist.md'
               - 'IPAllowList': 'reference/routing-configuration/http/middlewares/ipallowlist.md'
               - 'InFlightReq': 'reference/routing-configuration/http/middlewares/inflightreq.md'
               - '<span class="nav-link-with-icon">JWT <img src="https://doc.traefik.io/traefik-hub/img/ps-traefik-hub-logo-light.svg" class="menu-icon" alt="Traefik Hub API Gateway"></span>' : 'reference/routing-configuration/http/middlewares/jwt.md'

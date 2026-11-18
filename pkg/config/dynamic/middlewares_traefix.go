@@ -22,3 +22,24 @@ type ForwardAuthFailOpenHeader struct {
 	// Value of the header.
 	Value string `json:"value,omitempty" toml:"value,omitempty" yaml:"value,omitempty" export:"true"`
 }
+
+// +k8s:deepcopy-gen=true
+
+// FingerprintList holds the fingerprintList middleware configuration (Traefix).
+// This middleware denies or allows the requests by the fingerprints the entry point computed.
+type FingerprintList struct {
+	// Mode defines how the lists apply: deny rejects the requests with a listed fingerprint,
+	// allow rejects the requests without one.
+	Mode string `json:"mode,omitempty" toml:"mode,omitempty" yaml:"mode,omitempty" export:"true"`
+	// JA3 lists JA3 hashes. A trailing * matches the fingerprints starting with the given prefix.
+	JA3 []string `json:"ja3,omitempty" toml:"ja3,omitempty" yaml:"ja3,omitempty" export:"true"`
+	// JA4 lists JA4 fingerprints. A trailing * matches the fingerprints starting with the given prefix.
+	JA4 []string `json:"ja4,omitempty" toml:"ja4,omitempty" yaml:"ja4,omitempty" export:"true"`
+	// JA4H lists JA4H fingerprints. A trailing * matches the fingerprints starting with the given prefix.
+	JA4H []string `json:"ja4h,omitempty" toml:"ja4h,omitempty" yaml:"ja4h,omitempty" export:"true"`
+	// HTTP2 lists Akamai HTTP/2 fingerprints. A trailing * matches the fingerprints starting with the given prefix.
+	HTTP2 []string `json:"http2,omitempty" toml:"http2,omitempty" yaml:"http2,omitempty" export:"true"`
+	// RejectStatusCode defines the HTTP status code used for refused requests.
+	// If not set, the default is 403 (Forbidden).
+	RejectStatusCode int `json:"rejectStatusCode,omitempty" toml:"rejectStatusCode,omitempty" yaml:"rejectStatusCode,omitempty" export:"true"`
+}

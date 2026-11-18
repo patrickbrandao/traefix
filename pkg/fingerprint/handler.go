@@ -205,6 +205,7 @@ func WrapRouterHandler(router, service string) func(http.Handler) (http.Handler,
 			if st := requestStateFrom(req); st != nil {
 				st.router = router
 				st.service = service
+				st.observe(req)
 			}
 			next.ServeHTTP(rw, req)
 		}), nil
@@ -235,4 +236,44 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 
 func (w *statusWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
+}
+
+// Fingerprints are the fingerprints of a request. A fingerprint is empty when it was not computed,
+// e.g. JA4 over plain HTTP, or JA4H over HTTP/3.
+type Fingerprints struct {
+	JA3   string
+	JA4   string
+	JA4H  string
+	HTTP2 string
+}
+
+// FingerprintsFromRequest returns the fingerprints of req, and false when its entry point has no fingerprint option.
+func FingerprintsFromRequest(req *http.Request) (Fingerprints, bool) {
+	st := requestStateFrom(req)
+	if st == nil {
+		return Fingerprints{}, false
+	}
+
+	var f Fingerprints
+	if c := st.conn; c != nil {
+		f.JA3, f.JA4 = c.ja3, c.ja4
+		if req.ProtoMajor == 2 {
+			f.HTTP2 = c.akamai
+		}
+	}
+	if st.wire != nil {
+		f.JA4H = st.wire.JA4H()
+	}
+
+	return f, true
+}
+
+// ContextWithFingerprints returns a context carrying the given fingerprints, as the entry point sets them,
+// for the handlers served outside an entry point, such as in tests.
+func ContextWithFingerprints(ctx context.Context, f Fingerprints) context.Context {
+	st := &requestState{start: time.Now(), conn: &connInfo{ja3: f.JA3, ja4: f.JA4, akamai: f.HTTP2}}
+	if f.JA4H != "" {
+		st.wire = &Request{ja4h: f.JA4H}
+	}
+	return context.WithValue(ctx, requestStateKey{}, st)
 }
