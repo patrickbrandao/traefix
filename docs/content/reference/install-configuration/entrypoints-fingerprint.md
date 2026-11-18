@@ -17,7 +17,7 @@ entryPoints:
       # Prefix of the headers added to the requests. The client headers with this prefix are removed.
       headerPrefix: X-Traefix-
       export:
-        url: http://10.249.255.254:9003/ingest
+        url: http://10.0.0.10:9000/ingest
         headers:
           Authorization: "Bearer my-key"
         rawBytes: true
@@ -42,7 +42,7 @@ entryPoints:
     # Prefix of the headers added to the requests. The client headers with this prefix are removed.
     headerPrefix = "X-Traefix-"
     [entryPoints.websecure.fingerprint.export]
-      url = "http://10.249.255.254:9003/ingest"
+      url = "http://10.0.0.10:9000/ingest"
       rawBytes = true
       fields = ["User-Agent", "Accept", "Accept-Language", "Accept-Encoding", "Sec-CH-UA*", "Sec-Fetch-*"]
       queueSize = 4096
@@ -59,7 +59,7 @@ entryPoints:
 --entryPoints.websecure.fingerprint=true
 # The prefix and the export.
 --entryPoints.websecure.fingerprint.headerPrefix=X-Traefix-
---entryPoints.websecure.fingerprint.export.url=http://10.249.255.254:9003/ingest
+--entryPoints.websecure.fingerprint.export.url=http://10.0.0.10:9000/ingest
 --entryPoints.websecure.fingerprint.export.headers.Authorization=Bearer my-key
 --entryPoints.websecure.fingerprint.export.rawBytes=true
 ```
@@ -70,7 +70,7 @@ The environment variables follow the same names, for example `TRAEFIK_ENTRYPOINT
 
 | Field | Description | Default | Required |
 |:------|:------------|:--------|:---------|
-| <a id="opt-fingerprint-headerPrefix" href="#opt-fingerprint-headerPrefix" title="#opt-fingerprint-headerPrefix">`fingerprint.headerPrefix`</a> | Prefix of the headers that Traefix adds to the requests, listed in [Request Headers](#request-headers). Traefix removes every client request header whose name starts with this prefix. An empty prefix fails the start of the entry point. Example: `X-Fs-`. | `X-Traefix-` | No |
+| <a id="opt-fingerprint-headerPrefix" href="#opt-fingerprint-headerPrefix" title="#opt-fingerprint-headerPrefix">`fingerprint.headerPrefix`</a> | Prefix of the headers that Traefix adds to the requests, listed in [Request Headers](#request-headers). Traefix removes every client request header whose name starts with this prefix. An empty prefix fails the start of the entry point. Example: `X-Edge-`. | `X-Traefix-` | No |
 | <a id="opt-fingerprint-http3HeaderOrder" href="#opt-fingerprint-http3HeaderOrder" title="#opt-fingerprint-http3HeaderOrder">`fingerprint.http3HeaderOrder`</a> | Captures the header order and the `SETTINGS` of the HTTP/3 requests, for their JA4H and the `fieldNames` and `http3.settings` of the records. Traefix enables the qlog events of the QUIC library for that, which costs CPU on every QUIC packet. When unset, the HTTP/3 requests have no JA4H. | `false` | No |
 | <a id="opt-fingerprint-export-url" href="#opt-fingerprint-export-url" title="#opt-fingerprint-export-url">`fingerprint.export.url`</a> | URL that receives the [batches of records](#exported-records), sent with `POST` requests. The URL must be absolute, with the `http` or `https` scheme, or the start of the entry point fails. | | Yes, with `export` |
 | <a id="opt-fingerprint-export-headers" href="#opt-fingerprint-export-headers" title="#opt-fingerprint-export-headers">`fingerprint.export.headers`</a> | Headers sent with each batch, for example an `Authorization` header with the key of the receiving service. Traefix treats the values as secrets and removes them from the configuration it logs. | | No |

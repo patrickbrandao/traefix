@@ -11,18 +11,18 @@ import (
 
 func TestForwardAuthFailOpen_decode(t *testing.T) {
 	expected := &dynamic.ForwardAuthFailOpen{
-		DenyRequiresResponseHeader: "X-Fs-Verdict",
-		Header:                     &dynamic.ForwardAuthFailOpenHeader{Name: "X-Fs-Verdict", Value: "unavailable"},
+		DenyRequiresResponseHeader: "X-Verdict",
+		Header:                     &dynamic.ForwardAuthFailOpenHeader{Name: "X-Verdict", Value: "unavailable"},
 	}
 
 	t.Run("labels", func(t *testing.T) {
 		cfg, err := DecodeConfiguration(map[string]string{
-			"traefik.http.middlewares.bot.forwardauth.address":                             "http://10.0.0.1:9003/auth",
+			"traefik.http.middlewares.bot.forwardauth.address":                             "http://10.0.0.1:9000/auth",
 			"traefik.http.middlewares.bot.forwardauth.requestheaders.Authorization":        "Bearer key",
-			"traefik.http.middlewares.bot.forwardauth.failopen.denyrequiresresponseheader": "X-Fs-Verdict",
-			"traefik.http.middlewares.bot.forwardauth.failopen.header.name":                "X-Fs-Verdict",
+			"traefik.http.middlewares.bot.forwardauth.failopen.denyrequiresresponseheader": "X-Verdict",
+			"traefik.http.middlewares.bot.forwardauth.failopen.header.name":                "X-Verdict",
 			"traefik.http.middlewares.bot.forwardauth.failopen.header.value":               "unavailable",
-			"traefik.http.middlewares.empty.forwardauth.address":                           "http://10.0.0.1:9003/auth",
+			"traefik.http.middlewares.empty.forwardauth.address":                           "http://10.0.0.1:9000/auth",
 			"traefik.http.middlewares.empty.forwardauth.failopen":                          "true",
 		})
 		require.NoError(t, err)
@@ -42,13 +42,13 @@ http:
   middlewares:
     bot:
       forwardAuth:
-        address: http://10.0.0.1:9003/auth
+        address: http://10.0.0.1:9000/auth
         requestHeaders:
           Authorization: Bearer key
         failOpen:
-          denyRequiresResponseHeader: X-Fs-Verdict
+          denyRequiresResponseHeader: X-Verdict
           header:
-            name: X-Fs-Verdict
+            name: X-Verdict
             value: unavailable
 `, ".yaml", cfg))
 

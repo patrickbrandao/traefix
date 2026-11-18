@@ -15,8 +15,8 @@ func TestRemoveCredentials_fingerprintExportHeaders(t *testing.T) {
 			"websecure": &static.EntryPoint{
 				Fingerprint: &static.Fingerprint{
 					Export: &static.FingerprintExport{
-						URL:     "http://10.0.0.1:9003/ingest",
-						Headers: map[string]string{"Authorization": "Bearer fsk_secret"},
+						URL:     "http://10.0.0.1:9000/ingest",
+						Headers: map[string]string{"Authorization": "Bearer s3cr3t-key"},
 					},
 				},
 			},
@@ -26,8 +26,8 @@ func TestRemoveCredentials_fingerprintExportHeaders(t *testing.T) {
 	out, err := RemoveCredentials(cfg)
 	require.NoError(t, err)
 
-	assert.NotContains(t, out, "fsk_secret")
-	assert.Contains(t, out, "http://10.0.0.1:9003/ingest")
+	assert.NotContains(t, out, "s3cr3t-key")
+	assert.Contains(t, out, "http://10.0.0.1:9000/ingest")
 }
 
 func TestRemoveCredentials_forwardAuthRequestHeaders(t *testing.T) {
@@ -35,8 +35,8 @@ func TestRemoveCredentials_forwardAuthRequestHeaders(t *testing.T) {
 		HTTP: &dynamic.HTTPConfiguration{
 			Middlewares: map[string]*dynamic.Middleware{
 				"bot": {ForwardAuth: &dynamic.ForwardAuth{
-					Address:        "http://10.0.0.1:9003/auth",
-					RequestHeaders: map[string]string{"Authorization": "Bearer fsk_secret"},
+					Address:        "http://10.0.0.1:9000/auth",
+					RequestHeaders: map[string]string{"Authorization": "Bearer s3cr3t-key"},
 				}},
 			},
 		},
@@ -45,6 +45,6 @@ func TestRemoveCredentials_forwardAuthRequestHeaders(t *testing.T) {
 	out, err := RemoveCredentials(cfg)
 	require.NoError(t, err)
 
-	assert.NotContains(t, out, "fsk_secret")
-	assert.Contains(t, out, "http://10.0.0.1:9003/auth")
+	assert.NotContains(t, out, "s3cr3t-key")
+	assert.Contains(t, out, "http://10.0.0.1:9000/auth")
 }

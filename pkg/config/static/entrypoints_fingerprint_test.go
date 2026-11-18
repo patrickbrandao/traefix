@@ -15,9 +15,9 @@ import (
 
 func TestFingerprint_decode(t *testing.T) {
 	expected := &Fingerprint{
-		HeaderPrefix: "X-Fs-",
+		HeaderPrefix: "X-Edge-",
 		Export: &FingerprintExport{
-			URL:           "http://10.249.255.254:9003/ingest",
+			URL:           "http://10.0.0.10:9000/ingest",
 			Headers:       map[string]string{"Authorization": "Bearer key"},
 			RawBytes:      true,
 			Fields:        []string{"User-Agent", "Accept", "Accept-Language", "Accept-Encoding", "Sec-CH-UA*", "Sec-Fetch-*"},
@@ -41,9 +41,9 @@ entryPoints:
   websecure:
     address: ":443"
     fingerprint:
-      headerPrefix: X-Fs-
+      headerPrefix: X-Edge-
       export:
-        url: http://10.249.255.254:9003/ingest
+        url: http://10.0.0.10:9000/ingest
         headers:
           Authorization: Bearer key
         rawBytes: true
@@ -56,8 +56,8 @@ entryPoints:
 			decode: func(cfg *Configuration) error {
 				return flag.Decode([]string{
 					"--entrypoints.websecure.address=:443",
-					"--entrypoints.websecure.fingerprint.headerprefix=X-Fs-",
-					"--entrypoints.websecure.fingerprint.export.url=http://10.249.255.254:9003/ingest",
+					"--entrypoints.websecure.fingerprint.headerprefix=X-Edge-",
+					"--entrypoints.websecure.fingerprint.export.url=http://10.0.0.10:9000/ingest",
 					"--entrypoints.websecure.fingerprint.export.headers.Authorization=Bearer key",
 					"--entrypoints.websecure.fingerprint.export.rawbytes=true",
 					"--entrypoints.websecure.fingerprint.export.batchsize=32",
@@ -69,8 +69,8 @@ entryPoints:
 			decode: func(cfg *Configuration) error {
 				return env.Decode([]string{
 					"TRAEFIK_ENTRYPOINTS_WEBSECURE_ADDRESS=:443",
-					"TRAEFIK_ENTRYPOINTS_WEBSECURE_FINGERPRINT_HEADERPREFIX=X-Fs-",
-					"TRAEFIK_ENTRYPOINTS_WEBSECURE_FINGERPRINT_EXPORT_URL=http://10.249.255.254:9003/ingest",
+					"TRAEFIK_ENTRYPOINTS_WEBSECURE_FINGERPRINT_HEADERPREFIX=X-Edge-",
+					"TRAEFIK_ENTRYPOINTS_WEBSECURE_FINGERPRINT_EXPORT_URL=http://10.0.0.10:9000/ingest",
 					"TRAEFIK_ENTRYPOINTS_WEBSECURE_FINGERPRINT_EXPORT_HEADERS_Authorization=Bearer key",
 					"TRAEFIK_ENTRYPOINTS_WEBSECURE_FINGERPRINT_EXPORT_RAWBYTES=true",
 					"TRAEFIK_ENTRYPOINTS_WEBSECURE_FINGERPRINT_EXPORT_BATCHSIZE=32",

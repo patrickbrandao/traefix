@@ -75,10 +75,10 @@ func failOpenConfig(address string) dynamic.ForwardAuth {
 	return dynamic.ForwardAuth{
 		Address:             address,
 		Timeout:             ptypes.Duration(200 * time.Millisecond),
-		AuthResponseHeaders: []string{"X-Fs-Verdict", "X-Fs-Score"},
+		AuthResponseHeaders: []string{"X-Verdict", "X-Score"},
 		FailOpen: &dynamic.ForwardAuthFailOpen{
-			DenyRequiresResponseHeader: "X-Fs-Verdict",
-			Header:                     &dynamic.ForwardAuthFailOpenHeader{Name: "X-Fs-Verdict", Value: "unavailable"},
+			DenyRequiresResponseHeader: "X-Verdict",
+			Header:                     &dynamic.ForwardAuthFailOpenHeader{Name: "X-Verdict", Value: "unavailable"},
 		},
 	}
 }
@@ -88,7 +88,7 @@ func serve(t *testing.T, handler http.Handler, change func(*http.Request)) (*htt
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/path", nil)
 	// A client forging the verdict of the authentication server.
-	req.Header.Set("X-Fs-Verdict", "human")
+	req.Header.Set("X-Verdict", "human")
 	if change != nil {
 		change(req)
 	}
@@ -122,7 +122,7 @@ func TestForwardAuthFailOpen_letsThrough(t *testing.T) {
 	status := func(code int, header bool) string {
 		srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 			if header {
-				rw.Header().Set("X-Fs-Verdict", "bot")
+				rw.Header().Set("X-Verdict", "bot")
 			}
 			http.Error(rw, `{"error":"invalid_key"}`, code)
 		}))
@@ -156,7 +156,7 @@ func TestForwardAuthFailOpen_letsThrough(t *testing.T) {
 
 			assert.Equal(t, http.StatusOK, resp.StatusCode)
 			require.NotNil(t, seen)
-			assert.Equal(t, []string{"unavailable"}, seen["X-Fs-Verdict"])
+			assert.Equal(t, []string{"unavailable"}, seen["X-Verdict"])
 			assert.InDelta(t, 1, counter.get("middleware,bot,reason,"+test.reason), 0)
 			// The worst case adds the timeout, and no more.
 			assert.Less(t, time.Since(start), time.Second)
@@ -185,7 +185,7 @@ func TestForwardAuthFailOpen_denies(t *testing.T) {
 
 			auth := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 				if test.header {
-					rw.Header().Set("X-Fs-Verdict", "bot")
+					rw.Header().Set("X-Verdict", "bot")
 				}
 				http.Error(rw, "denied", test.code)
 			}))
@@ -212,19 +212,19 @@ func TestForwardAuthFailOpen_denies(t *testing.T) {
 
 func TestForwardAuthFailOpen_successUnchanged(t *testing.T) {
 	auth := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
-		rw.Header().Set("X-Fs-Verdict", "human")
-		rw.Header().Set("X-Fs-Score", "0.1")
+		rw.Header().Set("X-Verdict", "human")
+		rw.Header().Set("X-Score", "0.1")
 	}))
 	t.Cleanup(auth.Close)
 
 	middleware, err := NewForward(t.Context(), backendEcho(), failOpenConfig(auth.URL), nil, "bot")
 	require.NoError(t, err)
 
-	resp, seen := serve(t, middleware, func(req *http.Request) { req.Header.Set("X-Fs-Verdict", "forged") })
+	resp, seen := serve(t, middleware, func(req *http.Request) { req.Header.Set("X-Verdict", "forged") })
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, []string{"human"}, seen["X-Fs-Verdict"])
-	assert.Equal(t, []string{"0.1"}, seen["X-Fs-Score"])
+	assert.Equal(t, []string{"human"}, seen["X-Verdict"])
+	assert.Equal(t, []string{"0.1"}, seen["X-Score"])
 }
 
 func TestForwardAuthFailOpen_forgedResponseHeadersRemoved(t *testing.T) {
@@ -240,11 +240,11 @@ func TestForwardAuthFailOpen_forgedResponseHeadersRemoved(t *testing.T) {
 	middleware, err := NewForward(t.Context(), backendEcho(), cfg, nil, "bot")
 	require.NoError(t, err)
 
-	_, seen := serve(t, middleware, func(req *http.Request) { req.Header.Set("X-Fs-Score", "0") })
+	_, seen := serve(t, middleware, func(req *http.Request) { req.Header.Set("X-Score", "0") })
 
 	require.NotNil(t, seen)
-	assert.NotContains(t, seen, "X-Fs-Verdict")
-	assert.NotContains(t, seen, "X-Fs-Score")
+	assert.NotContains(t, seen, "X-Verdict")
+	assert.NotContains(t, seen, "X-Score")
 }
 
 func TestForwardAuth_withoutFailOpen(t *testing.T) {
@@ -291,12 +291,12 @@ func TestForwardAuth_requestHeaders(t *testing.T) {
 
 	cfg := failOpenConfig(auth.URL)
 	cfg.AuthRequestHeaders = []string{"User-Agent", "Accept"}
-	cfg.RequestHeaders = map[string]string{"Authorization": "Bearer fsk_key"}
+	cfg.RequestHeaders = map[string]string{"Authorization": "Bearer my-key"}
 	middleware, err := NewForward(t.Context(), backendEcho(), cfg, nil, "bot")
 	require.NoError(t, err)
 
 	// The entry point fingerprint runs first, as on a real entry point.
-	ep, err := fingerprint.NewEntryPoint(t.Context(), "websecure", &static.Fingerprint{HeaderPrefix: "X-Fs-"}, nil, nil)
+	ep, err := fingerprint.NewEntryPoint(t.Context(), "websecure", &static.Fingerprint{HeaderPrefix: "X-Edge-"}, nil, nil)
 	require.NoError(t, err)
 
 	_, seen := serve(t, ep.Handler(middleware), func(req *http.Request) {
@@ -305,10 +305,10 @@ func TestForwardAuth_requestHeaders(t *testing.T) {
 		req.Header.Set("Cookie", "sid=visitor")
 	})
 
-	assert.Equal(t, []string{"Bearer fsk_key"}, got["Authorization"])
+	assert.Equal(t, []string{"Bearer my-key"}, got["Authorization"])
 	assert.NotContains(t, got, "Cookie")
 	assert.Equal(t, []string{"visitor-agent"}, got["User-Agent"])
-	assert.Equal(t, []string{"h1"}, got["X-Fs-Proto"])
+	assert.Equal(t, []string{"h1"}, got["X-Edge-Proto"])
 
 	// The backend gets the client headers, not the key.
 	require.NotNil(t, seen)
@@ -325,17 +325,17 @@ func TestForwardAuth_requestHeadersTransport(t *testing.T) {
 		{desc: "public IP in clear text", config: dynamic.ForwardAuth{Address: "http://8.8.8.8/auth"}, wantErr: true},
 		{desc: "public name in clear text", config: dynamic.ForwardAuth{Address: "http://auth.example.com/auth"}, wantErr: true},
 		{desc: "h2c to a public IP", config: dynamic.ForwardAuth{Address: "h2c://8.8.8.8/auth"}, wantErr: true},
-		{desc: "private IP", config: dynamic.ForwardAuth{Address: "http://10.249.255.254:9003/auth"}},
-		{desc: "private IPv6", config: dynamic.ForwardAuth{Address: "http://[fd00::1]:9003/auth"}},
-		{desc: "loopback", config: dynamic.ForwardAuth{Address: "http://127.0.0.1:9003/auth"}},
-		{desc: "localhost", config: dynamic.ForwardAuth{Address: "http://localhost:9003/auth"}},
+		{desc: "private IP", config: dynamic.ForwardAuth{Address: "http://10.0.0.10:9000/auth"}},
+		{desc: "private IPv6", config: dynamic.ForwardAuth{Address: "http://[fd00::1]:9000/auth"}},
+		{desc: "loopback", config: dynamic.ForwardAuth{Address: "http://127.0.0.1:9000/auth"}},
+		{desc: "localhost", config: dynamic.ForwardAuth{Address: "http://localhost:9000/auth"}},
 		{desc: "https", config: dynamic.ForwardAuth{Address: "https://auth.example.com/auth"}},
 	}
 
 	for _, test := range testCases {
 		t.Run(test.desc, func(t *testing.T) {
 			cfg := test.config
-			cfg.RequestHeaders = map[string]string{"Authorization": "Bearer fsk_key"}
+			cfg.RequestHeaders = map[string]string{"Authorization": "Bearer my-key"}
 			cfg.AuthRequestHeaders = []string{"User-Agent"}
 
 			_, err := NewForward(t.Context(), backendEcho(), cfg, nil, "bot")
@@ -368,8 +368,8 @@ func TestForwardAuth_requestHeadersAuthorizationWarning(t *testing.T) {
 			ctx := zerolog.New(&buf).WithContext(context.Background())
 
 			_, err := NewForward(ctx, backendEcho(), dynamic.ForwardAuth{
-				Address:            "http://127.0.0.1:9003/auth",
-				RequestHeaders:     map[string]string{"authorization": "Bearer fsk_key"},
+				Address:            "http://127.0.0.1:9000/auth",
+				RequestHeaders:     map[string]string{"authorization": "Bearer my-key"},
 				AuthRequestHeaders: test.authRequestHeaders,
 			}, nil, "bot")
 			require.NoError(t, err)

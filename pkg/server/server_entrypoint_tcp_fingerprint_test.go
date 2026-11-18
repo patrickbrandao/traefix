@@ -424,7 +424,7 @@ func benchRoundtrip(b *testing.B, client *http.Client, req *http.Request) {
 func echoFingerprintHeaders(rw http.ResponseWriter, req *http.Request) {
 	out := map[string]string{}
 	for name := range req.Header {
-		if strings.HasPrefix(name, "X-Fs-") {
+		if strings.HasPrefix(name, "X-Edge-") {
 			out[name] = req.Header.Get(name)
 		}
 	}
@@ -457,7 +457,7 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 		ForwardedHeaders: &static.ForwardedHeaders{},
 		HTTP2:            &static.HTTP2Config{},
 		HTTP3:            &static.HTTP3Config{},
-		Fingerprint:      &static.Fingerprint{HeaderPrefix: "X-Fs-"},
+		Fingerprint:      &static.Fingerprint{HeaderPrefix: "X-Edge-"},
 	}
 
 	entryPoint, err := NewTCPEntryPoint(t.Context(), "websecure", config, nil, nil)
@@ -482,7 +482,7 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 		req, err := http.NewRequest(http.MethodGet, "https://"+addr+"/", nil)
 		require.NoError(t, err)
 		req.Host = "example.com"
-		req.Header.Set("X-Fs-Src-Ip", "6.6.6.6")
+		req.Header.Set("X-Edge-Src-Ip", "6.6.6.6")
 
 		resp, err := rt.RoundTrip(req)
 		require.NoError(t, err)
@@ -500,14 +500,14 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 		t.Cleanup(transport.CloseIdleConnections)
 
 		got := get(t, transport)
-		assert.Equal(t, "127.0.0.1", got["X-Fs-Src-Ip"])
-		assert.Equal(t, "h2", got["X-Fs-Proto"])
-		assert.Len(t, got["X-Fs-Conn-Id"], 26)
+		assert.Equal(t, "127.0.0.1", got["X-Edge-Src-Ip"])
+		assert.Equal(t, "h2", got["X-Edge-Proto"])
+		assert.Len(t, got["X-Edge-Conn-Id"], 26)
 		// The SNI is in the ClientHello read by the accept wrapper.
-		assert.Regexp(t, `^t13d\d{4}h2_`, got["X-Fs-Ja4"])
-		assert.Regexp(t, `^[0-9a-f]{32}$`, got["X-Fs-Ja3"])
-		assert.NotEmpty(t, got["X-Fs-H2"])
-		assert.Regexp(t, `^ge20`, got["X-Fs-Ja4h"])
+		assert.Regexp(t, `^t13d\d{4}h2_`, got["X-Edge-Ja4"])
+		assert.Regexp(t, `^[0-9a-f]{32}$`, got["X-Edge-Ja3"])
+		assert.NotEmpty(t, got["X-Edge-H2"])
+		assert.Regexp(t, `^ge20`, got["X-Edge-Ja4h"])
 	})
 
 	t.Run("h3", func(t *testing.T) {
@@ -520,7 +520,7 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 			req, err := http.NewRequest(http.MethodGet, "https://"+addr+"/", nil)
 			require.NoError(t, err)
 			req.Host = "example.com"
-			req.Header.Set("X-Fs-Src-Ip", "6.6.6.6")
+			req.Header.Set("X-Edge-Src-Ip", "6.6.6.6")
 			resp, err := transport.RoundTrip(req)
 			if err != nil {
 				return false
@@ -529,13 +529,13 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 			return json.NewDecoder(resp.Body).Decode(&got) == nil
 		}, 5*time.Second, 100*time.Millisecond)
 
-		assert.Equal(t, "127.0.0.1", got["X-Fs-Src-Ip"])
-		assert.Equal(t, "h3", got["X-Fs-Proto"])
-		assert.Len(t, got["X-Fs-Conn-Id"], 26)
+		assert.Equal(t, "127.0.0.1", got["X-Edge-Src-Ip"])
+		assert.Equal(t, "h3", got["X-Edge-Proto"])
+		assert.Len(t, got["X-Edge-Conn-Id"], 26)
 		// The JA4 of QUIC comes from the ClientHello the QUIC library gives to the TLS callback.
-		assert.Regexp(t, `^q13d\d{4}h3_`, got["X-Fs-Ja4"])
+		assert.Regexp(t, `^q13d\d{4}h3_`, got["X-Edge-Ja4"])
 		// Without http3HeaderOrder, the HTTP/3 header order is not captured.
-		assert.NotContains(t, got, "X-Fs-Ja4h")
+		assert.NotContains(t, got, "X-Edge-Ja4h")
 	})
 }
 
@@ -568,7 +568,7 @@ func TestFingerprintEntryPoint_http3(t *testing.T) {
 	addr := ln.Addr().String()
 	require.NoError(t, ln.Close())
 
-	fp := &static.Fingerprint{HeaderPrefix: "X-Fs-", HTTP3HeaderOrder: true, Export: &static.FingerprintExport{URL: dest.URL, RawBytes: true}}
+	fp := &static.Fingerprint{HeaderPrefix: "X-Edge-", HTTP3HeaderOrder: true, Export: &static.FingerprintExport{URL: dest.URL, RawBytes: true}}
 	fp.Export.SetDefaults()
 	fp.Export.FlushInterval = ptypes.Duration(20 * time.Millisecond)
 
@@ -635,9 +635,9 @@ func TestFingerprintEntryPoint_http3(t *testing.T) {
 	}
 
 	first := get()
-	assert.Equal(t, "h3", first["X-Fs-Proto"])
-	assert.Regexp(t, `^q13d\d{4}h3_`, first["X-Fs-Ja4"])
-	assert.Regexp(t, `^ge30nn\d\dptbr_`, first["X-Fs-Ja4h"])
+	assert.Equal(t, "h3", first["X-Edge-Proto"])
+	assert.Regexp(t, `^q13d\d{4}h3_`, first["X-Edge-Ja4"])
+	assert.Regexp(t, `^ge30nn\d\dptbr_`, first["X-Edge-Ja4h"])
 
 	// The client moves to another socket: the connection keeps its identifier.
 	path, err := conn.AddPath(newTransport())
@@ -648,8 +648,8 @@ func TestFingerprintEntryPoint_http3(t *testing.T) {
 	require.NoError(t, path.Switch())
 
 	second := get()
-	assert.Equal(t, first["X-Fs-Conn-Id"], second["X-Fs-Conn-Id"])
-	assert.Equal(t, first["X-Fs-Ja4"], second["X-Fs-Ja4"])
+	assert.Equal(t, first["X-Edge-Conn-Id"], second["X-Edge-Conn-Id"])
+	assert.Equal(t, first["X-Edge-Ja4"], second["X-Edge-Ja4"])
 
 	var conns []map[string]any
 	require.Eventually(t, func() bool {
@@ -665,7 +665,7 @@ func TestFingerprintEntryPoint_http3(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond)
 
 	tlsRec := conns[0]["tls"].(map[string]any)
-	assert.Equal(t, first["X-Fs-Ja4"], tlsRec["ja4"])
+	assert.Equal(t, first["X-Edge-Ja4"], tlsRec["ja4"])
 	assert.NotEmpty(t, tlsRec["clientHello"])
 	assert.NotEmpty(t, tlsRec["quicTransportParameters"])
 	assert.Equal(t, "h3", tlsRec["alpn"])

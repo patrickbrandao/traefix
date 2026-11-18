@@ -30,10 +30,10 @@ func TestNewEntryPoint_validation(t *testing.T) {
 		err    string
 	}{
 		{desc: "defaults"},
-		{desc: "custom prefix", change: func(c *static.Fingerprint) { c.HeaderPrefix = "X-Fs-" }},
+		{desc: "custom prefix", change: func(c *static.Fingerprint) { c.HeaderPrefix = "X-Edge-" }},
 		{desc: "empty prefix", change: func(c *static.Fingerprint) { c.HeaderPrefix = "" }, err: "header prefix"},
 		{desc: "prefix with space", change: func(c *static.Fingerprint) { c.HeaderPrefix = "X Fs-" }, err: "header prefix"},
-		{desc: "export URL without scheme", change: func(c *static.Fingerprint) { c.Export.URL = "10.0.0.1:9003/ingest" }, err: "export URL"},
+		{desc: "export URL without scheme", change: func(c *static.Fingerprint) { c.Export.URL = "10.0.0.1:9000/ingest" }, err: "export URL"},
 		{desc: "export URL with another scheme", change: func(c *static.Fingerprint) { c.Export.URL = "ftp://10.0.0.1/ingest" }, err: "export URL"},
 		{desc: "batch size 0", change: func(c *static.Fingerprint) { c.Export.BatchSize = 0 }, err: "batchSize"},
 		{desc: "batch size over the limit", change: func(c *static.Fingerprint) { c.Export.BatchSize = 2000 }, err: "batchSize"},
@@ -47,7 +47,7 @@ func TestNewEntryPoint_validation(t *testing.T) {
 		t.Run(test.desc, func(t *testing.T) {
 			cfg := &static.Fingerprint{}
 			cfg.SetDefaults()
-			cfg.Export = &static.FingerprintExport{URL: "http://127.0.0.1:9003/ingest"}
+			cfg.Export = &static.FingerprintExport{URL: "http://127.0.0.1:9000/ingest"}
 			cfg.Export.SetDefaults()
 			if test.change != nil {
 				test.change(cfg)
@@ -65,21 +65,21 @@ func TestNewEntryPoint_validation(t *testing.T) {
 }
 
 func TestEntryPoint_removeClientHeaders(t *testing.T) {
-	cfg := &static.Fingerprint{HeaderPrefix: "X-Fs-"}
+	cfg := &static.Fingerprint{HeaderPrefix: "X-Edge-"}
 	ep, err := NewEntryPoint(t.Context(), "ep", cfg, nil, nil)
 	require.NoError(t, err)
 
 	h := http.Header{}
-	for _, name := range []string{"X-Fs-Src-Ip", "x-fs-verdict", "X_FS_JA4H", "X-fS_cOnn-Id", "X_Fs-Proto"} {
+	for _, name := range []string{"X-Edge-Src-Ip", "x-edge-verdict", "X_EDGE_JA4H", "X-eDgE_cOnn-Id", "X_Edge-Proto"} {
 		h[name] = []string{"forged"}
 	}
-	h.Set("X-Fsx", "kept")
+	h.Set("X-Edgex", "kept")
 	h.Set("X-Forwarded-For", "kept")
 	h.Set("User-Agent", "kept")
 
 	ep.removeClientHeaders(h)
 
-	assert.Equal(t, http.Header{"X-Fsx": {"kept"}, "X-Forwarded-For": {"kept"}, "User-Agent": {"kept"}}, h)
+	assert.Equal(t, http.Header{"X-Edgex": {"kept"}, "X-Forwarded-For": {"kept"}, "User-Agent": {"kept"}}, h)
 }
 
 // writeCloser adapts a net.Conn to tcp.WriteCloser.

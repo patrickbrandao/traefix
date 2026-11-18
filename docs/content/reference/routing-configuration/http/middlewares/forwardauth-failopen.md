@@ -14,7 +14,7 @@ http:
   middlewares:
     bot:
       forwardAuth:
-        address: http://10.249.255.254:9003/auth
+        address: http://10.0.0.10:9000/auth
         # The default timeout is 30s: set a short one for a verdict server.
         timeout: 200ms
         # Forward only these client headers, so that the client Cookie and Authorization stay out of the authentication request.
@@ -25,41 +25,41 @@ http:
         requestHeaders:
           Authorization: "Bearer my-key"
         authResponseHeaders:
-          - X-Fs-Verdict
-          - X-Fs-Score
+          - X-Verdict
+          - X-Score
         failOpen:
-          denyRequiresResponseHeader: X-Fs-Verdict
+          denyRequiresResponseHeader: X-Verdict
           header:
-            name: X-Fs-Verdict
+            name: X-Verdict
             value: unavailable
 ```
 
 ```toml tab="Structured (TOML)"
 [http.middlewares.bot.forwardAuth]
-  address = "http://10.249.255.254:9003/auth"
+  address = "http://10.0.0.10:9000/auth"
   # The default timeout is 30s: set a short one for a verdict server.
   timeout = "200ms"
   # Forward only these client headers, so that the client Cookie and Authorization stay out of the authentication request.
   authRequestHeaders = ["User-Agent", "Accept", "Accept-Language"]
-  authResponseHeaders = ["X-Fs-Verdict", "X-Fs-Score"]
+  authResponseHeaders = ["X-Verdict", "X-Score"]
   [http.middlewares.bot.forwardAuth.requestHeaders]
     Authorization = "Bearer my-key"
   [http.middlewares.bot.forwardAuth.failOpen]
-    denyRequiresResponseHeader = "X-Fs-Verdict"
+    denyRequiresResponseHeader = "X-Verdict"
     [http.middlewares.bot.forwardAuth.failOpen.header]
-      name = "X-Fs-Verdict"
+      name = "X-Verdict"
       value = "unavailable"
 ```
 
 ```yaml tab="Labels"
 labels:
-  - "traefik.http.middlewares.bot.forwardauth.address=http://10.249.255.254:9003/auth"
+  - "traefik.http.middlewares.bot.forwardauth.address=http://10.0.0.10:9000/auth"
   - "traefik.http.middlewares.bot.forwardauth.timeout=200ms"
   - "traefik.http.middlewares.bot.forwardauth.authRequestHeaders=User-Agent,Accept,Accept-Language"
   - "traefik.http.middlewares.bot.forwardauth.requestHeaders.Authorization=Bearer my-key"
-  - "traefik.http.middlewares.bot.forwardauth.authResponseHeaders=X-Fs-Verdict,X-Fs-Score"
-  - "traefik.http.middlewares.bot.forwardauth.failOpen.denyRequiresResponseHeader=X-Fs-Verdict"
-  - "traefik.http.middlewares.bot.forwardauth.failOpen.header.name=X-Fs-Verdict"
+  - "traefik.http.middlewares.bot.forwardauth.authResponseHeaders=X-Verdict,X-Score"
+  - "traefik.http.middlewares.bot.forwardauth.failOpen.denyRequiresResponseHeader=X-Verdict"
+  - "traefik.http.middlewares.bot.forwardauth.failOpen.header.name=X-Verdict"
   - "traefik.http.middlewares.bot.forwardauth.failOpen.header.value=unavailable"
 ```
 
@@ -71,8 +71,8 @@ The Kubernetes `Middleware` resource doesn't support these options yet.
 |:------|:------------|:--------|:---------|
 | <a id="opt-requestHeaders" href="#opt-requestHeaders" title="#opt-requestHeaders">`requestHeaders`</a> | Headers set on the authentication request, replacing the client headers of the same name, for example an `Authorization` header with the key of the authentication server. Traefix treats the values as secrets: the API and the logs show them redacted. With an `http` or `h2c` address whose host is neither a loopback nor a private IP address, the middleware fails to load, so that a key doesn't cross a public network in clear text. With the `service` option, Traefix doesn't check the transport. | | No |
 | <a id="opt-failOpen" href="#opt-failOpen" title="#opt-failOpen">`failOpen`</a> | Lets the request reach the backend when the authentication server gives no verdict, as described in [Fail-Open Behavior](#fail-open-behavior). An empty block, `failOpen: {}`, enables it with no option. When unset, the failures of the authentication server fail the request. | | No |
-| <a id="opt-failOpen-denyRequiresResponseHeader" href="#opt-failOpen-denyRequiresResponseHeader" title="#opt-failOpen-denyRequiresResponseHeader">`failOpen.denyRequiresResponseHeader`</a> | Header that a `4XX` response of the authentication server must carry to deny the request, for example `X-Fs-Verdict`. A `4XX` response without it, such as a `401` for an invalid key or a `429` rate limit of the authentication server, lets the request through. When unset, every `4XX` response denies the request. | | No |
-| <a id="opt-failOpen-header-name" href="#opt-failOpen-header-name" title="#opt-failOpen-header-name">`failOpen.header.name`</a> | Name of the header set on a request let through after a failure, for example `X-Fs-Verdict`. When unset, Traefix sets no header. | | No |
+| <a id="opt-failOpen-denyRequiresResponseHeader" href="#opt-failOpen-denyRequiresResponseHeader" title="#opt-failOpen-denyRequiresResponseHeader">`failOpen.denyRequiresResponseHeader`</a> | Header that a `4XX` response of the authentication server must carry to deny the request, for example `X-Verdict`. A `4XX` response without it, such as a `401` for an invalid key or a `429` rate limit of the authentication server, lets the request through. When unset, every `4XX` response denies the request. | | No |
+| <a id="opt-failOpen-header-name" href="#opt-failOpen-header-name" title="#opt-failOpen-header-name">`failOpen.header.name`</a> | Name of the header set on a request let through after a failure, for example `X-Verdict`. When unset, Traefix sets no header. | | No |
 | <a id="opt-failOpen-header-value" href="#opt-failOpen-header-value" title="#opt-failOpen-header-value">`failOpen.header.value`</a> | Value of that header, for example `unavailable`. | | No |
 
 !!! warning "List the forwarded headers in `authRequestHeaders`"
