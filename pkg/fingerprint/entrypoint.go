@@ -34,6 +34,7 @@ func Enabled() bool {
 
 type headerNames struct {
 	srcIP, srcPort, dstPort, connID, proto, ja3, ja4, h2, ja4h, alpn, ja4t string
+	serverIP, serverPort, timestamp, ja3n, ttl, transport                  string
 }
 
 // EntryPoint identifies and fingerprints the connections and requests of an entry point.
@@ -97,6 +98,13 @@ func NewEntryPoint(ctx context.Context, name string, cfg *static.Fingerprint, h2
 		ja4h:    textproto.CanonicalMIMEHeaderKey(prefix + "Ja4h"),
 		alpn:    textproto.CanonicalMIMEHeaderKey(prefix + "Alpn"),
 		ja4t:    textproto.CanonicalMIMEHeaderKey(prefix + "Ja4t"),
+
+		serverIP:   textproto.CanonicalMIMEHeaderKey(prefix + "Server-Ip"),
+		serverPort: textproto.CanonicalMIMEHeaderKey(prefix + "Server-Port"),
+		timestamp:  textproto.CanonicalMIMEHeaderKey(prefix + "Time"),
+		ja3n:       textproto.CanonicalMIMEHeaderKey(prefix + "Ja3n"),
+		ttl:        textproto.CanonicalMIMEHeaderKey(prefix + "Ttl"),
+		transport:  textproto.CanonicalMIMEHeaderKey(prefix + "Transport"),
 	}
 
 	if h2 != nil && h2.MaxDecoderHeaderTableSize > 0 {
@@ -192,6 +200,7 @@ func (e *EntryPoint) Accept(c tcp.WriteCloser) tcp.WriteCloser {
 			log.Debug().Err(err).Msg("Reading the saved SYN")
 		}
 		info.syn, info.rtt = syn, rtt
+		info.tcpConn = tc
 	}
 
 	e.mu.Lock()
@@ -262,6 +271,7 @@ func (e *EntryPoint) QUICConnContext(ctx context.Context, c *quic.Conn) context.
 		info.hello = h.raw
 		info.helloTruncated = h.truncated
 		info.quicParams = h.params
+		info.quicInitial = h.initial
 	}
 	if t, ok := c.QlogTrace().(*quicTrace); ok {
 		info.h3 = t
@@ -339,6 +349,7 @@ func (e *EntryPoint) finalizeConn(info *connInfo, proto string) {
 			t.JA3, t.JA3String, t.JA4 = info.ja3, info.ja3Str, info.ja4
 			t.JA3NString = hello.JA3N()
 			t.JA3N = md5Hex(t.JA3NString)
+			info.ja3n = t.JA3N
 			t.JA4R, t.JA4O = ja4.R, ja4.O
 		}
 		if state.HandshakeComplete {
@@ -433,6 +444,7 @@ func (e *EntryPoint) tcpRecord(info *connInfo) *tcpRecord {
 	}
 
 	info.ja4t = syn.JA4T
+	info.synView = syn
 	rec := &tcpRecord{JA4T: syn.JA4T, P0F: syn.P0F, TTL: syn.TTL, RTTMicros: info.rtt.Microseconds()}
 	if e.rawBytes {
 		rec.SYN = info.syn

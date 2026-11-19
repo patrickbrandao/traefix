@@ -507,6 +507,12 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 		assert.Regexp(t, `^t13d\d{4}h2_`, got["X-Edge-Ja4"])
 		assert.Regexp(t, `^[0-9a-f]{32}$`, got["X-Edge-Ja3"])
 		assert.Equal(t, "h2", got["X-Edge-Alpn"])
+		assert.Equal(t, "127.0.0.1", got["X-Edge-Server-Ip"])
+		assert.Equal(t, got["X-Edge-Dst-Port"], got["X-Edge-Server-Port"])
+		assert.Regexp(t, `^[0-9a-f]{32}$`, got["X-Edge-Ja3n"])
+		requestTime, err := time.Parse(time.RFC3339Nano, got["X-Edge-Time"])
+		require.NoError(t, err)
+		assert.WithinDuration(t, time.Now(), requestTime, 10*time.Second)
 		assert.NotEmpty(t, got["X-Edge-H2"])
 		assert.Regexp(t, `^ge20`, got["X-Edge-Ja4h"])
 	})
@@ -536,6 +542,8 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 		// The JA4 of QUIC comes from the ClientHello the QUIC library gives to the TLS callback.
 		assert.Regexp(t, `^q13d\d{4}h3_`, got["X-Edge-Ja4"])
 		assert.Equal(t, "h3", got["X-Edge-Alpn"])
+		assert.Regexp(t, `^proto=udp,ipv=4,.*rtt_us=\d+,.*conn_age_us=\d+,req_seq=\d+$`, got["X-Edge-Transport"])
+		assert.NotEmpty(t, got["X-Edge-Server-Port"])
 		// Without http3HeaderOrder, the HTTP/3 header order is not captured.
 		assert.NotContains(t, got, "X-Edge-Ja4h")
 	})

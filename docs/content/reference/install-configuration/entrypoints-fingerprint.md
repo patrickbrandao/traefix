@@ -106,13 +106,19 @@ Traefix adds these headers to each request of the entry point, before any router
 |:-------|:---------|
 | <a id="opt-X-Traefix-Src-Ip" href="#opt-X-Traefix-Src-Ip" title="#opt-X-Traefix-Src-Ip">`X-Traefix-Src-Ip`</a> | IP address of the client, from the socket, or from the PROXY protocol header when the entry point accepts it. An IPv4 client shows in dotted form. |
 | <a id="opt-X-Traefix-Src-Port" href="#opt-X-Traefix-Src-Port" title="#opt-X-Traefix-Src-Port">`X-Traefix-Src-Port`</a> | Port of the client, from the same source as `X-Traefix-Src-Ip`. |
+| <a id="opt-X-Traefix-Server-Ip" href="#opt-X-Traefix-Server-Ip" title="#opt-X-Traefix-Server-Ip">`X-Traefix-Server-Ip`</a> | IP address the connection arrived on, from the socket. Behind a destination NAT, such as the published ports of a Docker container in a bridge network, it is the address after the NAT, the one of the container. Absent on HTTP/3, whose UDP socket is bound to all the addresses. |
+| <a id="opt-X-Traefix-Server-Port" href="#opt-X-Traefix-Server-Port" title="#opt-X-Traefix-Server-Port">`X-Traefix-Server-Port`</a> | Port the connection arrived on, the same value as `X-Traefix-Dst-Port`. |
+| <a id="opt-X-Traefix-Time" href="#opt-X-Traefix-Time" title="#opt-X-Traefix-Time">`X-Traefix-Time`</a> | Time Traefix finished reading the request header block, in RFC 3339 format with nanoseconds, UTC, from the system clock. It isn't the arrival time of the packets at the network interface. |
 | <a id="opt-X-Traefix-Dst-Port" href="#opt-X-Traefix-Dst-Port" title="#opt-X-Traefix-Dst-Port">`X-Traefix-Dst-Port`</a> | Port of the entry point that accepted the connection. |
 | <a id="opt-X-Traefix-Conn-Id" href="#opt-X-Traefix-Conn-Id" title="#opt-X-Traefix-Conn-Id">`X-Traefix-Conn-Id`</a> | Identifier of the connection, a [ULID](https://github.com/ulid/spec) of 26 characters, ordered by accept time. |
 | <a id="opt-X-Traefix-Proto" href="#opt-X-Traefix-Proto" title="#opt-X-Traefix-Proto">`X-Traefix-Proto`</a> | HTTP version of the request: `h1`, `h2` or `h3`. |
 | <a id="opt-X-Traefix-Ja3" href="#opt-X-Traefix-Ja3" title="#opt-X-Traefix-Ja3">`X-Traefix-Ja3`</a> | MD5 hash of the [JA3](https://github.com/salesforce/ja3) fingerprint of the TLS ClientHello. |
+| <a id="opt-X-Traefix-Ja3n" href="#opt-X-Traefix-Ja3n" title="#opt-X-Traefix-Ja3n">`X-Traefix-Ja3n`</a> | MD5 hash of the JA3N fingerprint: the JA3 with the extensions sorted, which stays the same when a client shuffles its extensions, as Chrome does. |
 | <a id="opt-X-Traefix-Ja4" href="#opt-X-Traefix-Ja4" title="#opt-X-Traefix-Ja4">`X-Traefix-Ja4`</a> | [JA4](https://github.com/FoxIO-LLC/ja4) fingerprint of the TLS ClientHello. |
 | <a id="opt-X-Traefix-Alpn" href="#opt-X-Traefix-Alpn" title="#opt-X-Traefix-Alpn">`X-Traefix-Alpn`</a> | Application protocols offered in the TLS ClientHello, in the client order, separated by commas, for example `h2,http/1.1`. The bytes of a protocol name that are not visible ASCII, the comma and the percent sign are percent-encoded, for example `%2C`. |
 | <a id="opt-X-Traefix-Ja4t" href="#opt-X-Traefix-Ja4t" title="#opt-X-Traefix-Ja4t">`X-Traefix-Ja4t`</a> | [JA4T](https://github.com/FoxIO-LLC/ja4) fingerprint of the TCP SYN of the connection, with the `tcp` option. |
+| <a id="opt-X-Traefix-Ttl" href="#opt-X-Traefix-Ttl" title="#opt-X-Traefix-Ttl">`X-Traefix-Ttl`</a> | TTL, or hop limit, of the TCP SYN as received, with the `tcp` option. |
+| <a id="opt-X-Traefix-Transport" href="#opt-X-Traefix-Transport" title="#opt-X-Traefix-Transport">`X-Traefix-Transport`</a> | What the IP, TCP and QUIC layers tell of the connection, as `key=value` pairs separated by commas, described in [Transport Header](#transport-header). Over TCP, it needs the `tcp` option. |
 | <a id="opt-X-Traefix-H2" href="#opt-X-Traefix-H2" title="#opt-X-Traefix-H2">`X-Traefix-H2`</a> | Akamai fingerprint of the HTTP/2 connection: settings, window update, priority frames and pseudo-header order. Present on HTTP/2 requests only. |
 | <a id="opt-X-Traefix-Ja4h" href="#opt-X-Traefix-Ja4h" title="#opt-X-Traefix-Ja4h">`X-Traefix-Ja4h`</a> | [JA4H](https://github.com/FoxIO-LLC/ja4) fingerprint of the request, computed with the header order and case the client sent, and with the cookie values, which only leave Traefix with `allowSensitiveFields`. |
 
@@ -140,6 +146,44 @@ The SYN is the one of the peer that opened the TCP connection to Traefix. It tel
 - The kernel doesn't keep the SYN of the connections it accepted with SYN cookies, for example during a SYN flood.
 
 The kernel keeps about 100 bytes per connection until Traefix reads them, at the accept.
+
+### Transport Header
+
+`X-Traefix-Transport` carries `key=value` pairs separated by commas. The values are integers, `0` or `1` for the flags, and durations in microseconds with an `_us` suffix. A list inside a value is separated by `-`. A receiving service must ignore the keys it doesn't know, as new keys can appear.
+
+Over TCP, with the `tcp` option, on Linux:
+
+```text
+proto=tcp,ipv=4,ttl=48,ttl_init=64,hops=16,dscp=0,ecn=0,df=1,ipid=nz,ipopt=0,syn_len=64,syn_win=65535,syn_mss=1460,mtu_est=1500,syn_wscale=6,syn_sack=1,syn_ts=1,syn_ecn=0,syn_tfo=0,syn_opts=2-1-3-1-1-8-4-0-0,mss_snd=1448,mss_rcv=1448,mss_adv=1460,pmtu=1500,wscale_snd=6,wscale_rcv=7,opt_ts=1,opt_sack=1,opt_ecn=0,rtt_syn_us=23412,rtt_us=23980,rttvar_us=4210,rtt_min_us=23101,cwnd=10,retrans=0,lost=0,cc=cubic,conn_age_us=48211,req_seq=3
+```
+
+| Keys | Source | Contain |
+|:-----|:-------|:--------|
+| <a id="opt-proto-ipv" href="#opt-proto-ipv" title="#opt-proto-ipv">`proto`, `ipv`</a> | Connection | `tcp` or `udp`, and the IP version, `4` or `6`. |
+| <a id="opt-ttl-ttl-init-hops" href="#opt-ttl-ttl-init-hops" title="#opt-ttl-ttl-init-hops">`ttl`, `ttl_init`, `hops`</a> | IP header of the SYN | TTL or hop limit as received, the usual initial value closest above it (32, 64, 128 or 255), and the distance in hops this guess gives. |
+| <a id="opt-dscp-ecn" href="#opt-dscp-ecn" title="#opt-dscp-ecn">`dscp`, `ecn`</a> | IP header of the SYN | DSCP and ECN bits of the TOS or traffic class. |
+| <a id="opt-df-ipid-ipopt" href="#opt-df-ipid-ipopt" title="#opt-df-ipid-ipopt">`df`, `ipid`, `ipopt`</a> | IPv4 header of the SYN | DF flag, identification `0` or non-zero (`nz`), length of the IP options. |
+| <a id="opt-flow" href="#opt-flow" title="#opt-flow">`flow`</a> | IPv6 header of the SYN | `1` when the flow label isn't zero. |
+| <a id="opt-syn-len-syn-win" href="#opt-syn-len-syn-win" title="#opt-syn-len-syn-win">`syn_len`, `syn_win`</a> | SYN | Length of the packet, and TCP window, unscaled. |
+| <a id="opt-syn-mss-mtu-est" href="#opt-syn-mss-mtu-est" title="#opt-syn-mss-mtu-est">`syn_mss`, `mtu_est`</a> | SYN | MSS option as received, which a device on the path may have lowered (PPPoE, VPN, MSS clamping), and the MTU it suggests: the MSS plus 40 bytes in IPv4, 60 in IPv6. 1500 is plain Ethernet, 1492 PPPoE, about 1420 WireGuard. |
+| <a id="opt-syn-wscale-syn-sack-syn-ts" href="#opt-syn-wscale-syn-sack-syn-ts" title="#opt-syn-wscale-syn-sack-syn-ts">`syn_wscale`, `syn_sack`, `syn_ts`</a> | SYN | Window scale, SACK permitted and timestamps options. |
+| <a id="opt-syn-ecn-syn-tfo-syn-opts" href="#opt-syn-ecn-syn-tfo-syn-opts" title="#opt-syn-ecn-syn-tfo-syn-opts">`syn_ecn`, `syn_tfo`, `syn_opts`</a> | SYN | ECN asked with the ECE and CWR flags, TCP Fast Open option, and the kinds of the options in order, as in JA4T. |
+| <a id="opt-mss-snd-mss-rcv-mss-adv-pmtu" href="#opt-mss-snd-mss-rcv-mss-adv-pmtu" title="#opt-mss-snd-mss-rcv-mss-adv-pmtu">`mss_snd`, `mss_rcv`, `mss_adv`, `pmtu`</a> | `TCP_INFO` | MSS Traefix sends with, the lower of the client MSS and the path MTU, without the TCP options; the kernel estimate of the segment size it receives, which changes during the connection; the MSS Traefix advertised; and the path MTU the kernel knows. |
+| <a id="opt-wscale-snd-wscale-rcv-opt-ts-opt-sack-opt-ecn" href="#opt-wscale-snd-wscale-rcv-opt-ts-opt-sack-opt-ecn" title="#opt-wscale-snd-wscale-rcv-opt-ts-opt-sack-opt-ecn">`wscale_snd`, `wscale_rcv`, `opt_ts`, `opt_sack`, `opt_ecn`</a> | `TCP_INFO` | Options negotiated, not only offered. |
+| <a id="opt-rtt-syn-us" href="#opt-rtt-syn-us" title="#opt-rtt-syn-us">`rtt_syn_us`</a> | `TCP_INFO` at the accept | Round-trip time of the handshake. |
+| <a id="opt-rtt-us-rttvar-us-rtt-min-us" href="#opt-rtt-us-rttvar-us-rtt-min-us" title="#opt-rtt-us-rttvar-us-rtt-min-us">`rtt_us`, `rttvar_us`, `rtt_min_us`</a> | `TCP_INFO` at the request | Smoothed round-trip time, its variation, and the lowest one. |
+| <a id="opt-cwnd-retrans-lost-cc" href="#opt-cwnd-retrans-lost-cc" title="#opt-cwnd-retrans-lost-cc">`cwnd`, `retrans`, `lost`, `cc`</a> | `TCP_INFO`, `TCP_CONGESTION` | Congestion window in segments, retransmitted and lost segments, congestion control algorithm. |
+| <a id="opt-conn-age-us-req-seq" href="#opt-conn-age-us-req-seq" title="#opt-conn-age-us-req-seq">`conn_age_us`, `req_seq`</a> | Traefix | Time since the connection was accepted, and the rank of the request on the connection, from 1. |
+
+Over HTTP/3:
+
+```text
+proto=udp,ipv=4,quic_ver=1,initial_size=1250,dcid_len=8,scid_len=8,initial_pkts=1,rtt_us=23500,rttvar_us=3900,rtt_min_us=23100,cwnd=13500,lost=0,conn_age_us=31020,req_seq=1
+```
+
+`quic_ver`, `initial_size` (the size of the first datagram of the client, padded by each client to its own size), `dcid_len`, `scid_len` and `initial_pkts` need `export.rawBytes`, which reads the Initial packets. `rtt_us`, `rttvar_us`, `rtt_min_us`, `cwnd` (in bytes) and `lost` (packets) come from the QUIC library. The TTL and the traffic class of the UDP datagrams aren't available.
+
+Traefix reads `TCP_INFO` with one system call per request.
 
 ### HTTP/3
 

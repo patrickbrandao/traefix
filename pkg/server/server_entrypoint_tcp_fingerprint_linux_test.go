@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -85,6 +87,44 @@ func TestFingerprintEntryPoint_tcp(t *testing.T) {
 			// Linux loopback: window 65495 (MSS 65483 for IPv4, 65476 for IPv6), options MSS, SACK permitted,
 			// timestamps, NOP, window scale.
 			assert.Regexp(t, `^\d+_2-4-8-1-3_\d+_\d+$`, got["X-Edge-Ja4t"])
+			// The loopback SYN carries the default TTL or hop limit of the host, which a sysctl may change.
+			ttlFile := "/proc/sys/net/ipv4/ip_default_ttl"
+			if network.name == "ipv6" {
+				ttlFile = "/proc/sys/net/ipv6/conf/lo/hop_limit"
+			}
+			ttlBytes, err := os.ReadFile(ttlFile)
+			require.NoError(t, err)
+			ttl := strings.TrimSpace(string(ttlBytes))
+			ttlValue, err := strconv.Atoi(ttl)
+			require.NoError(t, err)
+
+			assert.Equal(t, ttl, got["X-Edge-Ttl"])
+			assert.Equal(t, network.host, got["X-Edge-Server-Ip"])
+
+			kv := map[string]string{}
+			for pair := range strings.SplitSeq(got["X-Edge-Transport"], ",") {
+				k, v, ok := strings.Cut(pair, "=")
+				require.True(t, ok, pair)
+				kv[k] = v
+			}
+			ipv := "4"
+			if network.name == "ipv6" {
+				ipv = "6"
+			}
+			assert.Equal(t, "tcp", kv["proto"])
+			assert.Equal(t, ipv, kv["ipv"])
+			assert.Equal(t, ttl, kv["ttl"])
+			assert.Equal(t, "0", kv["hops"])
+			assert.Equal(t, "2-4-8-1-3", kv["syn_opts"])
+			assert.Equal(t, "1", kv["syn_sack"])
+			assert.Equal(t, "1", kv["opt_ts"])
+			assert.NotEmpty(t, kv["syn_mss"])
+			assert.NotEmpty(t, kv["mss_snd"])
+			assert.NotEmpty(t, kv["pmtu"])
+			assert.NotEmpty(t, kv["wscale_snd"])
+			assert.NotEmpty(t, kv["cc"])
+			assert.Equal(t, "1", kv["req_seq"])
+			t.Log(got["X-Edge-Transport"])
 
 			var rec map[string]any
 			require.Eventually(t, func() bool {
@@ -100,14 +140,14 @@ func TestFingerprintEntryPoint_tcp(t *testing.T) {
 			tcp, ok := rec["tcp"].(map[string]any)
 			require.True(t, ok, rec)
 			assert.Equal(t, got["X-Edge-Ja4t"], tcp["ja4t"])
-			assert.InDelta(t, 64, tcp["ttl"], 0)
+			assert.InDelta(t, ttlValue, tcp["ttl"], 0)
 			assert.NotEmpty(t, tcp["syn"])
 			p0f, _ := tcp["p0f"].(string)
 			version := "4"
 			if network.name == "ipv6" {
 				version = "6"
 			}
-			assert.True(t, strings.HasPrefix(p0f, version+":64+0:0:"), p0f)
+			assert.True(t, strings.HasPrefix(p0f, version+":"+ttl+"+0:0:"), p0f)
 			assert.Contains(t, p0f, ":mss,sok,ts,nop,ws:")
 		})
 	}

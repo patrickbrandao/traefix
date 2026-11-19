@@ -19,3 +19,7 @@ func saveSYN(*net.TCPListener) error {
 func readSYN(*net.TCPConn) ([]byte, time.Duration, error) {
 	return nil, 0, errSavedSYNUnsupported
 }
+
+func readTCPLive(*net.TCPConn) (*tcpLive, error) {
+	return nil, errSavedSYNUnsupported
+}

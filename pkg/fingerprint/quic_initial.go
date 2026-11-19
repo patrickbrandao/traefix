@@ -196,6 +196,7 @@ type quicLongPacket struct {
 	version uint32
 	initial bool
 	dcid    []byte
+	scidLen int
 	// packet is the whole packet, header included, and pnOffset the offset of its packet number.
 	packet   []byte
 	pnOffset int
@@ -229,6 +230,7 @@ func parseQUICLongHeader(b []byte) (*quicLongPacket, []byte, error) {
 	if scidLen > 20 || len(b) < off+scidLen {
 		return nil, nil, errQUICTruncated
 	}
+	p.scidLen = scidLen
 	off += scidLen
 
 	typ := (b[0] >> 4) & 0x03

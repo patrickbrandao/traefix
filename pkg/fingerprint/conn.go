@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -36,7 +37,7 @@ type connInfo struct {
 	src, dst netip.AddrPort
 
 	// The header values of the connection, formatted once.
-	srcIP, srcPort, dstPort string
+	srcIP, srcPort, dstPort, dstIP string
 
 	mu             sync.Mutex
 	hello          []byte
@@ -55,6 +56,14 @@ type connInfo struct {
 	// syn is the SYN the kernel saved for the connection, and rtt the round-trip time of the handshake.
 	syn []byte
 	rtt time.Duration
+	// synView is the parsed SYN, and tcpConn the socket whose TCP_INFO the transport header reads.
+	synView *SYN
+	tcpConn *net.TCPConn
+
+	quicInitial quicInitialInfo
+
+	// requests counts the requests of the connection, for the transport header.
+	requests atomic.Int64
 
 	// finalize computes the connection record once, on the first request or when the connection closes.
 	finalize sync.Once
@@ -63,6 +72,7 @@ type connInfo struct {
 	ja3Str   string
 	ja4      string
 	alpn     string
+	ja3n     string
 	ja4t     string
 	akamai   string
 	record   *connectionRecord
@@ -83,6 +93,10 @@ func newConnInfo(c interface {
 	info.srcIP = info.src.Addr().String()
 	info.srcPort = strconv.Itoa(int(info.src.Port()))
 	info.dstPort = strconv.Itoa(int(info.dst.Port()))
+	// A socket bound to all the addresses gives no destination address, e.g. the UDP socket of HTTP/3.
+	if a := info.dst.Addr(); a.IsValid() && !a.IsUnspecified() {
+		info.dstIP = a.String()
+	}
 
 	return info
 }

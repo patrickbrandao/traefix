@@ -70,3 +70,60 @@ func readSYN(c *net.TCPConn) ([]byte, time.Duration, error) {
 
 	return syn, rtt, readErr
 }
+
+// The bits of tcpi_options (include/uapi/linux/tcp.h).
+const (
+	tcpiOptTimestamps = 1
+	tcpiOptSACK       = 2
+	tcpiOptWScale     = 4
+	tcpiOptECN        = 8
+)
+
+// readTCPLive reads what the kernel knows of the connection now (TCP_INFO and TCP_CONGESTION).
+func readTCPLive(c *net.TCPConn) (*tcpLive, error) {
+	rc, err := c.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+
+	var live *tcpLive
+	var readErr error
+	err = rc.Control(func(fd uintptr) {
+		info, err := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
+		if err != nil {
+			readErr = err
+			return
+		}
+		// tcpi_snd_wscale and tcpi_rcv_wscale are the 4-bit fields of the byte after tcpi_options,
+		// which the unix.TCPInfo struct leaves as padding.
+		wscale := (*[8]byte)(unsafe.Pointer(info))[6]
+		live = &tcpLive{
+			sndMSS:     info.Snd_mss,
+			rcvMSS:     info.Rcv_mss,
+			advMSS:     info.Advmss,
+			pmtu:       info.Pmtu,
+			rtt:        info.Rtt,
+			rttVar:     info.Rttvar,
+			minRTT:     info.Min_rtt,
+			cwnd:       info.Snd_cwnd,
+			retrans:    info.Total_retrans,
+			lost:       info.Lost,
+			timestamps: info.Options&tcpiOptTimestamps != 0,
+			sack:       info.Options&tcpiOptSACK != 0,
+			ecn:        info.Options&tcpiOptECN != 0,
+		}
+		if info.Options&tcpiOptWScale != 0 {
+			live.sndWScale, live.rcvWScale = int(wscale&0xf), int(wscale>>4)
+		} else {
+			live.sndWScale, live.rcvWScale = -1, -1
+		}
+		if cc, err := unix.GetsockoptString(int(fd), unix.IPPROTO_TCP, unix.TCP_CONGESTION); err == nil {
+			live.cc = cc
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return live, readErr
+}

@@ -34,6 +34,16 @@ type quicHello struct {
 	params    []uint64
 	assembler *QUICClientHelloAssembler
 	truncated bool
+
+	initial quicInitialInfo
+}
+
+// quicInitialInfo is what the first Initial datagrams of a client tell, for the transport header.
+type quicInitialInfo struct {
+	version          uint32
+	size             int
+	dcidLen, scidLen int
+	packets          int
 }
 
 type quicPending struct {
@@ -145,6 +155,15 @@ func (e *EntryPoint) observeInitial(key string, datagram []byte) {
 	h := e.quic.get(key, true)
 	if h == nil || h.raw != nil || h.truncated {
 		return
+	}
+
+	h.initial.packets++
+	if h.initial.size == 0 {
+		if pkt, _, err := parseQUICLongHeader(datagram); err == nil && pkt.initial {
+			h.initial.version = pkt.version
+			h.initial.size = len(datagram)
+			h.initial.dcidLen, h.initial.scidLen = len(pkt.dcid), pkt.scidLen
+		}
 	}
 
 	_, frames, err := DecryptQUICInitials(datagram)

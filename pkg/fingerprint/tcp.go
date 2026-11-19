@@ -30,6 +30,8 @@ const (
 	tcpOptSACK   = 5
 	tcpOptTS     = 8
 
+	tcpOptFastOpen = 34
+
 	// p0fMaxOptions and p0fMaxDist are the MAX_TCP_OPT and MAX_DIST of p0f.
 	p0fMaxOptions = 24
 	p0fMaxDist    = 35
@@ -83,6 +85,33 @@ type SYN struct {
 	JA4T string
 	// P0F is the p0f v3 signature of the SYN, e.g. 4:64+0:0:1460:mss*44,7:mss,sok,ts,nop,ws:df,id+:0.
 	P0F string
+
+	// The fields below are the ones of the IP and TCP headers of the SYN, as received.
+
+	// TrafficClass is the IPv4 TOS or the IPv6 traffic class: DSCP in the 6 high bits, ECN in the 2 low bits.
+	TrafficClass uint8
+	// DF is the IPv4 don't fragment flag.
+	DF bool
+	// IPIDZero is set when the IPv4 identification is zero.
+	IPIDZero bool
+	// IPOptionsLen is the length of the IPv4 options.
+	IPOptionsLen int
+	// FlowLabel is the IPv6 flow label.
+	FlowLabel uint32
+	// Length is the length of the packet, from its IP header.
+	Length int
+	// Window is the TCP window, unscaled.
+	Window uint16
+	// MSS and WScale are the values of the options, -1 when absent.
+	MSS, WScale int
+	// SACK and Timestamps tell whether the options are present.
+	SACK, Timestamps bool
+	// ECN is set when the SYN asks for ECN, with both the ECE and CWR flags.
+	ECN bool
+	// FastOpen is set when the SYN carries a TCP Fast Open option.
+	FastOpen bool
+	// Options are the kinds of the TCP options, in order, as in JA4T, e.g. 2-4-8-1-3.
+	Options string
 }
 
 // ParseSYN reads the SYN packet, from its IP header.
@@ -95,13 +124,44 @@ func ParseSYN(packet []byte) (*SYN, error) {
 		return nil, errSYNNotSYN
 	}
 
-	return &SYN{
-		IPVersion: p.ipVersion,
-		Src:       p.src,
-		TTL:       int(p.ttl),
-		JA4T:      ja4t(p.tcp),
-		P0F:       p.signature(),
-	}, nil
+	fp := ja4t(p.tcp)
+	syn := &SYN{
+		IPVersion:    p.ipVersion,
+		Src:          p.src,
+		TTL:          int(p.ttl),
+		JA4T:         fp,
+		P0F:          p.signature(),
+		TrafficClass: p.trafficClass,
+		DF:           p.quirks&quirkDF != 0,
+		IPIDZero:     p.ipIDZero,
+		IPOptionsLen: int(p.ipOptLen),
+		FlowLabel:    p.flowLabel,
+		Length:       p.length,
+		Window:       p.window,
+		MSS:          -1,
+		WScale:       -1,
+		ECN:          p.flags&(tcpFlagECE|tcpFlagCWR) == tcpFlagECE|tcpFlagCWR,
+	}
+	for _, k := range p.layout {
+		switch k {
+		case tcpOptMSS:
+			syn.MSS = int(p.mss)
+		case tcpOptWScale:
+			syn.WScale = int(p.wscale)
+		case tcpOptSACKOK:
+			syn.SACK = true
+		case tcpOptTS:
+			syn.Timestamps = true
+		case tcpOptFastOpen:
+			syn.FastOpen = true
+		}
+	}
+	// The option kinds are the middle part of JA4T.
+	if _, rest, ok := strings.Cut(fp, "_"); ok {
+		syn.Options, _, _ = strings.Cut(rest, "_")
+	}
+
+	return syn, nil
 }
 
 // ja4t formats the window, the option kinds, the MSS and the window scale of a TCP header, as the FoxIO tool does
@@ -187,22 +247,26 @@ options:
 
 // p0fPacket holds the fields of a packet that p0f reads (struct packet_data).
 type p0fPacket struct {
-	ipVersion int
-	src       []byte
-	ttl       uint8
-	ipOptLen  uint8
-	totHdr    int
-	quirks    uint32
-	flags     uint8
-	window    uint16
-	seq       uint32
-	layout    []uint8
-	eolPad    uint8
-	mss       uint16
-	wscale    uint8
-	ts1       uint32
-	payLen    int
-	tcp       []byte
+	ipVersion    int
+	trafficClass uint8
+	ipIDZero     bool
+	flowLabel    uint32
+	length       int
+	src          []byte
+	ttl          uint8
+	ipOptLen     uint8
+	totHdr       int
+	quirks       uint32
+	flags        uint8
+	window       uint16
+	seq          uint32
+	layout       []uint8
+	eolPad       uint8
+	mss          uint16
+	wscale       uint8
+	ts1          uint32
+	payLen       int
+	tcp          []byte
 }
 
 // parseP0FPacket reads a packet from its IP header, as parse_packet of p0f does.
@@ -227,6 +291,9 @@ func parseP0FPacket(ip []byte) (*p0fPacket, error) {
 			return nil, errSYNNotTCP
 		}
 		p.ipVersion = 4
+		p.trafficClass = ip[1]
+		p.ipIDZero = binary.BigEndian.Uint16(ip[4:6]) == 0
+		p.length = total
 		p.src = ip[12:16]
 		p.ipOptLen = uint8(hl - 20)
 		p.ttl = ip[8]
@@ -259,6 +326,9 @@ func parseP0FPacket(ip []byte) (*p0fPacket, error) {
 			return nil, errSYNNotTCP
 		}
 		p.ipVersion = 6
+		p.trafficClass = uint8(verTOS >> 20)
+		p.flowLabel = verTOS & 0xfffff
+		p.length = total
 		p.src = ip[8:24]
 		p.ttl = ip[7]
 		if verTOS&0xfffff != 0 {

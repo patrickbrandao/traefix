@@ -3,6 +3,7 @@ package fingerprint
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -128,13 +129,19 @@ func (s *headerSetter) set(name, value string) {
 }
 
 func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
-	s := headerSetter{h: req.Header, vals: make([]string, 0, 11), names: make([]string, 0, 11)}
+	s := headerSetter{h: req.Header, vals: make([]string, 0, 17), names: make([]string, 0, 17)}
 	proto := protoOf(req)
+
+	s.set(e.headers.timestamp, st.start.UTC().Format(time.RFC3339Nano))
 
 	if info := st.conn; info != nil {
 		s.set(e.headers.srcIP, info.srcIP)
 		s.set(e.headers.srcPort, info.srcPort)
 		s.set(e.headers.dstPort, info.dstPort)
+		if info.dstIP != "" {
+			s.set(e.headers.serverIP, info.dstIP)
+		}
+		s.set(e.headers.serverPort, info.dstPort)
 		s.set(e.headers.connID, info.id)
 		if info.ja3 != "" {
 			s.set(e.headers.ja3, info.ja3)
@@ -147,6 +154,15 @@ func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
 		}
 		if info.ja4t != "" {
 			s.set(e.headers.ja4t, info.ja4t)
+		}
+		if info.ja3n != "" {
+			s.set(e.headers.ja3n, info.ja3n)
+		}
+		if info.synView != nil {
+			s.set(e.headers.ttl, strconv.Itoa(info.synView.TTL))
+		}
+		if v := transportHeader(info, st.start, info.requests.Add(1)); v != "" {
+			s.set(e.headers.transport, v)
 		}
 		if proto == "h2" && info.akamai != "" {
 			s.set(e.headers.h2, info.akamai)
