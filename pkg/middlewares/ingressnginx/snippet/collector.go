@@ -507,8 +507,15 @@ func buildLocationMatcher(pathPattern string) (locationMatcher, error) {
 		}, nil
 	}
 
+	pathPattern = strings.TrimSpace(pathPattern)
+
+	// The ^~ modifier still uses a literal prefix; it is not part of the request path.
+	if prefix, ok := strings.CutPrefix(pathPattern, "^~"); ok {
+		pathPattern = strings.TrimSpace(prefix)
+	}
+
 	// Prefix match
-	pathPattern = trimQuote(strings.TrimSpace(pathPattern))
+	pathPattern = trimQuote(pathPattern)
 	return func(req *http.Request) bool {
 		return strings.HasPrefix(ingressnginx.OriginalPath(req), pathPattern)
 	}, nil
