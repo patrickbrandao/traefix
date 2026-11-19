@@ -94,7 +94,7 @@ func TestGatewayClassLabelSelector(t *testing.T) {
 	kubeClient := kubefake.NewClientset(k8sObjects...)
 	gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-	client := newClientImpl(kubeClient, gwClient)
+	client := NewClient(&Provider{}, kubeClient, gwClient)
 
 	// This is initialized by the Provider init method but this cannot be called in a unit test.
 	client.labelSelector = "name=traefik-internal"
@@ -110,13 +110,13 @@ func TestGatewayClassLabelSelector(t *testing.T) {
 	p := Provider{
 		EntryPoints:   map[string]Entrypoint{"http": {Address: ":9080"}},
 		StatusAddress: &StatusAddress{IP: "1.2.3.4"},
-		client:        client,
+		k8sClient:     client,
 	}
 
-	_, statusReport, err := p.loadConfigurationFromGateways(t.Context())
+	_, statusReport, err := p.BuildConfiguration(t.Context())
 	require.NoError(t, err)
 
-	statusReport.Flush(t.Context(), p.client)
+	statusReport.Flush(t.Context(), p.k8sClient)
 
 	gw, err := gwClient.GatewayV1().Gateways("default").Get(t.Context(), "traefik-external", metav1.GetOptions{})
 	require.NoError(t, err)
@@ -137,7 +137,7 @@ func TestGatewayClassFieldSelector(t *testing.T) {
 	_, gwObjects := readResources(t, []string{"gatewayclass_labelselector.yaml"})
 
 	gwClient := newGatewaySimpleClientSet(t, gwObjects...)
-	client := newClientImpl(kubefake.NewClientset(), gwClient)
+	client := NewClient(&Provider{}, kubefake.NewClientset(), gwClient)
 	client.gatewayClass = "traefik-internal"
 
 	eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
@@ -186,7 +186,7 @@ func TestGatewayScoping(t *testing.T) {
 	kubeClient := kubefake.NewClientset(k8sObjects...)
 	gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-	client := newClientImpl(kubeClient, gwClient)
+	client := NewClient(&Provider{}, kubeClient, gwClient)
 
 	eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 	require.NoError(t, err)
@@ -199,14 +199,14 @@ func TestGatewayScoping(t *testing.T) {
 		EntryPoints:   map[string]Entrypoint{"http": {Address: ":9080"}},
 		StatusAddress: &StatusAddress{IP: "1.2.3.4"},
 		// Scope the provider to a single Gateway.
-		Gateways: []NamespacedName{{Namespace: "default", Name: "traefik-internal"}},
-		client:   client,
+		Gateways:  []NamespacedName{{Namespace: "default", Name: "traefik-internal"}},
+		k8sClient: client,
 	}
 
-	_, statusReport, err := p.loadConfigurationFromGateways(t.Context())
+	_, statusReport, err := p.BuildConfiguration(t.Context())
 	require.NoError(t, err)
 
-	statusReport.Flush(t.Context(), p.client)
+	statusReport.Flush(t.Context(), p.k8sClient)
 
 	// The scoped Gateway is managed and gets a status address.
 	gw, err := gwClient.GatewayV1().Gateways("default").Get(t.Context(), "traefik-internal", metav1.GetOptions{})
@@ -5582,7 +5582,7 @@ func TestLoadHTTPRoutes(t *testing.T) {
 			}
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -5596,10 +5596,10 @@ func TestLoadHTTPRoutes(t *testing.T) {
 				EntryPoints:              test.entryPoints,
 				NativeLBByDefault:        test.nativeLB,
 				RetryMaxRequestBodyBytes: test.retryMaxRequestBodyBytes,
-				client:                   client,
+				k8sClient:                client,
 			}
 
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			assert.Equal(t, test.expected, conf)
@@ -6080,7 +6080,7 @@ func TestLoadHTTPRoutes_backendExtensionRef(t *testing.T) {
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -6092,7 +6092,7 @@ func TestLoadHTTPRoutes_backendExtensionRef(t *testing.T) {
 
 			p := Provider{
 				EntryPoints: test.entryPoints,
-				client:      client,
+				k8sClient:   client,
 			}
 
 			for group, kindFuncs := range test.groupKindBackendFuncs {
@@ -6100,7 +6100,7 @@ func TestLoadHTTPRoutes_backendExtensionRef(t *testing.T) {
 					p.RegisterBackendFuncs(group, kind, backendFunc)
 				}
 			}
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			assert.Equal(t, test.expected, conf)
@@ -6441,7 +6441,7 @@ func TestLoadHTTPRoutes_filterExtensionRef(t *testing.T) {
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -6453,7 +6453,7 @@ func TestLoadHTTPRoutes_filterExtensionRef(t *testing.T) {
 
 			p := Provider{
 				EntryPoints: test.entryPoints,
-				client:      client,
+				k8sClient:   client,
 			}
 
 			for group, kindFuncs := range test.groupKindFilterFuncs {
@@ -6461,7 +6461,7 @@ func TestLoadHTTPRoutes_filterExtensionRef(t *testing.T) {
 					p.RegisterFilterFuncs(group, kind, filterFunc)
 				}
 			}
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			assert.NoError(t, err)
 
 			assert.Equal(t, test.expected, conf)
@@ -7426,7 +7426,7 @@ func TestLoadGRPCRoutes(t *testing.T) {
 			}
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -7437,10 +7437,10 @@ func TestLoadGRPCRoutes(t *testing.T) {
 
 			p := Provider{
 				EntryPoints: test.entryPoints,
-				client:      client,
+				k8sClient:   client,
 			}
 
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			assert.Equal(t, test.expected, conf)
@@ -7738,7 +7738,7 @@ func TestLoadGRPCRoutes_filterExtensionRef(t *testing.T) {
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -7750,7 +7750,7 @@ func TestLoadGRPCRoutes_filterExtensionRef(t *testing.T) {
 
 			p := Provider{
 				EntryPoints: test.entryPoints,
-				client:      client,
+				k8sClient:   client,
 			}
 
 			for group, kindFuncs := range test.groupKindFilterFuncs {
@@ -7758,7 +7758,7 @@ func TestLoadGRPCRoutes_filterExtensionRef(t *testing.T) {
 					p.RegisterFilterFuncs(group, kind, filterFunc)
 				}
 			}
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			assert.NoError(t, err)
 
 			assert.Equal(t, test.expected, conf)
@@ -8918,7 +8918,7 @@ func TestLoadTCPRoutes(t *testing.T) {
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -8931,10 +8931,10 @@ func TestLoadTCPRoutes(t *testing.T) {
 			p := Provider{
 				EntryPoints:       test.entryPoints,
 				NativeLBByDefault: test.nativeLB,
-				client:            client,
+				k8sClient:         client,
 			}
 
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			assert.Equal(t, test.expected, conf)
@@ -11143,7 +11143,7 @@ func TestLoadTLSRoutes(t *testing.T) {
 			}
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -11156,10 +11156,10 @@ func TestLoadTLSRoutes(t *testing.T) {
 			p := Provider{
 				EntryPoints:       test.entryPoints,
 				NativeLBByDefault: test.nativeLB,
-				client:            client,
+				k8sClient:         client,
 			}
 
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			assert.Equal(t, test.expected, conf)
@@ -12786,7 +12786,7 @@ func TestLoadMixedRoutes(t *testing.T) {
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -12798,10 +12798,10 @@ func TestLoadMixedRoutes(t *testing.T) {
 
 			p := Provider{
 				EntryPoints: test.entryPoints,
-				client:      client,
+				k8sClient:   client,
 			}
 
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			assert.Equal(t, test.expected, conf)
@@ -13284,7 +13284,7 @@ func TestLoadRoutesWithReferenceGrants(t *testing.T) {
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -13296,10 +13296,10 @@ func TestLoadRoutesWithReferenceGrants(t *testing.T) {
 
 			p := Provider{
 				EntryPoints: test.entryPoints,
-				client:      client,
+				k8sClient:   client,
 			}
 
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			assert.Equal(t, test.expected, conf)
@@ -13635,7 +13635,7 @@ func Test_loadRoutes_multipleGatewaysParentRefs(t *testing.T) {
 			k8sObjects, gwObjects := readResources(t, []string{"services.yml", test.path})
 
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
-			client := newClientImpl(kubefake.NewClientset(k8sObjects...), gwClient)
+			client := NewClient(&Provider{}, kubefake.NewClientset(k8sObjects...), gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -13643,10 +13643,10 @@ func Test_loadRoutes_multipleGatewaysParentRefs(t *testing.T) {
 
 			p := Provider{
 				EntryPoints: test.entryPoints,
-				client:      client,
+				k8sClient:   client,
 			}
 
-			_, statusReport, err := p.loadConfigurationFromGateways(t.Context())
+			_, statusReport, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			statusReport.Flush(t.Context(), client)
@@ -13704,7 +13704,7 @@ func Test_loadHTTPAndGRPCRoutes_hostnameConflict(t *testing.T) {
 			k8sObjects, gwObjects := readResources(t, []string{"services.yml", test.path})
 
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
-			client := newClientImpl(kubefake.NewClientset(k8sObjects...), gwClient)
+			client := NewClient(&Provider{}, kubefake.NewClientset(k8sObjects...), gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -13712,10 +13712,10 @@ func Test_loadHTTPAndGRPCRoutes_hostnameConflict(t *testing.T) {
 
 			p := Provider{
 				EntryPoints: map[string]Entrypoint{"web": {Address: ":9080"}},
-				client:      client,
+				k8sClient:   client,
 			}
 
-			_, statusReport, err := p.loadConfigurationFromGateways(t.Context())
+			_, statusReport, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			statusReport.Flush(t.Context(), client)
@@ -14831,7 +14831,7 @@ func Test_resolveStatusAddress(t *testing.T) {
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -14843,7 +14843,7 @@ func Test_resolveStatusAddress(t *testing.T) {
 
 			p := Provider{
 				StatusAddress: test.statusAddress,
-				client:        client,
+				k8sClient:     client,
 			}
 
 			got, err := p.resolveStatusAddress(test.statusAddress)
@@ -15002,7 +15002,7 @@ func Test_gatewayStatusAddresses(t *testing.T) {
 			kubeClient := kubefake.NewSimpleClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -15013,7 +15013,7 @@ func Test_gatewayStatusAddresses(t *testing.T) {
 
 			p := Provider{
 				StatusAddress: test.staticAddr,
-				client:        client,
+				k8sClient:     client,
 			}
 
 			gw := &gatev1.Gateway{
@@ -15136,7 +15136,7 @@ func Test_resolveFrontendValidation(t *testing.T) {
 	})
 	gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-	client := newClientImpl(kubeClient, gwClient)
+	client := NewClient(&Provider{}, kubeClient, gwClient)
 
 	eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 	require.NoError(t, err)
@@ -15146,15 +15146,15 @@ func Test_resolveFrontendValidation(t *testing.T) {
 		<-eventCh
 	}
 
-	p := Provider{client: client}
+	p := Provider{k8sClient: client}
 
 	// A client on a cluster that does not serve the ClusterTrustBundle API.
-	clientWithoutAPI := newClientImpl(kubefake.NewClientset(k8sObjects...), newGatewaySimpleClientSet(t, gwObjects...))
+	clientWithoutAPI := NewClient(&Provider{}, kubefake.NewClientset(k8sObjects...), newGatewaySimpleClientSet(t, gwObjects...))
 
 	_, err = clientWithoutAPI.WatchAll(t.Context(), nil, make(chan struct{}))
 	require.NoError(t, err)
 
-	pWithoutAPI := Provider{client: clientWithoutAPI}
+	pWithoutAPI := Provider{k8sClient: clientWithoutAPI}
 
 	// A client that is not allowed to list ClusterTrustBundles.
 	kubeClientForbidden := kubefake.NewClientset(k8sObjects...)
@@ -15164,12 +15164,12 @@ func Test_resolveFrontendValidation(t *testing.T) {
 			Status: authorizationv1.SubjectAccessReviewStatus{Allowed: false},
 		}, nil
 	})
-	clientForbidden := newClientImpl(kubeClientForbidden, newGatewaySimpleClientSet(t, gwObjects...))
+	clientForbidden := NewClient(&Provider{}, kubeClientForbidden, newGatewaySimpleClientSet(t, gwObjects...))
 
 	_, err = clientForbidden.WatchAll(t.Context(), nil, make(chan struct{}))
 	require.NoError(t, err)
 
-	pForbidden := Provider{client: clientForbidden}
+	pForbidden := Provider{k8sClient: clientForbidden}
 
 	gateway := &gatev1.Gateway{
 		Name:       "my-gateway",
@@ -15485,7 +15485,7 @@ func Test_loadGatewayBackendTLS(t *testing.T) {
 	kubeClient := kubefake.NewClientset(k8sObjects...)
 	gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-	client := newClientImpl(kubeClient, gwClient)
+	client := NewClient(&Provider{}, kubeClient, gwClient)
 
 	eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 	require.NoError(t, err)
@@ -15493,7 +15493,7 @@ func Test_loadGatewayBackendTLS(t *testing.T) {
 	// just wait for the first event
 	<-eventCh
 
-	p := Provider{client: client}
+	p := Provider{k8sClient: client}
 
 	testCases := []struct {
 		desc           string
@@ -15588,7 +15588,7 @@ func Test_loadGatewayListeners(t *testing.T) {
 	kubeClient := kubefake.NewClientset(k8sObjects...)
 	gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-	client := newClientImpl(kubeClient, gwClient)
+	client := NewClient(&Provider{}, kubeClient, gwClient)
 
 	eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 	require.NoError(t, err)
@@ -15596,7 +15596,7 @@ func Test_loadGatewayListeners(t *testing.T) {
 
 	p := Provider{
 		EntryPoints: map[string]Entrypoint{"websecure": {Address: ":443"}},
-		client:      client,
+		k8sClient:   client,
 	}
 
 	newGateway := func(caCertificateRefs []gatev1.ObjectReference) *gatev1.Gateway {
@@ -15734,7 +15734,7 @@ func Test_loadGatewayListeners_frontendValidationConflict(t *testing.T) {
 	kubeClient := kubefake.NewClientset(k8sObjects...)
 	gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-	client := newClientImpl(kubeClient, gwClient)
+	client := NewClient(&Provider{}, kubeClient, gwClient)
 
 	eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 	require.NoError(t, err)
@@ -15742,7 +15742,7 @@ func Test_loadGatewayListeners_frontendValidationConflict(t *testing.T) {
 
 	p := Provider{
 		EntryPoints: map[string]Entrypoint{"websecure": {Address: ":443"}},
-		client:      client,
+		k8sClient:   client,
 	}
 
 	newValidation := func(caConfigMap string, mode gatev1.FrontendValidationModeType) *gatev1.FrontendTLSValidation {
@@ -15946,7 +15946,7 @@ func TestCrossProviderNamespaces_HTTPRoute(t *testing.T) {
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -15959,10 +15959,10 @@ func TestCrossProviderNamespaces_HTTPRoute(t *testing.T) {
 			p := Provider{
 				EntryPoints:             map[string]Entrypoint{"web": {Address: ":80"}},
 				CrossProviderNamespaces: test.crossProviderNamespaces,
-				client:                  client,
+				k8sClient:               client,
 			}
 
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			router, ok := conf.HTTP.Routers["httproute-default-http-app-1-gw-default-my-gateway-ep-web-0-799bcbf0c2317c5d1c93"]
@@ -16012,7 +16012,7 @@ func TestCrossProviderNamespaces_TCPRoute(t *testing.T) {
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -16025,10 +16025,10 @@ func TestCrossProviderNamespaces_TCPRoute(t *testing.T) {
 			p := Provider{
 				EntryPoints:             map[string]Entrypoint{"tcp": {Address: ":9000"}},
 				CrossProviderNamespaces: test.crossProviderNamespaces,
-				client:                  client,
+				k8sClient:               client,
 			}
 
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			router, ok := conf.TCP.Routers["tcproute-default-tcp-app-1-gw-default-my-gateway-ep-tcp-0-5840f3c3c21dcf0402da"]
@@ -16085,7 +16085,7 @@ func TestCrossProviderNamespaces_TLSRoute(t *testing.T) {
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -16098,10 +16098,10 @@ func TestCrossProviderNamespaces_TLSRoute(t *testing.T) {
 			p := Provider{
 				EntryPoints:             map[string]Entrypoint{"tls": {Address: ":9000"}},
 				CrossProviderNamespaces: test.crossProviderNamespaces,
-				client:                  client,
+				k8sClient:               client,
 			}
 
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			assert.NoError(t, err)
 
 			router, ok := conf.TCP.Routers["tlsroute-default-tls-app-1-gw-default-my-gateway-ep-tls-0-efc0f8d903baa9fb6592"]
@@ -16160,10 +16160,10 @@ func newGatewaySimpleClientSet(t *testing.T, objects ...runtime.Object) *gatefak
 	return client
 }
 
-func Test_loadConfigurationFromGateways_TLSCertificatesOrder(t *testing.T) {
+func TestProvider_BuildConfiguration_TLSCertificatesOrder(t *testing.T) {
 	k8sObjects, gwObjects := readResources(t, []string{"multiple_gateways_tls_certificates.yml"})
 
-	client := newClientImpl(kubefake.NewClientset(k8sObjects...), newGatewaySimpleClientSet(t, gwObjects...))
+	client := NewClient(&Provider{}, kubefake.NewClientset(k8sObjects...), newGatewaySimpleClientSet(t, gwObjects...))
 
 	eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 	require.NoError(t, err)
@@ -16173,12 +16173,12 @@ func Test_loadConfigurationFromGateways_TLSCertificatesOrder(t *testing.T) {
 
 	p := Provider{
 		EntryPoints: map[string]Entrypoint{"websecure": {Address: ":443"}},
-		client:      client,
+		k8sClient:   client,
 	}
 
 	// Gateways are listed from a map, so build the configuration several times to
 	// make sure the certificates do not follow the iteration order.
-	conf, _, err := p.loadConfigurationFromGateways(t.Context())
+	conf, _, err := p.BuildConfiguration(t.Context())
 	require.NoError(t, err)
 
 	var commonNames []string
@@ -16189,7 +16189,7 @@ func Test_loadConfigurationFromGateways_TLSCertificatesOrder(t *testing.T) {
 	assert.Equal(t, []string{"bar.example.com", "foo.example.com", "default-b.example.com", "default-a.example.com"}, commonNames)
 }
 
-func Test_loadConfigurationFromGateways_BackendTLSPolicyAncestorNamespace(t *testing.T) {
+func TestProvider_BuildConfiguration_BackendTLSPolicyAncestorNamespace(t *testing.T) {
 	testCases := []struct {
 		desc        string
 		path        string
@@ -16223,7 +16223,7 @@ func Test_loadConfigurationFromGateways_BackendTLSPolicyAncestorNamespace(t *tes
 			k8sObjects, gwObjects := readResources(t, []string{"services.yml", test.path})
 
 			gwClient := newGatewaySimpleClientSet(t, gwObjects...)
-			client := newClientImpl(kubefake.NewClientset(k8sObjects...), gwClient)
+			client := NewClient(&Provider{}, kubefake.NewClientset(k8sObjects...), gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -16233,10 +16233,10 @@ func Test_loadConfigurationFromGateways_BackendTLSPolicyAncestorNamespace(t *tes
 
 			p := Provider{
 				EntryPoints: test.entryPoints,
-				client:      client,
+				k8sClient:   client,
 			}
 
-			_, statusReport, err := p.loadConfigurationFromGateways(t.Context())
+			_, statusReport, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			statusReport.Flush(t.Context(), client)
@@ -16656,7 +16656,7 @@ func Test_isListenerSetAllowed(t *testing.T) {
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 			gwClient := newGatewaySimpleClientSet(t)
 
-			client := newClientImpl(kubeClient, gwClient)
+			client := NewClient(&Provider{}, kubeClient, gwClient)
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -16665,7 +16665,7 @@ func Test_isListenerSetAllowed(t *testing.T) {
 				<-eventCh
 			}
 
-			p := Provider{client: client}
+			p := Provider{k8sClient: client}
 
 			assert.Equal(t, test.expected, p.isListenerSetAllowed(t.Context(), test.gw, test.ls))
 		})
@@ -17020,7 +17020,7 @@ func TestLoadHTTPRoutes_externalNameService(t *testing.T) {
 
 			k8sObjects, gwObjects := readResources(t, test.paths)
 
-			client := newClientImpl(kubefake.NewClientset(k8sObjects...), newGatewaySimpleClientSet(t, gwObjects...))
+			client := NewClient(&Provider{}, kubefake.NewClientset(k8sObjects...), newGatewaySimpleClientSet(t, gwObjects...))
 
 			eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 			require.NoError(t, err)
@@ -17029,10 +17029,10 @@ func TestLoadHTTPRoutes_externalNameService(t *testing.T) {
 			p := Provider{
 				EntryPoints:               map[string]Entrypoint{"web": {Address: ":80"}},
 				AllowExternalNameServices: test.allowExternalNameServices,
-				client:                    client,
+				k8sClient:                 client,
 			}
 
-			conf, _, err := p.loadConfigurationFromGateways(t.Context())
+			conf, _, err := p.BuildConfiguration(t.Context())
 			require.NoError(t, err)
 
 			var urls []string
@@ -17053,7 +17053,7 @@ func TestLoadHTTPRoutes_externalNameService(t *testing.T) {
 func TestLoadTLSRoutes_denyUnknownHostEntryPoints(t *testing.T) {
 	k8sObjects, gwObjects := readResources(t, []string{"services.yml", "tlsroute/with_multiple_listeners_different_ports.yml"})
 
-	client := newClientImpl(kubefake.NewClientset(k8sObjects...), newGatewaySimpleClientSet(t, gwObjects...))
+	client := NewClient(&Provider{}, kubefake.NewClientset(k8sObjects...), newGatewaySimpleClientSet(t, gwObjects...))
 
 	eventCh, err := client.WatchAll(t.Context(), nil, make(chan struct{}))
 	require.NoError(t, err)
@@ -17065,10 +17065,10 @@ func TestLoadTLSRoutes_denyUnknownHostEntryPoints(t *testing.T) {
 			"tls-2":     {Address: ":9002"},
 			"websecure": {Address: ":443"},
 		},
-		client: client,
+		k8sClient: client,
 	}
 
-	conf, _, err := p.loadConfigurationFromGateways(t.Context())
+	conf, _, err := p.BuildConfiguration(t.Context())
 	require.NoError(t, err)
 
 	require.Contains(t, conf.TCP.Routers, "deny-unknown-host")
@@ -17094,13 +17094,13 @@ func TestEndpointSliceReadyCondition(t *testing.T) {
 		},
 	}
 	kubeClient := kubefake.NewClientset(service, endpointSlice)
-	client := newClientImpl(kubeClient, newGatewaySimpleClientSet(t))
+	client := NewClient(&Provider{}, kubeClient, newGatewaySimpleClientSet(t))
 	stopCh := make(chan struct{})
 	t.Cleanup(func() { close(stopCh) })
 	_, err := client.WatchAll(t.Context(), nil, stopCh)
 	require.NoError(t, err)
 
-	p := Provider{client: client}
+	p := Provider{k8sClient: client}
 	addresses, port, err := p.getBackendAddresses("default", gatev1.BackendRef{
 		Name: "backend",
 		Port: new(gatev1.PortNumber(8000)),

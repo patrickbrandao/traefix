@@ -2791,7 +2791,7 @@ func TestLoadConfigurationFromIngresses(t *testing.T) {
 				DefaultRuleSyntax:            test.defaultRuleSyntax,
 				StrictPrefixMatching:         test.strictPrefixMatching,
 			}
-			conf := p.loadConfigurationFromIngresses(t.Context(), clientMock)
+			conf := p.BuildConfiguration(t.Context(), clientMock)
 
 			assert.Equal(t, test.expected, conf)
 		})
@@ -2970,7 +2970,7 @@ func TestLoadConfigurationFromIngressesWithExternalNameServices(t *testing.T) {
 
 			p := Provider{IngressClass: test.ingressClass}
 			p.AllowExternalNameServices = test.allowExternalNameServices
-			conf := p.loadConfigurationFromIngresses(t.Context(), clientMock)
+			conf := p.BuildConfiguration(t.Context(), clientMock)
 
 			assert.Equal(t, test.expected, conf)
 		})
@@ -3037,7 +3037,7 @@ func TestLoadConfigurationFromIngressesWithNativeLB(t *testing.T) {
 			clientMock := newClientMock(generateTestFilename(test.desc))
 
 			p := Provider{IngressClass: test.ingressClass}
-			conf := p.loadConfigurationFromIngresses(t.Context(), clientMock)
+			conf := p.BuildConfiguration(t.Context(), clientMock)
 
 			assert.Equal(t, test.expected, conf)
 		})
@@ -3115,7 +3115,7 @@ func TestLoadConfigurationFromIngressesWithNodePortLB(t *testing.T) {
 			clientMock := newClientMock(generateTestFilename(test.desc))
 
 			p := Provider{DisableClusterScopeResources: test.clusterScopeDisabled}
-			conf := p.loadConfigurationFromIngresses(t.Context(), clientMock)
+			conf := p.BuildConfiguration(t.Context(), clientMock)
 
 			assert.Equal(t, test.expected, conf)
 		})
@@ -3189,7 +3189,7 @@ func TestLoadConfigurationFromIngressesWithCrossProviderNamespaces(t *testing.T)
 			t.Parallel()
 
 			p := Provider{CrossProviderNamespaces: test.crossProviderNamespaces}
-			conf := p.loadConfigurationFromIngresses(t.Context(), newClientMock(test.path))
+			conf := p.BuildConfiguration(t.Context(), newClientMock(test.path))
 
 			if test.wantRouter == "" && test.wantService == "" {
 				assert.Empty(t, conf.HTTP.Routers)
@@ -3243,7 +3243,7 @@ func TestLoadConfigurationFromIngressesWithCrossProviderNamespaces_TLSOptions(t 
 			t.Parallel()
 
 			p := Provider{CrossProviderNamespaces: test.crossProviderNamespaces}
-			conf := p.loadConfigurationFromIngresses(t.Context(), newClientMock("fixtures/Ingress-with-tls-options-annotation.yml"))
+			conf := p.BuildConfiguration(t.Context(), newClientMock("fixtures/Ingress-with-tls-options-annotation.yml"))
 
 			if test.wantRouter == "" {
 				assert.Empty(t, conf.HTTP.Routers)
@@ -3291,7 +3291,7 @@ func TestLoadConfigurationFromIngressesWithCrossProviderNamespaces_ServersTransp
 			t.Parallel()
 
 			p := Provider{CrossProviderNamespaces: test.crossProviderNamespaces}
-			conf := p.loadConfigurationFromIngresses(t.Context(), newClientMock("fixtures/Ingress-with-servers-transport-annotation.yml"))
+			conf := p.BuildConfiguration(t.Context(), newClientMock("fixtures/Ingress-with-servers-transport-annotation.yml"))
 
 			if test.wantService == "" {
 				assert.Empty(t, conf.HTTP.Services)
@@ -3664,7 +3664,7 @@ func TestLoadConfigurationFromIngressesWithNativeLBByDefault(t *testing.T) {
 				IngressClass:      test.ingressClass,
 				NativeLBByDefault: true,
 			}
-			conf := p.loadConfigurationFromIngresses(t.Context(), clientMock)
+			conf := p.BuildConfiguration(t.Context(), clientMock)
 
 			assert.Equal(t, test.expected, conf)
 		})
@@ -3755,7 +3755,7 @@ func TestIngressEndpointPublishedService(t *testing.T) {
 			k8sObjects := readResources(t, []string{generateTestFilename(test.desc)})
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 
-			client := newClientImpl(kubeClient)
+			client := NewClient(&Provider{}, kubeClient)
 
 			stopCh := make(chan struct{})
 			eventCh, err := client.WatchAll(nil, stopCh)
@@ -3772,7 +3772,7 @@ func TestIngressEndpointPublishedService(t *testing.T) {
 					PublishedService: "default/published-service",
 				},
 			}
-			p.loadConfigurationFromIngresses(t.Context(), client)
+			p.BuildConfiguration(t.Context(), client)
 
 			ingress, err := kubeClient.NetworkingV1().Ingresses(metav1.NamespaceDefault).Get(t.Context(), "foo", metav1.GetOptions{})
 			require.NoError(t, err)
@@ -3831,7 +3831,7 @@ func TestIngressEndpointPublishedServiceSelector(t *testing.T) {
 			k8sObjects := readResources(t, []string{generateTestFilename(test.desc)})
 			kubeClient := kubefake.NewClientset(k8sObjects...)
 
-			client := newClientImpl(kubeClient)
+			client := NewClient(&Provider{}, kubeClient)
 
 			stopCh := make(chan struct{})
 			eventCh, err := client.WatchAll(nil, stopCh)
@@ -3847,7 +3847,7 @@ func TestIngressEndpointPublishedServiceSelector(t *testing.T) {
 					PublishedServiceSelector: test.selector,
 				},
 			}
-			p.loadConfigurationFromIngresses(t.Context(), client)
+			p.BuildConfiguration(t.Context(), client)
 
 			ingress, err := kubeClient.NetworkingV1().Ingresses(metav1.NamespaceDefault).Get(t.Context(), "foo", metav1.GetOptions{})
 			require.NoError(t, err)
@@ -3943,7 +3943,7 @@ func TestReportNodeInternalIPs(t *testing.T) {
 			t.Parallel()
 
 			p := Provider{ReportNodeInternalIPs: true}
-			conf := p.loadConfigurationFromIngresses(t.Context(), test.client)
+			conf := p.BuildConfiguration(t.Context(), test.client)
 			if test.expectedEmpty {
 				assert.Empty(t, conf.HTTP.Routers)
 				assert.Empty(t, conf.HTTP.Services)

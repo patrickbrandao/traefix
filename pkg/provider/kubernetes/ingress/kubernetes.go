@@ -29,10 +29,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	kclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
 )
 
 const (
+	// ProviderName is the Kubernetes Ingress provider name.
+	ProviderName = "kubernetes"
+
 	annotationKubernetesIngressClass     = "kubernetes.io/ingress.class"
 	traefikDefaultIngressClass           = "traefik"
 	traefikDefaultIngressClassController = "traefik.io/ingress-controller"
@@ -100,9 +104,6 @@ func (p *Provider) Init() error {
 	return nil
 }
 
-// ProviderName is the Kubernetes Ingress provider name.
-const ProviderName = "kubernetes"
-
 // Provide allows the k8s provider to provide configurations to traefik
 // using the given configuration channel.
 func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.Pool) error {
@@ -152,7 +153,7 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 					// dropped events. This is fine, because we don't treat different
 					// event types differently. But if we do in the future, we'll need to
 					// track more information about the dropped events.
-					conf := p.loadConfigurationFromIngresses(ctxLog, k8sClient)
+					conf := p.BuildConfiguration(ctxLog, k8sClient)
 
 					configurationChan <- dynamic.Message{
 						ProviderName:  ProviderName,
@@ -180,17 +181,6 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 	return nil
 }
 
-func (p *Provider) applyRouterTransform(ctx context.Context, rt *dynamic.Router, ingress *netv1.Ingress) {
-	if p.routerTransform == nil {
-		return
-	}
-
-	err := p.routerTransform.Apply(ctx, rt, ingress)
-	if err != nil {
-		log.Ctx(ctx).Error().Err(err).Msg("Apply router transform")
-	}
-}
-
 // EndpointIngress holds the endpoint information for the Kubernetes provider.
 type EndpointIngress struct {
 	IP                       string `description:"IP used for Kubernetes Ingress endpoints. It can be a single IP address or a comma-separated list of IP addresses." json:"ip,omitempty" toml:"ip,omitempty" yaml:"ip,omitempty"`
@@ -199,45 +189,8 @@ type EndpointIngress struct {
 	PublishedServiceSelector string `description:"Published Kubernetes Service label selector to copy status from." json:"publishedServiceSelector,omitempty" toml:"publishedServiceSelector,omitempty" yaml:"publishedServiceSelector,omitempty"`
 }
 
-func (p *Provider) newK8sClient(ctx context.Context) (*clientWrapper, error) {
-	_, err := labels.Parse(p.LabelSelector)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ingress label selector: %q", p.LabelSelector)
-	}
-
-	logger := log.Ctx(ctx)
-
-	logger.Info().Msgf("ingress label selector is: %q", p.LabelSelector)
-
-	withEndpoint := ""
-	if p.Endpoint != "" {
-		withEndpoint = fmt.Sprintf(" with endpoint %v", p.Endpoint)
-	}
-
-	var cl *clientWrapper
-	switch {
-	case os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != "":
-		logger.Info().Msgf("Creating in-cluster Provider client%s", withEndpoint)
-		cl, err = newInClusterClient(p.Endpoint)
-	case os.Getenv("KUBECONFIG") != "":
-		logger.Info().Msgf("Creating cluster-external Provider client from KUBECONFIG %s", os.Getenv("KUBECONFIG"))
-		cl, err = newExternalClusterClientFromFile(os.Getenv("KUBECONFIG"))
-	default:
-		logger.Info().Msgf("Creating cluster-external Provider client%s", withEndpoint)
-		cl, err = newExternalClusterClient(p.Endpoint, p.CertAuthFilePath, p.Token)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	cl.ingressLabelSelector = p.LabelSelector
-	cl.disableIngressClassInformer = p.DisableIngressClassLookup || p.DisableClusterScopeResources
-	cl.disableClusterScopeInformer = p.DisableClusterScopeResources
-	return cl, nil
-}
-
-func (p *Provider) loadConfigurationFromIngresses(ctx context.Context, client Client) *dynamic.Configuration {
+// BuildConfiguration builds the dynamic configuration from the resources that the client gives.
+func (p *Provider) BuildConfiguration(ctx context.Context, client Client) *dynamic.Configuration {
 	conf := &dynamic.Configuration{
 		HTTP: &dynamic.HTTPConfiguration{
 			Routers:     map[string]*dynamic.Router{},
@@ -520,6 +473,52 @@ func routerConfigCacheKey(ingress *netv1.Ingress) string {
 	}
 
 	return ingress.Namespace + "/" + ingress.Name + "/" + ingress.ResourceVersion
+}
+
+func (p *Provider) applyRouterTransform(ctx context.Context, rt *dynamic.Router, ingress *netv1.Ingress) {
+	if p.routerTransform == nil {
+		return
+	}
+
+	err := p.routerTransform.Apply(ctx, rt, ingress)
+	if err != nil {
+		log.Ctx(ctx).Error().Err(err).Msg("Apply router transform")
+	}
+}
+
+func (p *Provider) newK8sClient(ctx context.Context) (Client, error) {
+	_, err := labels.Parse(p.LabelSelector)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ingress label selector: %q", p.LabelSelector)
+	}
+
+	logger := log.Ctx(ctx)
+
+	logger.Info().Msgf("ingress label selector is: %q", p.LabelSelector)
+
+	withEndpoint := ""
+	if p.Endpoint != "" {
+		withEndpoint = fmt.Sprintf(" with endpoint %v", p.Endpoint)
+	}
+
+	var clientset kclientset.Interface
+	switch {
+	case os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != "":
+		logger.Info().Msgf("Creating in-cluster Provider client%s", withEndpoint)
+		clientset, err = newInClusterClientset(p.Endpoint)
+	case os.Getenv("KUBECONFIG") != "":
+		logger.Info().Msgf("Creating cluster-external Provider client from KUBECONFIG %s", os.Getenv("KUBECONFIG"))
+		clientset, err = newExternalClusterClientsetFromFile(os.Getenv("KUBECONFIG"))
+	default:
+		logger.Info().Msgf("Creating cluster-external Provider client%s", withEndpoint)
+		clientset, err = newExternalClusterClientset(p.Endpoint, p.CertAuthFilePath, p.Token)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return NewClient(p, clientset), nil
 }
 
 func (p *Provider) updateIngressStatus(ing *netv1.Ingress, k8sClient Client, nodeIngressStatus []netv1.IngressLoadBalancerIngress) error {

@@ -28766,7 +28766,7 @@ func TestLoadIngresses(t *testing.T) {
 
 			k8sObjects := readResources(t, test.paths)
 			kubeClient := kubefake.NewClientset(k8sObjects...)
-			client := newClient(kubeClient)
+			client := NewClient(kubeClient)
 
 			eventCh, err := client.WatchAll(t.Context(), "", "")
 			require.NoError(t, err)
@@ -28802,7 +28802,7 @@ func TestLoadIngresses(t *testing.T) {
 
 			setDefaultMaxIdleConnsPerHost(test.expected)
 
-			conf := p.loadConfiguration(t.Context())
+			conf := p.BuildConfiguration(t.Context())
 			assert.Equal(t, test.expected, conf)
 
 			for name, middleware := range conf.HTTP.Middlewares {
@@ -28849,7 +28849,7 @@ func TestBuildServersTransportMaxIdleConnsPerHost(t *testing.T) {
 func TestLoadIngresses_hostlessRuleKeepsGlobalDefaultBackend(t *testing.T) {
 	k8sObjects := readResources(t, []string{"services.yml", "ingressclasses.yml", "ingresses/ingress-with-hostless-rule-and-default-backend.yml"})
 	kubeClient := kubefake.NewClientset(k8sObjects...)
-	client := newClient(kubeClient)
+	client := NewClient(kubeClient)
 
 	eventCh, err := client.WatchAll(t.Context(), "", "")
 	require.NoError(t, err)
@@ -28862,7 +28862,7 @@ func TestLoadIngresses_hostlessRuleKeepsGlobalDefaultBackend(t *testing.T) {
 	}
 	p.SetDefaults()
 
-	conf := p.loadConfiguration(t.Context())
+	conf := p.BuildConfiguration(t.Context())
 	require.NotNil(t, conf.HTTP)
 
 	var defaultBackendRouters []string
@@ -28916,7 +28916,7 @@ func TestCanaryRouterPriority(t *testing.T) {
 			})
 
 			kubeClient := kubefake.NewClientset(k8sObjects...)
-			client := newClient(kubeClient)
+			client := NewClient(kubeClient)
 
 			eventCh, err := client.WatchAll(t.Context(), "", "")
 			require.NoError(t, err)
@@ -28929,7 +28929,7 @@ func TestCanaryRouterPriority(t *testing.T) {
 			}
 			p.SetDefaults()
 
-			conf := p.loadConfiguration(t.Context())
+			conf := p.BuildConfiguration(t.Context())
 
 			parser, err := httpmuxer.NewSyntaxParser()
 			require.NoError(t, err)
@@ -28998,7 +28998,7 @@ func TestLoadIngresses_serverAliasScope(t *testing.T) {
 
 			k8sObjects := readResources(t, test.paths)
 			kubeClient := kubefake.NewClientset(k8sObjects...)
-			client := newClient(kubeClient)
+			client := NewClient(kubeClient)
 
 			eventCh, err := client.WatchAll(t.Context(), "", "")
 			require.NoError(t, err)
@@ -29011,7 +29011,7 @@ func TestLoadIngresses_serverAliasScope(t *testing.T) {
 			}
 			p.SetDefaults()
 
-			conf := p.loadConfiguration(t.Context())
+			conf := p.BuildConfiguration(t.Context())
 			require.NotNil(t, conf.HTTP)
 
 			seen := make(map[string]bool)
@@ -29162,7 +29162,7 @@ func TestLoadConfigurationIngressStatus(t *testing.T) {
 			paths := append([]string{"services.yml", "ingressclasses.yml"}, test.paths...)
 			k8sObjects := readResources(t, paths)
 			kubeClient := kubefake.NewClientset(k8sObjects...)
-			client := newClient(kubeClient)
+			client := NewClient(kubeClient)
 
 			eventCh, err := client.WatchAll(t.Context(), "", "")
 			require.NoError(t, err)
@@ -29176,7 +29176,7 @@ func TestLoadConfigurationIngressStatus(t *testing.T) {
 			}
 			p.SetDefaults()
 
-			require.NotNil(t, p.loadConfiguration(t.Context()))
+			require.NotNil(t, p.BuildConfiguration(t.Context()))
 
 			for _, name := range test.ingressNames {
 				ing, err := kubeClient.NetworkingV1().Ingresses("default").Get(t.Context(), name, metav1.GetOptions{})

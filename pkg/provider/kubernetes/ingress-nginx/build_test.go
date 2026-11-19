@@ -70,7 +70,7 @@ func TestProvider_resolveBasicAuth_authMap(t *testing.T) {
 		Name: "basic-auth", Namespace: "default",
 		Data: map[string][]byte{"user2": []byte("hash2"), "user1": []byte("hash1")},
 	})
-	client := newClient(kubeClient)
+	client := NewClient(kubeClient)
 
 	_, err := client.WatchAll(t.Context(), "", "")
 	require.NoError(t, err)
@@ -93,7 +93,7 @@ func TestProvider_resolveBasicAuth_emptyAuthMap(t *testing.T) {
 	t.Parallel()
 
 	kubeClient := kubefake.NewClientset(&corev1.Secret{Name: "basic-auth", Namespace: "default"})
-	client := newClient(kubeClient)
+	client := NewClient(kubeClient)
 
 	_, err := client.WatchAll(t.Context(), "", "")
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestLoadCertificatesContinuesAfterMissingSecret(t *testing.T) {
 	}
 
 	kubeClient := kubefake.NewClientset(validFirst, validLast)
-	client := newClient(kubeClient)
+	client := NewClient(kubeClient)
 	_, err := client.WatchAll(t.Context(), "", "")
 	require.NoError(t, err)
 
