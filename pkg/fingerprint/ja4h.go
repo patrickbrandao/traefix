@@ -83,6 +83,36 @@ func (r *Request) computeJA4H() string {
 	return string(out)
 }
 
+// JA4HRaw returns the JA4H before its hashes, as the FoxIO tool prints it (ja4h_r): the first part, the header
+// names in the received order without Cookie and Referer, the sorted cookie names, and the sorted cookie pairs.
+func (r *Request) JA4HRaw() string {
+	ja4h := r.JA4H()
+	prefix, _, _ := strings.Cut(ja4h, "_")
+
+	out := make([]byte, 0, 256)
+	out = append(out, prefix...)
+	out = append(out, '_')
+	first := true
+	for _, name := range r.Names {
+		if strings.EqualFold(name, "cookie") || strings.EqualFold(name, "referer") {
+			continue
+		}
+		if !first {
+			out = append(out, ',')
+		}
+		first = false
+		out = append(out, name...)
+	}
+
+	cookieNames, cookiePairs := r.ja4hCookies(nil)
+	out = append(out, '_')
+	out = append(out, cookieNames...)
+	out = append(out, '_')
+	out = append(out, cookiePairs...)
+
+	return string(out)
+}
+
 func ja4hMethod(method string) string {
 	if code, ok := ja4hMethods[method]; ok {
 		return code

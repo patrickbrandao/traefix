@@ -120,6 +120,13 @@ type headerSetter struct {
 	names []string
 }
 
+// setOpt sets a header with a value, and leaves out an empty one.
+func (s *headerSetter) setOpt(name, value string) {
+	if value != "" {
+		s.set(name, value)
+	}
+}
+
 // set assigns a canonical name: the names are canonicalized once, when the entry point is built.
 func (s *headerSetter) set(name, value string) {
 	s.vals = append(s.vals, value)
@@ -129,7 +136,7 @@ func (s *headerSetter) set(name, value string) {
 }
 
 func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
-	s := headerSetter{h: req.Header, vals: make([]string, 0, 17), names: make([]string, 0, 17)}
+	s := headerSetter{h: req.Header, vals: make([]string, 0, 32), names: make([]string, 0, 32)}
 	proto := protoOf(req)
 
 	s.set(e.headers.timestamp, st.start.UTC().Format(time.RFC3339Nano))
@@ -164,6 +171,23 @@ func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
 		if v := transportHeader(info, st.start, info.requests.Add(1)); v != "" {
 			s.set(e.headers.transport, v)
 		}
+		if d := info.detail; d != nil {
+			s.setOpt(e.headers.tls, d.tls)
+			s.setOpt(e.headers.tlsHello, d.tlsHello)
+			s.setOpt(e.headers.ja3String, d.ja3String)
+			s.setOpt(e.headers.ja3nString, d.ja3nString)
+			s.setOpt(e.headers.ja4r, d.ja4r)
+			s.setOpt(e.headers.ja4o, d.ja4o)
+			s.setOpt(e.headers.p0f, d.p0f)
+			if proto == "h2" {
+				s.setOpt(e.headers.h2Detail, d.h2Detail)
+			}
+			if proto == "h3" {
+				s.setOpt(e.headers.h3, h3Detail(info))
+			}
+			s.setOpt(e.headers.syn, d.syn)
+			s.setOpt(e.headers.clientHello, d.clientHello)
+		}
 		if proto == "h2" && info.akamai != "" {
 			s.set(e.headers.h2, info.akamai)
 		}
@@ -173,6 +197,12 @@ func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
 
 	if st.wire != nil {
 		s.set(e.headers.ja4h, st.wire.JA4H())
+		if e.headerDetail != detailBasic {
+			s.set(e.headers.ja4hRaw, boundedList([]string{st.wire.JA4HRaw()}, "", maxDetailHeader))
+			order, cookies := requestDetail(st.wire)
+			s.setOpt(e.headers.headerOrder, order)
+			s.setOpt(e.headers.cookieNames, cookies)
+		}
 	}
 
 	st.headerNames = s.names

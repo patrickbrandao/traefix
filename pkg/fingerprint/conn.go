@@ -62,6 +62,9 @@ type connInfo struct {
 
 	quicInitial quicInitialInfo
 
+	// detail holds the detail header values, formatted once.
+	detail *connDetail
+
 	// requests counts the requests of the connection, for the transport header.
 	requests atomic.Int64
 

@@ -35,6 +35,9 @@ func Enabled() bool {
 type headerNames struct {
 	srcIP, srcPort, dstPort, connID, proto, ja3, ja4, h2, ja4h, alpn, ja4t string
 	serverIP, serverPort, timestamp, ja3n, ttl, transport                  string
+
+	tls, tlsHello, ja3String, ja3nString, ja4r, ja4o, ja4hRaw, p0f string
+	h2Detail, h3, headerOrder, cookieNames, syn, clientHello       string
 }
 
 // EntryPoint identifies and fingerprints the connections and requests of an entry point.
@@ -48,6 +51,7 @@ type EntryPoint struct {
 	rawBytes         bool
 	http3HeaderOrder bool
 	tcp              bool
+	headerDetail     headerDetail
 	exporter         *exporter
 
 	quic quicPending
@@ -81,6 +85,16 @@ func NewEntryPoint(ctx context.Context, name string, cfg *static.Fingerprint, h2
 		http3HeaderOrder: cfg.HTTP3HeaderOrder,
 		tcp:              cfg.TCP,
 	}
+	switch cfg.HeaderDetail {
+	case "", static.FingerprintHeaderDetailFull:
+		e.headerDetail = detailFull
+	case static.FingerprintHeaderDetailBasic:
+		e.headerDetail = detailBasic
+	case static.FingerprintHeaderDetailRaw:
+		e.headerDetail = detailRaw
+	default:
+		return nil, fmt.Errorf("invalid fingerprint headerDetail %q: it must be basic, full or raw", cfg.HeaderDetail)
+	}
 	if e.tcp && !savedSYNSupported {
 		log.Ctx(ctx).Warn().Str("entryPointName", name).
 			Msg("The fingerprint tcp option needs the saved SYN of Linux: the connections get no TCP fingerprint")
@@ -105,6 +119,21 @@ func NewEntryPoint(ctx context.Context, name string, cfg *static.Fingerprint, h2
 		ja3n:       textproto.CanonicalMIMEHeaderKey(prefix + "Ja3n"),
 		ttl:        textproto.CanonicalMIMEHeaderKey(prefix + "Ttl"),
 		transport:  textproto.CanonicalMIMEHeaderKey(prefix + "Transport"),
+
+		tls:         textproto.CanonicalMIMEHeaderKey(prefix + "Tls"),
+		tlsHello:    textproto.CanonicalMIMEHeaderKey(prefix + "Tls-Hello"),
+		ja3String:   textproto.CanonicalMIMEHeaderKey(prefix + "Ja3-String"),
+		ja3nString:  textproto.CanonicalMIMEHeaderKey(prefix + "Ja3n-String"),
+		ja4r:        textproto.CanonicalMIMEHeaderKey(prefix + "Ja4r"),
+		ja4o:        textproto.CanonicalMIMEHeaderKey(prefix + "Ja4o"),
+		ja4hRaw:     textproto.CanonicalMIMEHeaderKey(prefix + "Ja4h-R"),
+		p0f:         textproto.CanonicalMIMEHeaderKey(prefix + "P0f"),
+		h2Detail:    textproto.CanonicalMIMEHeaderKey(prefix + "H2-Detail"),
+		h3:          textproto.CanonicalMIMEHeaderKey(prefix + "H3"),
+		headerOrder: textproto.CanonicalMIMEHeaderKey(prefix + "Header-Order"),
+		cookieNames: textproto.CanonicalMIMEHeaderKey(prefix + "Cookie-Names"),
+		syn:         textproto.CanonicalMIMEHeaderKey(prefix + "Syn"),
+		clientHello: textproto.CanonicalMIMEHeaderKey(prefix + "Client-Hello"),
 	}
 
 	if h2 != nil && h2.MaxDecoderHeaderTableSize > 0 {
@@ -389,8 +418,12 @@ func (e *EntryPoint) finalizeConn(info *connInfo, proto string) {
 
 	if len(info.syn) > 0 {
 		rec.TCP = e.tcpRecord(info)
-		info.syn = nil
 	}
+
+	if e.headerDetail != detailBasic {
+		info.detail = e.newConnDetail(info, state, hello, raw, rec)
+	}
+	info.syn = nil
 
 	info.record = rec
 

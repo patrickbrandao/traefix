@@ -16,6 +16,7 @@ import (
 func TestFingerprint_decode(t *testing.T) {
 	expected := &Fingerprint{
 		HeaderPrefix: "X-Edge-",
+		HeaderDetail: FingerprintHeaderDetailFull,
 		Export: &FingerprintExport{
 			URL:           "http://10.0.0.10:9000/ingest",
 			Headers:       map[string]string{"Authorization": "Bearer key"},
@@ -132,7 +133,7 @@ func TestFingerprint_decodeEmpty(t *testing.T) {
 			require.NoError(t, test.decode(cfg))
 
 			require.Contains(t, cfg.EntryPoints, "web")
-			assert.Equal(t, &Fingerprint{HeaderPrefix: DefaultFingerprintHeaderPrefix}, cfg.EntryPoints["web"].Fingerprint)
+			assert.Equal(t, &Fingerprint{HeaderPrefix: DefaultFingerprintHeaderPrefix, HeaderDetail: FingerprintHeaderDetailFull}, cfg.EntryPoints["web"].Fingerprint)
 		})
 	}
 }

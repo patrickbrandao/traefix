@@ -513,6 +513,25 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 		requestTime, err := time.Parse(time.RFC3339Nano, got["X-Edge-Time"])
 		require.NoError(t, err)
 		assert.WithinDuration(t, time.Now(), requestTime, 10*time.Second)
+
+		// The full detail, the default.
+		assert.Regexp(t, `^ver=1\.3,cipher=TLS_[A-Z0-9_]+,group=\w+,alpn=h2,resumed=0,ech=0,client_cert=0,sni=example\.com,hrr=0,ch_len=\d+$`, got["X-Edge-Tls"])
+		assert.Regexp(t, `^legacy_ver=0303,ciphers=[0-9a-f-]+,exts=`, got["X-Edge-Tls-Hello"])
+		assert.Contains(t, got["X-Edge-Tls-Hello"], ",alpn=h2,")
+		assert.Regexp(t, `^771,`, got["X-Edge-Ja3-String"])
+		assert.Regexp(t, `^771,`, got["X-Edge-Ja3n-String"])
+		assert.True(t, strings.HasPrefix(got["X-Edge-Ja4r"], got["X-Edge-Ja4"][:10]+"_"))
+		assert.Regexp(t, `^t13d\d{4}h2_[0-9a-f]{12}_[0-9a-f]{12}$`, got["X-Edge-Ja4o"])
+		assert.True(t, strings.HasPrefix(got["X-Edge-Ja4h-R"], got["X-Edge-Ja4h"][:12]+"_"))
+		assert.Regexp(t, `^settings=[0-9:;]+,window_update=\d+,priority=0,`, got["X-Edge-H2-Detail"])
+		assert.Contains(t, got["X-Edge-Header-Order"], "user-agent")
+
+		total := 0
+		for name, value := range got {
+			assert.LessOrEqual(t, len(value), 2<<10, name)
+			total += len(name) + len(value) + 4
+		}
+		assert.LessOrEqual(t, total, 6<<10)
 		assert.NotEmpty(t, got["X-Edge-H2"])
 		assert.Regexp(t, `^ge20`, got["X-Edge-Ja4h"])
 	})
@@ -544,6 +563,8 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 		assert.Equal(t, "h3", got["X-Edge-Alpn"])
 		assert.Regexp(t, `^proto=udp,ipv=4,.*rtt_us=\d+,.*conn_age_us=\d+,req_seq=\d+$`, got["X-Edge-Transport"])
 		assert.NotEmpty(t, got["X-Edge-Server-Port"])
+		assert.Contains(t, got["X-Edge-Tls"], ",transport=quic")
+		assert.Empty(t, got["X-Edge-H2-Detail"])
 		// Without http3HeaderOrder, the HTTP/3 header order is not captured.
 		assert.NotContains(t, got, "X-Edge-Ja4h")
 	})

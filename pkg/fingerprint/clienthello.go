@@ -21,6 +21,14 @@ const (
 	tlsExtSignatureAlgs     = 13
 	tlsExtALPN              = 16
 	tlsExtSupportedVersions = 43
+
+	tlsExtCertCompression   = 27
+	tlsExtRecordSizeLimit   = 28
+	tlsExtPSKModes          = 45
+	tlsExtKeyShare          = 51
+	tlsExtALPSOld           = 17513
+	tlsExtALPS              = 17613
+	tlsExtEncryptedHello    = 0xfe0d
 	tlsVersionUnknownMarker = "00"
 	ja4EmptyHash            = "000000000000"
 )
@@ -38,6 +46,21 @@ type ClientHello struct {
 	PointFormats        []uint8
 	SignatureAlgorithms []uint16
 	SupportedVersions   []uint16
+
+	// The fields below are only read for the headers, and a malformed value leaves them empty.
+
+	// KeyShareGroups are the groups of the key shares, in order, GREASE included.
+	KeyShareGroups []uint16
+	// PSKModes are the PSK key exchange modes.
+	PSKModes []uint8
+	// CertCompression are the certificate compression algorithms (RFC 8879).
+	CertCompression []uint16
+	// RecordSizeLimit is the record size limit (RFC 8449), -1 when absent.
+	RecordSizeLimit int
+	// ALPS are the protocols of the application settings extension, old or new code point.
+	ALPS []string
+	// ECH tells whether the ClientHello carries an encrypted client hello extension, real or GREASE.
+	ECH bool
 }
 
 // isGREASE reports whether v is a GREASE value of RFC 8701, which clients send at random to keep servers tolerant,
@@ -181,7 +204,7 @@ func ParseClientHelloMessage(msg []byte) (*ClientHello, error) {
 		return nil, errClientHelloTruncated
 	}
 
-	h := &ClientHello{LegacyVersion: uint16(body.u16())}
+	h := &ClientHello{LegacyVersion: uint16(body.u16()), RecordSizeLimit: -1}
 	body.bytes(32)
 	body.vec(1)
 	h.CipherSuites = body.vec(2).u16s()
@@ -249,6 +272,8 @@ func ParseClientHelloMessage(msg []byte) (*ClientHello, error) {
 			list := data.vec(1)
 			h.SupportedVersions = list.u16s()
 			bad = data.err || list.err
+		default:
+			h.parseExtra(typ, data)
 		}
 		if bad {
 			return nil, errors.New("malformed ClientHello extension " + strconv.Itoa(int(typ)))
@@ -443,6 +468,46 @@ func (h *ClientHello) JA4Variants(quic bool) JA4Variants {
 		JA4: prefix + "_" + ja4Hash12(ciphersHex) + "_" + ja4Hash12(extsHex),
 		R:   prefix + "_" + ciphersHex + "_" + extsHex,
 		O:   prefix + "_" + ja4Hash12(origCiphers) + "_" + ja4Hash12(origExts),
+	}
+}
+
+// parseExtra reads the extensions only the headers use; a malformed one leaves its field empty.
+func (h *ClientHello) parseExtra(typ uint16, data *reader) {
+	switch typ {
+	case tlsExtKeyShare:
+		shares := data.vec(2)
+		var groups []uint16
+		for len(shares.b) > 0 && !shares.err {
+			groups = append(groups, uint16(shares.u16()))
+			shares.vec(2)
+		}
+		if !shares.err && !data.err {
+			h.KeyShareGroups = groups
+		}
+	case tlsExtPSKModes:
+		if list := data.vec(1); !data.err {
+			h.PSKModes = slices.Clone(list.b)
+		}
+	case tlsExtCertCompression:
+		list := data.vec(1)
+		if algs := list.u16s(); !data.err && !list.err {
+			h.CertCompression = algs
+		}
+	case tlsExtRecordSizeLimit:
+		if v := data.u16(); !data.err {
+			h.RecordSizeLimit = v
+		}
+	case tlsExtALPS, tlsExtALPSOld:
+		protos := data.vec(2)
+		var list []string
+		for len(protos.b) > 0 && !protos.err {
+			list = append(list, string(protos.vec(1).b))
+		}
+		if !protos.err && !data.err {
+			h.ALPS = list
+		}
+	case tlsExtEncryptedHello:
+		h.ECH = true
 	}
 }
 

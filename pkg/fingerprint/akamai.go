@@ -133,3 +133,19 @@ func H2HeadersPriority(prefix []byte) string {
 
 	return ""
 }
+
+// firstHeaders returns the flags of the first HEADERS frame in the client bytes after the preface,
+// and its priority fields as H2HeadersPriority formats them.
+func firstHeaders(prefix []byte) (byte, string, bool) {
+	for b := prefix; len(b) >= h2FrameHeaderLength; {
+		length := int(b[0])<<16 | int(b[1])<<8 | int(b[2])
+		if len(b)-h2FrameHeaderLength < length {
+			return 0, "", false
+		}
+		if b[3] == h2FrameHeaders {
+			return b[4], H2HeadersPriority(b), true
+		}
+		b = b[h2FrameHeaderLength+length:]
+	}
+	return 0, "", false
+}

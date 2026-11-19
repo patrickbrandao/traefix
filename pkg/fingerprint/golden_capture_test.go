@@ -42,6 +42,7 @@ type goldenTLSRef struct {
 	JA4H []struct {
 		TCPStream int    `json:"tcp_stream"`
 		JA4H      string `json:"ja4h"`
+		JA4HRaw   string `json:"ja4h_r"`
 	} `json:"ja4h"`
 	ClientH2TCPStream *int `json:"clientH2TcpStream"`
 }
@@ -138,10 +139,16 @@ func TestGolden_http2(t *testing.T) {
 				assert.Equal(t, akamai, AkamaiH2(prefix, c.FirstPseudoNames()))
 				assert.Equal(t, priority, H2HeadersPriority(prefix))
 
-				var expected []string
+				var expected, expectedRaw []string
 				for _, r := range ref.JA4H {
 					if r.TCPStream == stream {
 						expected = append(expected, r.JA4H)
+						expectedRaw = append(expectedRaw, r.JA4HRaw)
+					}
+				}
+				for i, r := range c.pending {
+					if i < len(expectedRaw) {
+						assert.Equal(t, expectedRaw[i], r.JA4HRaw())
 					}
 				}
 				// The FoxIO tool prints no JA4H for some requests, e.g. the ones of curl with OpenSSL, and the

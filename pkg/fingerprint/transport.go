@@ -77,6 +77,7 @@ func transportHeader(info *connInfo, now time.Time, seq int64) string {
 		return ""
 	}
 
+	w.str("accepted", info.accepted.UTC().Format(time.RFC3339Nano))
 	w.int("conn_age_us", now.Sub(info.accepted).Microseconds())
 	w.int("req_seq", seq)
 
@@ -96,14 +97,10 @@ func writeTCPTransport(w *transportWriter, info *connInfo) {
 		w.int("ecn", int64(syn.TrafficClass&0x3))
 		if syn.IPVersion == 4 {
 			w.bool("df", syn.DF)
-			if syn.IPIDZero {
-				w.str("ipid", "0")
-			} else {
-				w.str("ipid", "nz")
-			}
+			w.str("ipid", "0x"+strconv.FormatUint(uint64(syn.IPID), 16))
 			w.int("ipopt", int64(syn.IPOptionsLen))
 		} else {
-			w.bool("flow", syn.FlowLabel != 0)
+			w.str("flow_label", "0x"+strconv.FormatUint(uint64(syn.FlowLabel), 16))
 		}
 		w.int("syn_len", int64(syn.Length))
 		w.int("syn_win", int64(syn.Window))

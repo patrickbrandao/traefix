@@ -92,8 +92,9 @@ type SYN struct {
 	TrafficClass uint8
 	// DF is the IPv4 don't fragment flag.
 	DF bool
-	// IPIDZero is set when the IPv4 identification is zero.
+	// IPIDZero is set when the IPv4 identification is zero, and IPID is its value.
 	IPIDZero bool
+	IPID     uint16
 	// IPOptionsLen is the length of the IPv4 options.
 	IPOptionsLen int
 	// FlowLabel is the IPv6 flow label.
@@ -133,7 +134,8 @@ func ParseSYN(packet []byte) (*SYN, error) {
 		P0F:          p.signature(),
 		TrafficClass: p.trafficClass,
 		DF:           p.quirks&quirkDF != 0,
-		IPIDZero:     p.ipIDZero,
+		IPIDZero:     p.ipID == 0 && p.ipVersion == 4,
+		IPID:         p.ipID,
 		IPOptionsLen: int(p.ipOptLen),
 		FlowLabel:    p.flowLabel,
 		Length:       p.length,
@@ -249,7 +251,7 @@ options:
 type p0fPacket struct {
 	ipVersion    int
 	trafficClass uint8
-	ipIDZero     bool
+	ipID         uint16
 	flowLabel    uint32
 	length       int
 	src          []byte
@@ -292,7 +294,7 @@ func parseP0FPacket(ip []byte) (*p0fPacket, error) {
 		}
 		p.ipVersion = 4
 		p.trafficClass = ip[1]
-		p.ipIDZero = binary.BigEndian.Uint16(ip[4:6]) == 0
+		p.ipID = binary.BigEndian.Uint16(ip[4:6])
 		p.length = total
 		p.src = ip[12:16]
 		p.ipOptLen = uint8(hl - 20)

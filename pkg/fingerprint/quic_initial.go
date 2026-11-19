@@ -446,6 +446,24 @@ func (a *QUICClientHelloAssembler) addRange(start, end int) {
 // QUICTransportParameterIDs returns the IDs of the quic_transport_parameters extension of a bare ClientHello message,
 // in the received order, GREASE included.
 func QUICTransportParameterIDs(msg []byte) ([]uint64, error) {
+	params, err := quicTransportParameters(msg)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint64, len(params))
+	for i, p := range params {
+		ids[i] = p.id
+	}
+	return ids, nil
+}
+
+type quicTransportParameter struct {
+	id    uint64
+	value []byte
+}
+
+// quicTransportParameters returns the QUIC transport parameters of a ClientHello message, in the client order.
+func quicTransportParameters(msg []byte) ([]quicTransportParameter, error) {
 	r := &reader{b: msg}
 	if r.u8() != tlsHandshakeClientHello {
 		return nil, errors.New("not a ClientHello")
@@ -470,7 +488,7 @@ func QUICTransportParameterIDs(msg []byte) ([]uint64, error) {
 			continue
 		}
 
-		var ids []uint64
+		var params []quicTransportParameter
 		b := data.b
 		for len(b) > 0 {
 			id, n := quicVarint(b)
@@ -482,10 +500,10 @@ func QUICTransportParameterIDs(msg []byte) ([]uint64, error) {
 			if n == 0 || uint64(len(b)-n) < length {
 				return nil, errors.New("malformed QUIC transport parameter")
 			}
+			params = append(params, quicTransportParameter{id: id, value: b[n : n+int(length)]})
 			b = b[n+int(length):]
-			ids = append(ids, id)
 		}
-		return ids, nil
+		return params, nil
 	}
 
 	return nil, errors.New("no QUIC transport parameters extension")
