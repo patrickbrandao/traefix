@@ -262,7 +262,9 @@
       }).catch(function () {}));
     }
 
-    return Promise.all(jobs).then(function () { return b; });
+    // A slow or stuck browser API (storage estimate, high entropy hints) must not leave the page blank.
+    var timeout = new Promise(function (resolve) { setTimeout(resolve, 1500); });
+    return Promise.race([Promise.all(jobs), timeout]).then(function () { return b; });
   }
 
   // ---------- interpretation ----------
