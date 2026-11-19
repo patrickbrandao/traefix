@@ -27,7 +27,7 @@ As bibliotecas que o fingerprint usa são forks com o prefixo `traefix-`, ligado
 
 | Módulo | Fork | Agente | Mudança local |
 |---|---|---|---|
-| `github.com/quic-go/quic-go` | `patrickbrandao/traefix-quic-go` | `.claude/agents/traefix-quic-go.md` | Ordem dos SETTINGS do HTTP/3 no qlog |
+| `github.com/quic-go/quic-go` | `patrickbrandao/traefix-quic-go` | `.claude/agents/traefix-quic-go.md` | Ordem dos SETTINGS do HTTP/3 no qlog; TTL e TOS do primeiro pacote (`ConnectionState.FirstPacket`) |
 | `github.com/quic-go/qpack` | `patrickbrandao/traefix-qpack` | `.claude/agents/traefix-qpack.md` | Nenhuma |
 | `golang.org/x/net` | `patrickbrandao/traefix-net` | `.claude/agents/traefix-net.md` | Nenhuma |
 

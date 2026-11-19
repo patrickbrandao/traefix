@@ -561,7 +561,9 @@ func TestFingerprintEntryPoint_routers(t *testing.T) {
 		// The JA4 of QUIC comes from the ClientHello the QUIC library gives to the TLS callback.
 		assert.Regexp(t, `^q13d\d{4}h3_`, got["X-Edge-Ja4"])
 		assert.Equal(t, "h3", got["X-Edge-Alpn"])
-		assert.Regexp(t, `^proto=udp,ipv=4,.*rtt_us=\d+,.*conn_age_us=\d+,req_seq=\d+$`, got["X-Edge-Transport"])
+		assert.Regexp(t, `^proto=udp,ipv=4,.*ttl=\d+,ttl_init=\d+,hops=\d+,dscp=0,ecn=\d,rtt_us=\d+,.*conn_age_us=\d+,req_seq=\d+$`, got["X-Edge-Transport"])
+		// The TTL of QUIC comes from the first Initial, as the QUIC library reports it.
+		assert.Regexp(t, `^\d+$`, got["X-Edge-Ttl"])
 		assert.NotEmpty(t, got["X-Edge-Server-Port"])
 		assert.Contains(t, got["X-Edge-Tls"], ",transport=quic")
 		assert.Empty(t, got["X-Edge-H2-Detail"])

@@ -188,7 +188,7 @@ func TestFingerprintExport_schema(t *testing.T) {
 	assert.Empty(t, undeclared)
 
 	// The traffic above reaches the TLS, HTTP/2 and HTTP/3 parts of the records.
-	expected := []string{"records.tls.ja4", "records.tls.ja4r", "records.tls.ja3n", "records.http2.akamai", "records.http3.settings", "records.ja4h"}
+	expected := []string{"records.tls.ja4", "records.tls.ja4r", "records.tls.ja3n", "records.http2.akamai", "records.http3.settings", "records.ja4h", "records.udp.ttl", "records.udp.dscp"}
 	if runtime.GOOS == "linux" {
 		expected = append(expected, "records.tcp.ja4t", "records.tcp.p0f", "records.tcp.syn")
 	}

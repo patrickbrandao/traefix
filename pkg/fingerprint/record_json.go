@@ -90,6 +90,20 @@ func (r *connectionRecord) appendJSON(b []byte) []byte {
 		b = closeObject(b, start)
 	}
 
+	if u := r.UDP; u != nil {
+		b = append(b, `,"udp":{`...)
+		start := len(b)
+		for _, f := range []struct {
+			key string
+			v   *int
+		}{{"ttl", u.TTL}, {"dscp", u.DSCP}, {"ecn", u.ECN}} {
+			if f.v != nil {
+				b = strconv.AppendInt(appendKey(b, f.key), int64(*f.v), 10)
+			}
+		}
+		b = closeObject(b, start)
+	}
+
 	if t := r.Timing; t != nil {
 		b = append(b, `,"timing":{"source":`...)
 		b = appendJSONString(b, t.Source)

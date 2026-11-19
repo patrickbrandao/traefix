@@ -61,6 +61,7 @@ func (e *EntryPoint) Handler(next http.Handler) http.Handler {
 				st.wire = info.capture.take(req)
 			case info.h3 != nil:
 				st.wire = info.h3.take(req)
+				info.h3.waitSettings(maxSettingsWait)
 			}
 			e.finishConn(info, protoOf(req))
 		}
@@ -167,6 +168,8 @@ func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
 		}
 		if info.synView != nil {
 			s.set(e.headers.ttl, strconv.Itoa(info.synView.TTL))
+		} else if info.quicIP.HasTTL {
+			s.set(e.headers.ttl, strconv.Itoa(int(info.quicIP.TTL)))
 		}
 		if v := transportHeader(info, st.start, info.requests.Add(1)); v != "" {
 			s.set(e.headers.transport, v)

@@ -16,7 +16,7 @@ Você é o responsável pelo fork **traefix-quic-go** do módulo `github.com/qui
   `replace github.com/quic-go/quic-go => github.com/patrickbrandao/traefix-quic-go <tag>`.
 - Branch `traefix` = release oficial em uso + commits locais, um por mudança, com a mensagem terminando
   em "(Traefix)". O `TRAEFIX.md` da raiz do fork descreve o modelo.
-- Tags `<versão oficial>-traefix.<n>`: base `v0.65.0` hoje, tag `v0.65.0-traefix.1`.
+- Tags `<versão oficial>-traefix.<n>`: base `v0.65.0` hoje, tag `v0.65.0-traefix.2`.
 - No Traefix, `scripts/traefix/check-forks.sh` exige que o `require` de `github.com/quic-go/quic-go` seja igual à base da
   tag do `replace`; o `docker-build.sh` e o `deploy-dev.sh` rodam essa verificação.
 
@@ -28,6 +28,11 @@ Mudanças locais no fork:
 - `http3/qlog.SettingsFrame.Order`: os IDs dos SETTINGS na ordem do fio, GREASE incluído, e o JSON do
   qlog nessa ordem. Usado por `quicTrace.setSettings` para `http3.settings`. Candidato a PR no upstream
   (o formato qlog trata os settings como lista).
+- `ConnectionState.FirstPacket` (`IPHeaderInfo`, desde `v0.65.0-traefix.2`): TTL/hop limit e TOS/traffic class do
+  primeiro Initial, pelos cmsgs `IP_RECVTTL`/`IPV6_RECVHOPLIMIT` (e os de ECN que já existiam) em
+  `sys_conn_oob.go`. Usado por `QUICConnContext` para `X-Traefix-Ttl`, as chaves `ttl`/`dscp`/`ecn` do
+  `Transport` e o objeto `udp` do registro. Testes: `TestReadIPHeaderInfo`, `TestParseTTLMsg`,
+  `integrationtests/self/first_packet_test.go`. No macOS, IPv4 num socket IPv6 não traz o TTL.
 
 ## Regras
 

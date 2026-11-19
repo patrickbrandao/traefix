@@ -121,6 +121,14 @@
             "rttMicros": { "type": "integer", "minimum": 0 },
             "syn": { "$ref": "#/$defs/base64" }
           }
+        },
+        "udp": {
+          "type": "object",
+          "properties": {
+            "ttl": { "type": "integer", "minimum": 0, "maximum": 255 },
+            "dscp": { "type": "integer", "minimum": 0, "maximum": 63 },
+            "ecn": { "type": "integer", "minimum": 0, "maximum": 3 }
+          }
         }
       }
     },

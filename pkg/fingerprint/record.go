@@ -3,6 +3,8 @@ package fingerprint
 import (
 	"strings"
 	"time"
+
+	"github.com/quic-go/quic-go"
 )
 
 // Schema identifies the format of the exported batches, documented with the entry point fingerprint option.
@@ -48,6 +50,25 @@ type tcpRecord struct {
 	SYN       []byte `json:"syn,omitempty"`
 }
 
+// udpRecord is the IP header of the first QUIC Initial.
+type udpRecord struct {
+	TTL  *int `json:"ttl,omitempty"`
+	DSCP *int `json:"dscp,omitempty"`
+	ECN  *int `json:"ecn,omitempty"`
+}
+
+func newUDPRecord(h quic.IPHeaderInfo) *udpRecord {
+	rec := &udpRecord{}
+	if h.HasTTL {
+		rec.TTL = new(int(h.TTL))
+	}
+	if h.HasTOS {
+		rec.DSCP = new(int(h.TOS >> 2))
+		rec.ECN = new(int(h.TOS & 0x3))
+	}
+	return rec
+}
+
 type http3Record struct {
 	Settings string `json:"settings,omitempty"`
 }
@@ -71,6 +92,7 @@ type connectionRecord struct {
 	HTTP2      *http2Record  `json:"http2,omitempty"`
 	HTTP3      *http3Record  `json:"http3,omitempty"`
 	TCP        *tcpRecord    `json:"tcp,omitempty"`
+	UDP        *udpRecord    `json:"udp,omitempty"`
 	Timing     *timingRecord `json:"timing,omitempty"`
 }
 

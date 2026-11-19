@@ -10,14 +10,19 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
 	h3qlog "github.com/quic-go/quic-go/http3/qlog"
 	"github.com/quic-go/quic-go/qlogwriter"
+	"golang.org/x/net/ipv4"
 )
 
 const (
+	// maxSettingsWait bounds the wait of the first HTTP/3 request for the SETTINGS of the client.
+	maxSettingsWait = 3 * time.Millisecond
+
 	// quicPendingTTL bounds the life of the ClientHellos of the QUIC handshakes that never become a connection.
 	quicPendingTTL = 30 * time.Second
 
@@ -126,13 +131,52 @@ func clientHelloFromInfo(info *tls.ClientHelloInfo) *ClientHello {
 }
 
 // WrapPacketConn returns a packet connection recording the ClientHello bytes of the Initial packets, when the
-// export carries the raw bytes. The QUIC library uses the batch reads and the offloads of a UDP socket only when
-// it gets the socket itself, which the wrapper hides: the raw bytes cost these optimizations.
+// export carries the raw bytes.
 func (e *EntryPoint) WrapPacketConn(c net.PacketConn) net.PacketConn {
 	if !e.rawBytes {
 		return c
 	}
+	if udp, ok := c.(*net.UDPConn); ok {
+		return &initialUDPConn{UDPConn: udp, batch: ipv4.NewPacketConn(udp), ep: e}
+	}
 	return &initialConn{PacketConn: c, ep: e}
+}
+
+// initialUDPConn keeps the methods of the UDP socket, and reads in batches like the QUIC library does: the library
+// then keeps its batch reads, its offloads and the control messages that give the TTL and the ECN of the packets,
+// which it only uses when the connection it gets has these methods.
+type initialUDPConn struct {
+	*net.UDPConn
+
+	batch *ipv4.PacketConn
+	ep    *EntryPoint
+}
+
+// ReadBatch is the read the QUIC library uses on Linux, macOS and FreeBSD.
+func (c *initialUDPConn) ReadBatch(ms []ipv4.Message, flags int) (int, error) {
+	n, err := c.batch.ReadBatch(ms, flags)
+	for i := range n {
+		if m := &ms[i]; m.N > 0 && m.Addr != nil && len(m.Buffers) > 0 {
+			c.observe(m.Addr, m.Buffers[0][:m.N])
+		}
+	}
+	return n, err
+}
+
+// ReadFrom is the read the QUIC library uses on the other systems.
+func (c *initialUDPConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	n, addr, err := c.UDPConn.ReadFrom(p)
+	if n > 0 && addr != nil {
+		c.observe(addr, p[:n])
+	}
+	return n, addr, err
+}
+
+func (c *initialUDPConn) observe(addr net.Addr, datagram []byte) {
+	// Only the long header packets carry an Initial packet.
+	if datagram[0]&0x80 != 0 {
+		c.ep.observeInitial(addr.String(), datagram)
+	}
 }
 
 type initialConn struct {
@@ -206,6 +250,10 @@ type quicTrace struct {
 	pending  []*Request
 	streams  map[quic.StreamID]struct{}
 	settings string
+	// settingsSeen is closed with the first SETTINGS frame of the client.
+	settingsSeen chan struct{}
+	// waited makes only the first request wait, for a client that never sends SETTINGS.
+	waited atomic.Bool
 }
 
 // QUICTracer is the qlog tracer of the connections, for the http3HeaderOrder option.
@@ -213,7 +261,7 @@ func (e *EntryPoint) QUICTracer(_ context.Context, isClient bool, _ quic.Connect
 	if isClient {
 		return nil
 	}
-	return &quicTrace{fields: e.captureCfg.fields, streams: make(map[quic.StreamID]struct{})}
+	return &quicTrace{fields: e.captureCfg.fields, streams: make(map[quic.StreamID]struct{}), settingsSeen: make(chan struct{})}
 }
 
 func (t *quicTrace) AddProducer() qlogwriter.Recorder {
@@ -344,8 +392,31 @@ func (t *quicTrace) setSettings(f h3qlog.SettingsFrame) {
 	}
 
 	t.mu.Lock()
+	if t.settings == "" && t.settingsSeen != nil {
+		close(t.settingsSeen)
+	}
 	t.settings = b.String()
 	t.mu.Unlock()
+}
+
+// waitSettings waits for the SETTINGS frame of the client, at most d. The client sends it first on its control
+// stream, usually in the packets of the first request, but the server reads the control stream and the request
+// streams in their own goroutines: the first request can reach the handler before the SETTINGS is read.
+func (t *quicTrace) waitSettings(d time.Duration) {
+	if t.settingsSeen == nil || t.waited.Swap(true) {
+		return
+	}
+	select {
+	case <-t.settingsSeen:
+		return
+	default:
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-t.settingsSeen:
+	case <-timer.C:
+	}
 }
 
 func (t *quicTrace) take(req *http.Request) *Request {

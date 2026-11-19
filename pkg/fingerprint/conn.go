@@ -61,6 +61,8 @@ type connInfo struct {
 	tcpConn *net.TCPConn
 
 	quicInitial quicInitialInfo
+	// quicIP is the IP header of the first Initial, as the QUIC library reports it.
+	quicIP quic.IPHeaderInfo
 
 	// detail holds the detail header values, formatted once.
 	detail *connDetail

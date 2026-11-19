@@ -436,7 +436,7 @@ replace (
 // Each replace pins the same upstream release as the require above: scripts/traefix/check-forks.sh fails otherwise.
 replace (
 	github.com/quic-go/qpack => github.com/patrickbrandao/traefix-qpack v0.6.0-traefix.1
-	github.com/quic-go/quic-go => github.com/patrickbrandao/traefix-quic-go v0.65.0-traefix.1
+	github.com/quic-go/quic-go => github.com/patrickbrandao/traefix-quic-go v0.65.0-traefix.2
 	golang.org/x/net => github.com/patrickbrandao/traefix-net v0.62.0-traefix.1
 )
 

@@ -118,7 +118,7 @@ Traefix adds these headers to each request of the entry point, before any router
 | <a id="opt-X-Traefix-Ja4" href="#opt-X-Traefix-Ja4" title="#opt-X-Traefix-Ja4">`X-Traefix-Ja4`</a> | [JA4](https://github.com/FoxIO-LLC/ja4) fingerprint of the TLS ClientHello. |
 | <a id="opt-X-Traefix-Alpn" href="#opt-X-Traefix-Alpn" title="#opt-X-Traefix-Alpn">`X-Traefix-Alpn`</a> | Application protocols offered in the TLS ClientHello, in the client order, separated by commas, for example `h2,http/1.1`. The bytes of a protocol name that are not visible ASCII, the comma and the percent sign are percent-encoded, for example `%2C`. |
 | <a id="opt-X-Traefix-Ja4t" href="#opt-X-Traefix-Ja4t" title="#opt-X-Traefix-Ja4t">`X-Traefix-Ja4t`</a> | [JA4T](https://github.com/FoxIO-LLC/ja4) fingerprint of the TCP SYN of the connection, with the `tcp` option. |
-| <a id="opt-X-Traefix-Ttl" href="#opt-X-Traefix-Ttl" title="#opt-X-Traefix-Ttl">`X-Traefix-Ttl`</a> | TTL, or hop limit, of the TCP SYN as received, with the `tcp` option. |
+| <a id="opt-X-Traefix-Ttl" href="#opt-X-Traefix-Ttl" title="#opt-X-Traefix-Ttl">`X-Traefix-Ttl`</a> | TTL, or hop limit, as received: of the TCP SYN with the `tcp` option, of the first QUIC Initial over HTTP/3 on Linux, macOS and FreeBSD. |
 | <a id="opt-X-Traefix-Transport" href="#opt-X-Traefix-Transport" title="#opt-X-Traefix-Transport">`X-Traefix-Transport`</a> | What the IP, TCP and QUIC layers tell of the connection, as `key=value` pairs separated by commas, described in [Transport Header](#transport-header). Over TCP, it needs the `tcp` option. |
 | <a id="opt-X-Traefix-H2" href="#opt-X-Traefix-H2" title="#opt-X-Traefix-H2">`X-Traefix-H2`</a> | Akamai fingerprint of the HTTP/2 connection: settings, window update, priority frames and pseudo-header order. Present on HTTP/2 requests only. |
 | <a id="opt-X-Traefix-Ja4h" href="#opt-X-Traefix-Ja4h" title="#opt-X-Traefix-Ja4h">`X-Traefix-Ja4h`</a> | [JA4H](https://github.com/FoxIO-LLC/ja4) fingerprint of the request, computed with the header order and case the client sent, and with the cookie values, which only leave Traefix with `allowSensitiveFields`. |
@@ -179,10 +179,10 @@ proto=tcp,ipv=4,ttl=48,ttl_init=64,hops=16,dscp=0,ecn=0,df=1,ipid=0x0,ipopt=0,sy
 Over HTTP/3:
 
 ```text
-proto=udp,ipv=4,quic_ver=1,initial_size=1250,dcid_len=8,scid_len=8,initial_pkts=1,rtt_us=23500,rttvar_us=3900,rtt_min_us=23100,cwnd=13500,lost=0,conn_age_us=31020,req_seq=1
+proto=udp,ipv=4,quic_ver=1,initial_size=1250,dcid_len=8,scid_len=8,initial_pkts=1,ttl=50,ttl_init=64,hops=14,dscp=0,ecn=0,rtt_us=23500,rttvar_us=3900,rtt_min_us=23100,cwnd=13500,lost=0,conn_age_us=31020,req_seq=1
 ```
 
-`quic_ver`, `initial_size` (the size of the first datagram of the client, padded by each client to its own size), `dcid_len`, `scid_len` and `initial_pkts` need `export.rawBytes`, which reads the Initial packets. `rtt_us`, `rttvar_us`, `rtt_min_us`, `cwnd` (in bytes) and `lost` (packets) come from the QUIC library. The TTL and the traffic class of the UDP datagrams aren't available.
+`quic_ver`, `initial_size` (the size of the first datagram of the client, padded by each client to its own size), `dcid_len`, `scid_len` and `initial_pkts` need `export.rawBytes`, which reads the Initial packets. `rtt_us`, `rttvar_us`, `rtt_min_us`, `cwnd` (in bytes) and `lost` (packets) come from the QUIC library. `ttl`, `ttl_init`, `hops`, `dscp` and `ecn` describe the IP header of the first Initial datagram, read by the QUIC library from the control messages of the socket (`IP_RECVTTL`, `IPV6_RECVHOPLIMIT`, `IP_RECVTOS`, `IPV6_RECVTCLASS`) on Linux, macOS and FreeBSD, without the `tcp` option. macOS doesn't give the TTL of the IPv4 datagrams received on an IPv6 socket, the default socket of an entry point without an address.
 
 Traefix reads `TCP_INFO` with one system call per request.
 
@@ -216,7 +216,7 @@ On HTTP/3 connections, Traefix adds the same headers, with `X-Traefix-Proto` set
 
 - `X-Traefix-Ja3` and `X-Traefix-Ja4` come from the ClientHello that the QUIC library hands to the TLS handshake. The JA4 starts with `q`.
 - `X-Traefix-Ja4h`, and the `fieldNames` of the request records, need the `http3HeaderOrder` option, described in [Configuration Options](#opt-fingerprint-http3HeaderOrder).
-- With `export.rawBytes`, Traefix also decrypts the Initial packets of each new connection, with the keys that RFC 9001 derives from their connection identifier, to export the raw ClientHello and the order of the QUIC transport parameters. Traefix then reads the UDP socket through a wrapper, which disables the batch reads and the offloads of the QUIC library on that socket.
+- With `export.rawBytes`, Traefix also decrypts the Initial packets of each new connection, with the keys that RFC 9001 derives from their connection identifier, to export the raw ClientHello and the order of the QUIC transport parameters. Traefix observes the datagrams through a wrapper that keeps the methods of the UDP socket, so the QUIC library keeps its batch reads, its offloads and the control messages that give the TTL.
 
 ## Rule Matchers
 
@@ -317,6 +317,7 @@ Traefix exports one connection record per connection, at the first request, or w
 | <a id="opt-tcp-ja4t" href="#opt-tcp-ja4t" title="#opt-tcp-ja4t">`tcp.ja4t`</a> | JA4T fingerprint of the SYN, the value of `X-Traefix-Ja4t`. Present with the `tcp` option, as the whole `tcp` object. |
 | <a id="opt-tcp-p0f" href="#opt-tcp-p0f" title="#opt-tcp-p0f">`tcp.p0f`</a> | p0f v3 signature of the SYN. |
 | <a id="opt-tcp-ttl" href="#opt-tcp-ttl" title="#opt-tcp-ttl">`tcp.ttl`</a> | TTL, or hop limit, of the SYN as received. |
+| <a id="opt-udp" href="#opt-udp" title="#opt-udp">`udp.ttl`, `udp.dscp`, `udp.ecn`</a> | TTL or hop limit, DSCP and ECN of the first QUIC Initial datagram, as received. Present over HTTP/3 when the QUIC library reports them, as the whole `udp` object. |
 | <a id="opt-tcp-rttMicros" href="#opt-tcp-rttMicros" title="#opt-tcp-rttMicros">`tcp.rttMicros`</a> | Round-trip time that the kernel measured during the TCP handshake, in microseconds. |
 | <a id="opt-tcp-syn" href="#opt-tcp-syn" title="#opt-tcp-syn">`tcp.syn`</a> | Raw bytes of the SYN, from its IP header, in base64. Present with `rawBytes`. |
 

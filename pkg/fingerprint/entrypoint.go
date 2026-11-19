@@ -313,6 +313,7 @@ func (e *EntryPoint) QUICConnContext(ctx context.Context, c *quic.Conn) context.
 	if t, ok := c.QlogTrace().(*quicTrace); ok {
 		info.h3 = t
 	}
+	info.quicIP = c.ConnectionState().FirstPacket
 
 	context.AfterFunc(c.Context(), func() { e.finishConn(info, "h3") })
 
@@ -438,6 +439,9 @@ func (e *EntryPoint) finalizeConn(info *connInfo, proto string) {
 
 	if len(info.syn) > 0 {
 		rec.TCP = e.tcpRecord(info)
+	}
+	if info.quic != nil && (info.quicIP.HasTTL || info.quicIP.HasTOS) {
+		rec.UDP = newUDPRecord(info.quicIP)
 	}
 
 	if e.headerDetail != detailBasic {

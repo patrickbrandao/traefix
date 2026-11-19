@@ -171,6 +171,18 @@ func writeQUICTransport(w *transportWriter, info *connInfo) {
 		w.int("initial_pkts", int64(in.packets))
 	}
 
+	if ip := info.quicIP; ip.HasTTL {
+		ttl := int(ip.TTL)
+		w.int("ttl", int64(ttl))
+		initial := initialTTL(ttl)
+		w.int("ttl_init", int64(initial))
+		w.int("hops", int64(initial-ttl))
+	}
+	if ip := info.quicIP; ip.HasTOS {
+		w.int("dscp", int64(ip.TOS>>2))
+		w.int("ecn", int64(ip.TOS&0x3))
+	}
+
 	stats := info.quic.ConnectionStats()
 	w.int("rtt_us", stats.SmoothedRTT.Microseconds())
 	w.int("rttvar_us", stats.MeanDeviation.Microseconds())

@@ -27,6 +27,7 @@ The names below use the default `X-Traefix-` prefix, set by `headerPrefix`.
 |:------|:------|:------:|:------:|:------:|
 | Connection data, `Time`, fingerprints of TLS and HTTP | `fingerprint` | ✔ | ✔ | ✔ (JA4H with `http3HeaderOrder`) |
 | TCP view: `Ja4t`, `Ttl`, `P0f`, the SYN and `TCP_INFO` keys of `Transport` | `fingerprint.tcp`, Linux | ✔ | ✔ | — |
+| UDP view: `Ttl` and the `ttl`, `ttl_init`, `hops`, `dscp`, `ecn` keys of `Transport`, `udp` record | `fingerprint`, Linux, macOS or FreeBSD | — | — | ✔ |
 | Detail headers, `Timing` | `headerDetail: full` (default) or `raw` | ✔ | ✔ | ✔ |
 | Kernel arrival times in `Timing` (`src=kernel`) | `fingerprint.tcp`, Linux | ✔ | ✔ | — |
 | QUIC Initial data, transport parameters | `export.rawBytes` | — | — | ✔ |
@@ -101,7 +102,7 @@ The names below use the default `X-Traefix-` prefix, set by `headerPrefix`.
 | Header | Content | Example |
 |:-------|:--------|:--------|
 | <a id="opt-sig-Ja4t" href="#opt-sig-Ja4t" title="#opt-sig-Ja4t">`X-Traefix-Ja4t`</a> | FoxIO JA4T of the SYN. Checked against the FoxIO tool. | `65535_2-1-3-1-1-8-4-0-0_1460_6` |
-| <a id="opt-sig-Ttl" href="#opt-sig-Ttl" title="#opt-sig-Ttl">`X-Traefix-Ttl`</a> | TTL or hop limit of the SYN as received. | `50` |
+| <a id="opt-sig-Ttl" href="#opt-sig-Ttl" title="#opt-sig-Ttl">`X-Traefix-Ttl`</a> | TTL or hop limit as received: of the SYN over TCP (`fingerprint.tcp`), of the first Initial datagram over HTTP/3. Absent when unknown: see [TTL](#ttl). | `50` |
 | <a id="opt-sig-P0f" href="#opt-sig-P0f" title="#opt-sig-P0f">`X-Traefix-P0f`</a> | p0f v3 `raw_sig` of the SYN. Checked against p0f 3.09b. Match it against a `p0f.fp` database for an operating system guess. | `4:50+14:0:1460:65535,6:mss,nop,ws,nop,nop,ts,sok,eol+1:df,ecn:0` |
 | <a id="opt-sig-Syn" href="#opt-sig-Syn" title="#opt-sig-Syn">`X-Traefix-Syn`</a> | Raw SYN from its IP header, base64, with `raw`. | `RQAAPAAAQAAyBg…` |
 | <a id="opt-sig-Transport" href="#opt-sig-Transport" title="#opt-sig-Transport">`X-Traefix-Transport`</a> | IP, TCP and QUIC data, specified in [Transport Header](./entrypoints-fingerprint.md#transport-header). | `proto=tcp,ipv=4,ttl=50,…` |
@@ -168,6 +169,16 @@ A relay opens the TCP connection to Traefix itself, and carries the TLS of the r
 
 - `syn_mss` and `mtu_est` of `X-Traefix-Transport`: 1460 (1440 in IPv6) is a plain Ethernet path, 1452 PPPoE, around 1380 to 1420 a VPN such as WireGuard or IPsec, lower values another encapsulation. The MSS is the one received, so a device on the path that lowers it (MSS clamping) shows here.
 - `hops` and `ttl_init`: a TTL far from its initial value is a long path; an initial value that doesn't match the operating system of the `User-Agent` is a mismatch (below).
+
+### TTL
+
+The TTL (IPv4) or hop limit (IPv6) is the initial value of the sender's stack minus one per router on the path.
+
+- **Source.** Over TCP, the SYN that the kernel saves (`fingerprint.tcp`, Linux). Over HTTP/3, the first Initial datagram, from the control messages of the UDP socket (Linux, macOS, FreeBSD). Both describe the first packet of the connection, before any option is negotiated.
+- **Absent when** the kernel answered with SYN cookies (a full accept queue: no SYN saved), the `tcp` option is off or the system isn't Linux (TCP), the system doesn't report it (HTTP/3 on Windows, IPv4 on an IPv6 socket on macOS), or a PROXY protocol or load balancer stands before Traefix (the value is then the one of that device). Treat a missing value as unknown, never as 0.
+- **Initial value.** `ttl_init` rounds the TTL up to the usual initial values 32, 64, 128 and 255, and `hops` is the difference. 64 is Linux, Android, macOS, iOS and the BSDs, 128 is Windows, 255 is network equipment and some Unix systems. Paths of more than 30 hops are rare, so the guess holds, except for the rare 32.
+- **Docker.** A container on a bridge network receives the packets after the routing of the host, which takes one off the TTL: `hops` counts one more. With `network_mode: host`, it doesn't.
+- **TCP against UDP.** The same client gives the same `ttl_init`, and usually the same `hops`, on its TCP and HTTP/3 connections. A difference means two stacks or two paths, for example a SOCKS5 proxy that relays the TCP and not the UDP, or a VPN that carries only one of them: aggregate the connections of the same address.
 
 ### Operating system and client consistency
 

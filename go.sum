@@ -1051,8 +1051,8 @@ github.com/patrickbrandao/traefix-net v0.62.0-traefix.1 h1:l907GZFcfA5FJu8zRDySq
 github.com/patrickbrandao/traefix-net v0.62.0-traefix.1/go.mod h1:WgDCOTH8iwtB66T4/GfI94AHo/hhdb7Hah9NDseQfiI=
 github.com/patrickbrandao/traefix-qpack v0.6.0-traefix.1 h1:zQ7n1nnKkS7sXmZNWwdYA5uVP4z8ckze6fU4/55/C48=
 github.com/patrickbrandao/traefix-qpack v0.6.0-traefix.1/go.mod h1:lUpLKChi8njB4ty2bFLX2x4gzDqXwUpaO1DP9qMDZII=
-github.com/patrickbrandao/traefix-quic-go v0.65.0-traefix.1 h1:sWQNgTETPT3b+vRI4exm7a4O8xhhlImOVORm31yWbFU=
-github.com/patrickbrandao/traefix-quic-go v0.65.0-traefix.1/go.mod h1:RAro2j2yN9a9EiPACLHT9IB2NXCvGQmmo/alT0yYI0w=
+github.com/patrickbrandao/traefix-quic-go v0.65.0-traefix.2 h1:HxaZs5vyENoPriOCOK2nJSTZ8Q2XgH1tef1bQdWVp7Q=
+github.com/patrickbrandao/traefix-quic-go v0.65.0-traefix.2/go.mod h1:RAro2j2yN9a9EiPACLHT9IB2NXCvGQmmo/alT0yYI0w=
 github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
 github.com/patrickmn/go-cache v2.1.0+incompatible/go.mod h1:3Qf8kWWT7OJRJbdiICTKqZju1ZixQ/KpMGzzAfe6+WQ=
 github.com/pelletier/go-toml v1.2.0/go.mod h1:5z9KED0ma1S8pY6P1sdut58dfprrGBbd/94hg7ilaic=
