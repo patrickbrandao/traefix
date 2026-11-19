@@ -60,17 +60,18 @@ type http2Record struct {
 }
 
 type connectionRecord struct {
-	Type       string       `json:"type"`
-	ConnID     string       `json:"connId"`
-	Time       time.Time    `json:"time"`
-	EntryPoint string       `json:"entryPoint"`
-	Src        addrRecord   `json:"src"`
-	Dst        addrRecord   `json:"dst"`
-	Proto      string       `json:"proto,omitempty"`
-	TLS        *tlsRecord   `json:"tls,omitempty"`
-	HTTP2      *http2Record `json:"http2,omitempty"`
-	HTTP3      *http3Record `json:"http3,omitempty"`
-	TCP        *tcpRecord   `json:"tcp,omitempty"`
+	Type       string        `json:"type"`
+	ConnID     string        `json:"connId"`
+	Time       time.Time     `json:"time"`
+	EntryPoint string        `json:"entryPoint"`
+	Src        addrRecord    `json:"src"`
+	Dst        addrRecord    `json:"dst"`
+	Proto      string        `json:"proto,omitempty"`
+	TLS        *tlsRecord    `json:"tls,omitempty"`
+	HTTP2      *http2Record  `json:"http2,omitempty"`
+	HTTP3      *http3Record  `json:"http3,omitempty"`
+	TCP        *tcpRecord    `json:"tcp,omitempty"`
+	Timing     *timingRecord `json:"timing,omitempty"`
 }
 
 func (r *connectionRecord) size() int {

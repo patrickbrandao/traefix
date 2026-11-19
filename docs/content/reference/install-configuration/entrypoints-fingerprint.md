@@ -188,6 +188,8 @@ Traefix reads `TCP_INFO` with one system call per request.
 
 ### Detail Headers
 
+The [Fingerprint Signals](./entrypoints-fingerprint-signals.md) page specifies every header and key below, with its source, unit and precision, and how a detection service reads them.
+
 With `headerDetail` set to `full`, the default, or `raw`, Traefix also adds these headers. They use the same `key=value` format as `X-Traefix-Transport`, except the lists of names, which are separated by commas. A value from the client, such as the server name or a header name, has its bytes outside visible ASCII and its separators percent-encoded.
 
 | Header | Contains | Example |
@@ -202,6 +204,7 @@ With `headerDetail` set to `full`, the default, or `raw`, Traefix also adds thes
 | <a id="opt-X-Traefix-H3" href="#opt-X-Traefix-H3" title="#opt-X-Traefix-H3">`X-Traefix-H3`</a> | `SETTINGS` of the HTTP/3 connection in the client order, with `http3HeaderOrder`, and the QUIC transport parameters in the client order, with `export.rawBytes`: `name:value` for an integer, `name:<length>b` for bytes, the name alone for a flag, `grease` for a reserved identifier. HTTP/3 only. | `settings=1:65536;7:100;6:65536,tp=max_idle_timeout:30000-max_udp_payload:1472-initial_max_data:15728640-…-grease` |
 | <a id="opt-X-Traefix-Header-Order" href="#opt-X-Traefix-Header-Order" title="#opt-X-Traefix-Header-Order">`X-Traefix-Header-Order`</a> | Names of the request headers in the order and case the client sent, without the HTTP/2 and HTTP/3 pseudo-headers. | `Host,User-Agent,Accept,Accept-Language,Accept-Encoding,Cookie` |
 | <a id="opt-X-Traefix-Cookie-Names" href="#opt-X-Traefix-Cookie-Names" title="#opt-X-Traefix-Cookie-Names">`X-Traefix-Cookie-Names`</a> | Names of the cookies in the received order, without their values. | `sid,_ga,theme` |
+| <a id="opt-X-Traefix-Timing" href="#opt-X-Traefix-Timing" title="#opt-X-Traefix-Timing">`X-Traefix-Timing`</a> | Milestones of the start of the connection: TCP and TLS round trips, wait for the first byte, ClientHello, server flight, handshake, as specified in [Timing](./entrypoints-fingerprint-signals.md#timing). With the `tcp` option on Linux, the arrival times come from the kernel. | `src=kernel,proto=tcp,tcp_rtt_us=120412,est_to_first_us=124980,ch_us=35,srv_us=410,tls_rtt_us=240115,tls_us=245300,rtt_gap_us=119703,req_us=246020` |
 | <a id="opt-X-Traefix-Syn" href="#opt-X-Traefix-Syn" title="#opt-X-Traefix-Syn">`X-Traefix-Syn`</a> | Raw SYN from its IP header, in base64. `raw` level and `tcp` option. | `RQAAPAAAQAAyBg…` |
 | <a id="opt-X-Traefix-Client-Hello" href="#opt-X-Traefix-Client-Hello" title="#opt-X-Traefix-Client-Hello">`X-Traefix-Client-Hello`</a> | Raw ClientHello, records included over TCP, in base64. `raw` level. A ClientHello longer than 4 KiB once encoded is left out, and `X-Traefix-Tls` ends with `ch_raw=omitted`. | `FgMBBuIBAAbeAwM…` |
 

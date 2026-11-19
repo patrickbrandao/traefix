@@ -43,6 +43,14 @@ func TestAppendJSON_matchesEncodingJSON(t *testing.T) {
 			TLS:   &tlsRecord{JA4: "q13d", QUICTransportParameters: []uint64{4, 5, 0x0f, 0x1a2a3a4a}},
 			HTTP3: &http3Record{Settings: "1:0;6:16384"},
 		},
+		&connectionRecord{
+			Type: recordConnection, ConnID: "id", Time: now, EntryPoint: "ep",
+			Timing: &timingRecord{
+				Source: "kernel", FirstByte: &now, TCPRTTMicros: ptrInt64(120412), EstToFirst: ptrInt64(-3),
+				ClientHello: ptrInt64(35), Server: ptrInt64(410), TLSRTT: ptrInt64(240115), Handshake: ptrInt64(245300),
+				RTTGap: ptrInt64(119703),
+			},
+		},
 	}
 
 	for _, r := range records {
@@ -63,3 +71,5 @@ func BenchmarkRequestRecordAppendJSON(b *testing.B) {
 		buf = rec.appendJSON(buf[:0])
 	}
 }
+
+func ptrInt64(v int64) *int64 { return new(v) }

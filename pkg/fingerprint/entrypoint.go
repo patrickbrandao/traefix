@@ -38,6 +38,7 @@ type headerNames struct {
 
 	tls, tlsHello, ja3String, ja3nString, ja4r, ja4o, ja4hRaw, p0f string
 	h2Detail, h3, headerOrder, cookieNames, syn, clientHello       string
+	timing                                                         string
 }
 
 // EntryPoint identifies and fingerprints the connections and requests of an entry point.
@@ -134,6 +135,7 @@ func NewEntryPoint(ctx context.Context, name string, cfg *static.Fingerprint, h2
 		cookieNames: textproto.CanonicalMIMEHeaderKey(prefix + "Cookie-Names"),
 		syn:         textproto.CanonicalMIMEHeaderKey(prefix + "Syn"),
 		clientHello: textproto.CanonicalMIMEHeaderKey(prefix + "Client-Hello"),
+		timing:      textproto.CanonicalMIMEHeaderKey(prefix + "Timing"),
 	}
 
 	if h2 != nil && h2.MaxDecoderHeaderTableSize > 0 {
@@ -223,6 +225,7 @@ func (e *EntryPoint) Accept(c tcp.WriteCloser) tcp.WriteCloser {
 
 	// A connection that went through the PROXY protocol is not a *net.TCPConn: its SYN, the one of the proxy,
 	// would not tell about the client.
+	accepted := &acceptedConn{WriteCloser: c, ep: e, info: info, key: key, capturing: true, timing: e.headerDetail != detailBasic}
 	if tc, ok := c.(*net.TCPConn); ok && e.tcp {
 		syn, rtt, err := readSYN(tc)
 		if err != nil {
@@ -230,13 +233,17 @@ func (e *EntryPoint) Accept(c tcp.WriteCloser) tcp.WriteCloser {
 		}
 		info.syn, info.rtt = syn, rtt
 		info.tcpConn = tc
+		if accepted.timing && kernelTimestampsSupported && enableKernelTimestamps(tc) {
+			accepted.tc, accepted.kernelTimed = tc, true
+			info.timing.kernel = true
+		}
 	}
 
 	e.mu.Lock()
 	e.pending[key] = info
 	e.mu.Unlock()
 
-	return &acceptedConn{WriteCloser: c, ep: e, info: info, key: key, capturing: true}
+	return accepted
 }
 
 // WrapConn wraps a connection handed to the HTTP server, whose decrypted bytes are captured.
@@ -301,12 +308,25 @@ func (e *EntryPoint) QUICConnContext(ctx context.Context, c *quic.Conn) context.
 		info.helloTruncated = h.truncated
 		info.quicParams = h.params
 		info.quicInitial = h.initial
+		info.timing.firstByte = h.initial.firstAt
 	}
 	if t, ok := c.QlogTrace().(*quicTrace); ok {
 		info.h3 = t
 	}
 
 	context.AfterFunc(c.Context(), func() { e.finishConn(info, "h3") })
+
+	if e.headerDetail != detailBasic {
+		go func() {
+			select {
+			case <-c.HandshakeComplete():
+				info.mu.Lock()
+				info.timing.handshakeDone = time.Now()
+				info.mu.Unlock()
+			case <-c.Context().Done():
+			}
+		}()
+	}
 
 	return context.WithValue(ctx, connInfoKey{}, info)
 }
@@ -422,6 +442,7 @@ func (e *EntryPoint) finalizeConn(info *connInfo, proto string) {
 
 	if e.headerDetail != detailBasic {
 		info.detail = e.newConnDetail(info, state, hello, raw, rec)
+		rec.Timing = newTimingRecord(info)
 	}
 	info.syn = nil
 

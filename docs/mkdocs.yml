@@ -274,6 +274,7 @@ nav:
           - 'HTTP': 'reference/install-configuration/providers/others/http.md'
       - 'EntryPoints': 'reference/install-configuration/entrypoints.md'
       - 'EntryPoint Fingerprint': 'reference/install-configuration/entrypoints-fingerprint.md'
+      - 'Fingerprint Signals': 'reference/install-configuration/entrypoints-fingerprint-signals.md'
       - 'API & Dashboard': 'reference/install-configuration/api-dashboard.md'
       - 'TLS':
           - 'Certificate Resolvers':

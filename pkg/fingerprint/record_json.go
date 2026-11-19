@@ -90,6 +90,35 @@ func (r *connectionRecord) appendJSON(b []byte) []byte {
 		b = closeObject(b, start)
 	}
 
+	if t := r.Timing; t != nil {
+		b = append(b, `,"timing":{"source":`...)
+		b = appendJSONString(b, t.Source)
+		if t.FirstByte != nil {
+			b = append(b, `,"firstByte":`...)
+			b = appendJSONTime(b, *t.FirstByte)
+		}
+		for _, f := range []struct {
+			key string
+			v   *int64
+		}{
+			{"tcpRttMicros", t.TCPRTTMicros},
+			{"estToFirstMicros", t.EstToFirst},
+			{"clientHelloMicros", t.ClientHello},
+			{"serverMicros", t.Server},
+			{"tlsRttMicros", t.TLSRTT},
+			{"handshakeMicros", t.Handshake},
+			{"rttGapMicros", t.RTTGap},
+			{"initialToHandshakeMicros", t.InitialToHS},
+			{"quicRttMicros", t.QUICRTTMicros},
+			{"quicMinRttMicros", t.QUICMinRTTMicro},
+		} {
+			if f.v != nil {
+				b = strconv.AppendInt(appendKey(b, f.key), *f.v, 10)
+			}
+		}
+		b = append(b, '}')
+	}
+
 	return append(b, '}')
 }
 

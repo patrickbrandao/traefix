@@ -187,6 +187,7 @@ func (e *EntryPoint) setHeaders(req *http.Request, st *requestState) {
 			}
 			s.setOpt(e.headers.syn, d.syn)
 			s.setOpt(e.headers.clientHello, d.clientHello)
+			s.set(e.headers.timing, timingHeader(info, st.start))
 		}
 		if proto == "h2" && info.akamai != "" {
 			s.set(e.headers.h2, info.akamai)

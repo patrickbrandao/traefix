@@ -65,6 +65,9 @@ type connInfo struct {
 	// detail holds the detail header values, formatted once.
 	detail *connDetail
 
+	// timing holds the milestones of the start of the connection, protected by mu.
+	timing connTiming
+
 	// requests counts the requests of the connection, for the transport header.
 	requests atomic.Int64
 
@@ -135,14 +138,49 @@ type acceptedConn struct {
 	key       string
 	capturing bool
 	closeOnce sync.Once
+
+	// tc is the socket read with its kernel times while the handshake is timed (kernelTimed).
+	tc          *net.TCPConn
+	kernelTimed bool
+	timing      bool
 }
 
 func (c *acceptedConn) Read(p []byte) (int, error) {
-	n, err := c.WriteCloser.Read(p)
-	if n > 0 && c.capturing {
-		c.captureHello(p[:n])
+	if !c.timing {
+		n, err := c.WriteCloser.Read(p)
+		if n > 0 && c.capturing {
+			c.captureHello(p[:n])
+		}
+		return n, err
 	}
 
+	var n int
+	var at time.Time
+	var err error
+	if c.kernelTimed {
+		n, at, err = readTimed(c.tc, p)
+	} else {
+		n, err = c.WriteCloser.Read(p)
+	}
+	if n > 0 {
+		if at.IsZero() {
+			at = time.Now()
+		}
+		helloDone := false
+		if c.capturing {
+			helloDone = c.captureHello(p[:n])
+		}
+		c.observeRead(at, helloDone)
+	}
+
+	return n, err
+}
+
+func (c *acceptedConn) Write(p []byte) (int, error) {
+	n, err := c.WriteCloser.Write(p)
+	if c.timing && n > 0 {
+		c.observeWrite(time.Now())
+	}
 	return n, err
 }
 
@@ -153,14 +191,59 @@ func (c *acceptedConn) Close() error {
 	return c.WriteCloser.Close()
 }
 
-func (c *acceptedConn) captureHello(b []byte) {
+// observeRead records the arrival milestones, and stops the timing once the server flight got its answer.
+func (c *acceptedConn) observeRead(at time.Time, helloDone bool) {
+	info := c.info
+	info.mu.Lock()
+	t := &info.timing
+	if t.firstByte.IsZero() {
+		t.firstByte = at
+	}
+	switch {
+	case helloDone:
+		t.helloDone = at
+	case !t.serverFlight.IsZero():
+		t.clientFlight = at
+		t.done = true
+	case t.helloDone.IsZero() && !c.capturing:
+		// Not a TLS connection: only the first byte is timed.
+		t.done = true
+	}
+	done := t.done
+	info.mu.Unlock()
+
+	if done {
+		c.stopTiming()
+	}
+}
+
+// observeWrite records the end of the server flight: the last write before the client answers.
+func (c *acceptedConn) observeWrite(at time.Time) {
+	info := c.info
+	info.mu.Lock()
+	if t := &info.timing; !t.helloDone.IsZero() && t.clientFlight.IsZero() {
+		t.serverFlight = at
+	}
+	info.mu.Unlock()
+}
+
+func (c *acceptedConn) stopTiming() {
+	if c.kernelTimed {
+		disableKernelTimestamps(c.tc)
+		c.kernelTimed = false
+	}
+	c.timing = false
+}
+
+// captureHello appends the bytes to the ClientHello, and reports whether they complete it.
+func (c *acceptedConn) captureHello(b []byte) bool {
 	info := c.info
 	info.mu.Lock()
 	defer info.mu.Unlock()
 
 	if len(info.hello) == 0 && b[0] != recordTypeHandshake {
 		c.capturing = false
-		return
+		return false
 	}
 
 	room := maxClientHello - len(info.hello)
@@ -175,7 +258,7 @@ func (c *acceptedConn) captureHello(b []byte) {
 		if hello, err := ParseClientHello(info.hello); err == nil {
 			info.parsedHello = hello
 		}
-		return
+		return true
 	}
 
 	if len(info.hello) >= maxClientHello {
@@ -183,6 +266,7 @@ func (c *acceptedConn) captureHello(b []byte) {
 		c.capturing = false
 		c.ep.truncated("client_hello")
 	}
+	return false
 }
 
 // conn wraps a connection handed to the HTTP server so that the bytes the server reads from it are observed.
@@ -228,7 +312,15 @@ func (c *tlsConn) ConnectionState() tls.ConnectionState {
 }
 
 func (c *tlsConn) HandshakeContext(ctx context.Context) error {
-	return c.tls.HandshakeContext(ctx)
+	err := c.tls.HandshakeContext(ctx)
+	if err == nil {
+		c.info.mu.Lock()
+		if c.info.timing.handshakeDone.IsZero() {
+			c.info.timing.handshakeDone = time.Now()
+		}
+		c.info.mu.Unlock()
+	}
+	return err
 }
 
 func wrapConn(c net.Conn, info *connInfo) net.Conn {

@@ -44,6 +44,8 @@ type quicInitialInfo struct {
 	size             int
 	dcidLen, scidLen int
 	packets          int
+	// firstAt is the arrival of the first Initial datagram, read by the Traefix.
+	firstAt time.Time
 }
 
 type quicPending struct {
@@ -162,6 +164,7 @@ func (e *EntryPoint) observeInitial(key string, datagram []byte) {
 		if pkt, _, err := parseQUICLongHeader(datagram); err == nil && pkt.initial {
 			h.initial.version = pkt.version
 			h.initial.size = len(datagram)
+			h.initial.firstAt = time.Now()
 			h.initial.dcidLen, h.initial.scidLen = len(pkt.dcid), pkt.scidLen
 		}
 	}
