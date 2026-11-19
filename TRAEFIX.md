@@ -100,8 +100,17 @@ Especificação: `tmp/report-waf-features.md` (fases 0 a 4). Implementado até a
   `pkg/server/router/router.go`, `pkg/config/static/entrypoints.go` e uma linha por backend em
   `pkg/observability/metrics/` (métricas em `traefix.go`).
 
+## Infopage
+
+`infopage/` (fork do `traefik/whoami`, imagem `tmsoftbrasil/traefix-infopage`, em
+https://infopage.traefix.tmsoft.com.br) mostra ao visitante as informações do navegador e os cabeçalhos
+do Traefix, nas abas "Resumo" e "Técnico". Especificação: `infopage/SPEC.md`.
+
+**Todo recurso novo do Traefix transmitido em cabeçalhos deve ser propagado para o infopage** (regra de
+propagação em `infopage/SPEC.md`).
+
 ## Convenções
 
 - Arquivos exclusivos do Traefix ficam separados dos do upstream (`Dockerfile.traefix*`,
-  `scripts/traefix/`, `.github/workflows/traefix-*`, `tasks/`) para minimizar conflitos.
+  `scripts/traefix/`, `.github/workflows/traefix-*`, `tasks/`, `infopage/`) para minimizar conflitos.
 - `.private/` (ignorado pelo git) guarda dados sensíveis, como o servidor de testes.

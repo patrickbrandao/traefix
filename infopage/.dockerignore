@@ -1,0 +1,4 @@
+infopage
+dist/
+*.md
+!README.md

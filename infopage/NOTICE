@@ -1,0 +1,7 @@
+Traefix Infopage
+Copyright 2026 Patrick Brandão
+
+Derivado de traefik/whoami (https://github.com/traefik/whoami), commit
+1ce75d01b6978863647da42557a707a479da3a51, licenciado sob a Apache License 2.0
+(arquivo LICENSE). Alterações: renomeado de whoami para infopage (módulo, binário,
+serviço gRPC, variáveis de ambiente) e adicionada a página HTML (static/, page.go).

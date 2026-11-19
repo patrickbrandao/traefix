@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package infopage;
+
+option go_package = "./grpc";
+
+service Infopage {
+  rpc Infopage (InfopageRequest) returns (InfopageReply) {}
+  rpc Bench(BenchRequest) returns (BenchReply) {}
+}
+
+message InfopageRequest {}
+
+message InfopageReply {
+  string name = 1;
+  string hostname = 2;
+  repeated string iface = 3;
+}
+
+// The empty request message
+message BenchRequest {}
+
+// The response message containing simple data
+message BenchReply {
+  int32 data = 1;
+}

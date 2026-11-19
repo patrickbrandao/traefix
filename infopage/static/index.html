@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Traefix Infopage</title>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Traefix Infopage</h1>
+    <p class="sub">O que o seu navegador e a sua conexão revelam a um site.</p>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" id="tab-resumo" aria-controls="resumo" aria-selected="true">Resumo</button>
+    <button role="tab" id="tab-tecnico" aria-controls="tecnico" aria-selected="false">Técnico</button>
+  </nav>
+
+  <section id="resumo" role="tabpanel" aria-labelledby="tab-resumo"></section>
+  <section id="tecnico" role="tabpanel" aria-labelledby="tab-tecnico" hidden>
+    <div class="actions">
+      <button id="copy-json" type="button">Copiar JSON</button>
+      <button id="download-json" type="button">Baixar JSON</button>
+    </div>
+  </section>
+
+  <footer>
+    <span id="footer-info"></span>
+    · <a href="https://github.com/patrickbrandao/traefix">Traefix</a>
+  </footer>
+</main>
+<noscript><p class="noscript">Ative o JavaScript para ver a página. A versão em texto está em <a href="/?format=text">/?format=text</a>.</p></noscript>
+<script id="infopage-data" type="application/json">__INFOPAGE_DATA__</script>
+<script src="/assets/app.js"></script>
+</body>
+</html>
