@@ -88,10 +88,15 @@ td table tr:first-child th, td table tr:first-child td { border-top: 0; }
 
 .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; border: 1px solid currentColor; }
 .ok { color: var(--ok); }
+.info { color: var(--accent); }
 .warn { color: var(--warn); }
 .bad { color: var(--bad); }
 .muted { color: var(--muted); }
 
+table.eval { table-layout: auto; font-size: 14px; }
+table.eval th { width: 190px; color: var(--fg); }
+table.eval td { font-family: inherit; word-break: normal; }
+table.eval .eval-badge { width: 70px; }
 ul.signals { margin: 0; padding: 0; list-style: none; }
 ul.signals li { padding: 4px 0; }
 

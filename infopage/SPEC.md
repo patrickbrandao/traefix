@@ -46,17 +46,21 @@ em português do Brasil. A aba ativa fica no fragmento (`#tecnico`).
    TLS (versão, cifra, grupo, SNI), latência (`rtt_us` do Transport ou `tcp_rtt_us` do Timing),
    saltos, sistema sugerido pelo TTL inicial, tipo de rede do navegador, ID da conexão.
 3. **Seu navegador e dispositivo**: navegador, sistema, dispositivo/modelo, arquitetura, idiomas, fuso,
-   tela, janela, tema, toque, núcleos, memória, GPU (WebGL), cookies.
-4. **Sinais** (`OK` / `Atenção` / `Alerta`), coerência entre o que o navegador diz e o que a conexão
+   tela, janela, tema, toque, núcleos, memória, GPU (WebGL), cookies. A latência é a do caminho
+   (`rtt_min_us`, `tcp_rtt_us`…), não o RTT suavizado.
+4. **Avaliação TCP/IP**: latência, MSS, escala de janela, SACK, timestamps, ECN, saltos, DF, opções IP,
+   DSCP e reenvios, com `OK` / `Info` / `Atenção` / `Alerta` pelos critérios de
+   [CRITERIA.md](CRITERIA.md). A maior parte é `Info`: descreve o sistema, não a qualidade.
+5. **Sinais** (`OK` / `Atenção` / `Alerta`), coerência entre o que o navegador diz e o que a conexão
    mostra:
    - `navigator.webdriver` (automação);
    - versão do TLS; troca de chaves pós-quântica (`MLKEM`); sessão retomada; ECH aceito;
    - sistema do `User-Agent` contra `ttl_init` (64 = Linux/Android/macOS/iOS, 128 = Windows);
-   - relay/proxy TCP: `rtt_gap_us` > 20 ms e > 30% de `tcp_rtt_us` (regra da página
-     *Fingerprint Signals* da documentação);
-   - `mtu_est` < 1500 (túnel, VPN, PPPoE);
-   - Chromium sem Client Hints; GPC/DNT; cookies desativados; relógio com mais de 60 s de diferença.
-5. **Impressões digitais**: JA4, JA3, JA4H, Akamai H2, JA4T, com explicação leiga (identificam o tipo
+   - relay/proxy TCP: `rtt_gap_us` > 30 ms e > 50% de `tcp_rtt_us`, mais estrito que a regra da página
+     *Fingerprint Signals* (15–20 ms e 30%, pensada para várias conexões agregadas);
+   - Chromium sem Client Hints; GPC/DNT; cookies desativados; relógio com mais de 60 s de diferença
+     (`Alerta` acima de 5 min).
+6. **Impressões digitais**: JA4, JA3, JA4H, Akamai H2, JA4T, com explicação leiga (identificam o tipo
    de cliente, não a pessoa). Sem cabeçalhos do Traefix, explica que o fingerprint não está ativo.
 
 ### Aba "Técnico" (todos os detalhes)
@@ -80,8 +84,9 @@ trabalho que o cria:
 1. Aba "Técnico": já aparece sozinho (cabeçalhos com o prefixo). Conferir se o formato é legível; um
    formato novo de valor precisa de parser em `app.js`.
 2. Aba "Resumo": quando o valor interessa a uma pessoa, acrescentar a linha amigável (cartão "Sua
-   conexão" ou "Impressões digitais") e, se for um sinal de coerência, a regra em "Sinais", com o
-   critério da documentação `entrypoints-fingerprint-signals.md`.
+   conexão" ou "Impressões digitais"); se ele tem avaliação, a regra em "Avaliação TCP/IP" com o critério
+   e a fonte registrados em [CRITERIA.md](CRITERIA.md); se for um sinal de coerência, a regra em
+   "Sinais", com o critério da documentação `entrypoints-fingerprint-signals.md`.
 3. Atualizar esta especificação, publicar a imagem (`scripts/traefix/infopage-build.sh`) e recriar o
    container no servidor de testes.
 

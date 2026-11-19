@@ -340,6 +340,82 @@
     return undefined;
   }
 
+  var LABELS = { ok: 'OK', info: 'Info', warn: 'Atenção', bad: 'Alerta' };
+
+  function num(v) {
+    var n = Number(v);
+    return v === undefined || v === '' || !isFinite(n) ? undefined : n;
+  }
+
+  // pathRTT is the round trip of the path: the minimum or the handshake sample, not the smoothed RTT, which
+  // includes the time the client takes to check the certificate.
+  function pathRTT() {
+    var c = [transport.rtt_min_us, timing.tcp_rtt_us, transport.rtt_syn_us, timing.quic_min_rtt_us, timing.quic_rtt_us, transport.rtt_us];
+    for (var i = 0; i < c.length; i++) if (num(c[i]) > 0) return num(c[i]);
+    return undefined;
+  }
+
+  // evaluate grades the IP and TCP values per infopage/CRITERIA.md: most of them only describe the
+  // operating system or the access network, and stay informative.
+  function evaluate() {
+    var r = [];
+    var add = function (cls, name, value, text) { r.push([cls, name, value, text]); };
+    var v6 = transport.ipv === '6';
+
+    var rtt = pathRTT();
+    if (rtt !== undefined) {
+      var m = rtt / 1000;
+      if (m < 30) add('ok', 'Latência', ms(rtt), 'Excelente para jogos, chamadas e navegação.');
+      else if (m < 80) add('ok', 'Latência', ms(rtt), 'Boa para qualquer uso.');
+      else if (m < 300) add('info', 'Latência', ms(rtt), 'Depende da distância até o servidor (no Brasil): normal se você estiver longe; perto, pode indicar Wi-Fi ou rede congestionada.');
+      else add('warn', 'Latência', ms(rtt), 'Alta: chamadas e jogos sofrem. Comum em satélite geoestacionário.');
+    }
+
+    var mss = num(transport.syn_mss);
+    if (mss !== undefined) {
+      var full = v6 ? 1440 : 1460;
+      if (mss === full) add('ok', 'Tamanho do pacote (MSS)', mss + ' bytes', 'O máximo de uma rede Ethernet/Wi-Fi comum (MTU 1500).');
+      else if (mss === full - 8) add('info', 'Tamanho do pacote (MSS)', mss + ' bytes', 'Típico de PPPoE (fibra e DSL). Diferença de velocidade desprezível.');
+      else if (mss > full) add('info', 'Tamanho do pacote (MSS)', mss + ' bytes', 'Acima do padrão: rede com jumbo frames ou configuração manual.');
+      else if (mss >= (v6 ? 1220 : 1200)) add('info', 'Tamanho do pacote (MSS)', mss + ' bytes', 'Menor que o padrão: túnel, VPN ou rede móvel no caminho. A perda de velocidade é de 1% a 3%.');
+      else add('warn', 'Tamanho do pacote (MSS)', mss + ' bytes', 'Muito pequeno: pilha de rede limitada ou ajuste de MSS incorreto.');
+    }
+
+    var ws = num(transport.syn_wscale);
+    if (transport.proto === 'tcp') {
+      if (ws === undefined || ws === 0) add('warn', 'Escala de janela', ws === 0 ? '0' : 'ausente', 'Sem escala, a janela fica em 64 KB: downloads longos ficam limitados (cerca de 10 Mbps a 50 ms).');
+      else add(ws >= 5 ? 'ok' : 'info', 'Escala de janela', '2^' + ws, 'Permite janelas de até ' + Math.round(65535 * Math.pow(2, ws) / 1048576 * 10) / 10 + ' MB; o sistema ajusta a janela real conforme a necessidade.');
+    }
+
+    if (transport.syn_sack !== undefined) {
+      if (transport.syn_sack === '1') add('ok', 'SACK', 'ativo', 'Recupera pacotes perdidos sem reenviar tudo.');
+      else add('warn', 'SACK', 'ausente', 'Perdas custam mais: pilha antiga ou equipamento no caminho removendo a opção.');
+    }
+    if (transport.syn_ts !== undefined) {
+      add('info', 'Timestamps TCP', transport.syn_ts === '1' ? 'ativos' : 'desativados', transport.syn_ts === '1' ? 'Padrão de Linux, Android, macOS e iOS.' : 'Padrão do Windows; não é problema.');
+    }
+    if (transport.syn_ecn !== undefined) {
+      add('info', 'ECN', transport.syn_ecn === '1' ? 'pedido' : 'não pedido', transport.syn_ecn === '1' ? 'Seu sistema pede aviso de congestionamento sem perda (Apple faz isso).' : 'Windows e Linux não pedem por padrão; não é problema.');
+    }
+    if (transport.syn_tfo === '1') add('info', 'TCP Fast Open', 'usado', 'Atalho de abertura de conexão, raro na web.');
+
+    if (transport.ttl_init !== undefined) {
+      add('info', 'Saltos de rede', (transport.hops || '?') + ' (TTL ' + (transport.ttl || '?') + ')', 'Quantos roteadores o pacote atravessou; mais saltos não significa conexão pior.');
+    }
+
+    if (!v6 && transport.df === '0') add('warn', 'Não fragmentar (DF)', 'desligado', 'Incomum: algum equipamento ou VPN apagou a marca no caminho.');
+    if (num(transport.ipopt) > 0) add('warn', 'Opções IP', transport.ipopt + ' bytes', 'Navegadores não usam opções IP: pacote atípico.');
+    if (transport.ecn === '3') add('warn', 'ECN no IP', 'CE', 'Um equipamento do caminho altera os bits de congestionamento.');
+    if (num(transport.dscp) > 0) add('info', 'Prioridade (DSCP)', transport.dscp, 'Marcada pela sua rede ou remarcada pelo provedor; sem efeito na internet.');
+
+    var re = num(transport.retrans);
+    if (re !== undefined) {
+      if (re === 0) add('info', 'Reenvios', '0', 'Nenhum reenvio nesta conexão. Uma conexão curta não mede perda de pacotes.');
+      else add('info', 'Reenvios', String(re), 'Houve reenvio nesta conexão; uma ocorrência isolada não indica problema.');
+    }
+    return r;
+  }
+
   function signals(b, os) {
     var s = [];
     var add = function (cls, text) { s.push([cls, text]); };
@@ -361,15 +437,12 @@
       else add('warn', 'O sistema sugerido pela rede (TTL ' + transport.ttl_init + ': ' + ttlOS(transport.ttl_init) + ') difere do informado pelo navegador (' + os + '): comum com VPN, proxy ou roteador.');
     }
 
+    // One connection is noisy (slow certificate check, SYN proxy before Traefix): only a large gap counts,
+    // and it stays a hint, never an alert.
     var gap = Number(timing.rtt_gap_us), rtt = Number(timing.tcp_rtt_us);
     if (isFinite(gap) && isFinite(rtt) && timing.rtt_gap_us !== undefined && timing.tcp_rtt_us !== undefined) {
-      if (gap > 20000 && gap > rtt * 0.3) add('warn', 'O TLS levou ' + ms(gap) + ' a mais que o TCP: sinal de proxy ou relay no caminho (SOCKS, CONNECT).');
+      if (gap > 30000 && gap > rtt * 0.5) add('warn', 'O TLS levou ' + ms(gap) + ' a mais que o TCP: possível proxy ou relay no caminho (SOCKS, CONNECT). Uma única conexão pode enganar.');
       else add('ok', 'Sem sinal de proxy TCP no caminho (tempos de TCP e TLS coerentes).');
-    }
-
-    var mtu = Number(transport.mtu_est);
-    if (transport.mtu_est && mtu < 1500) {
-      add('warn', 'MTU estimado de ' + mtu + ' bytes, abaixo de 1500: túnel, VPN ou PPPoE no caminho.');
     }
 
     var ua = b.navigator.userAgent || '';
@@ -381,7 +454,8 @@
     if (!b.navigator.cookieEnabled) add('warn', 'Cookies desativados: muitos sites não funcionarão.');
 
     if (b.clock.skewMs !== undefined && Math.abs(b.clock.skewMs) > 60000) {
-      add('warn', 'O relógio do seu dispositivo difere do servidor em ' + Math.round(b.clock.skewMs / 1000) + ' s.');
+      var skew = Math.abs(b.clock.skewMs) > 300000 ? 'bad' : 'warn';
+      add(skew, 'O relógio do seu dispositivo difere do servidor em ' + Math.round(b.clock.skewMs / 1000) + ' s' + (skew === 'bad' ? ': logins com código temporário e certificados podem falhar.' : '.'));
     }
     return s;
   }
@@ -392,7 +466,7 @@
     var root = document.getElementById('resumo');
     var ip = tx('Src-Ip') || hdr('X-Real-Ip') || (hdr('X-Forwarded-For') || '').split(',')[0].trim() || hostOf(data.remoteAddr);
     var os = osName(b);
-    var rtt = ms(transport.rtt_us || timing.tcp_rtt_us);
+    var rtt = ms(pathRTT());
 
     root.appendChild(el('div', { 'class': 'card hero' }, [
       el('div', null, [el('div', { 'class': 'label', text: 'Seu IP' }), el('div', { 'class': 'value', text: ip || '?' })]),
@@ -433,12 +507,24 @@
       ['Cookies', b.navigator.cookieEnabled ? 'Ativados' : 'Desativados']
     ])]));
 
+    var ev = evaluate();
+    if (ev.length) {
+      var t = el('table', { 'class': 'eval' });
+      ev.forEach(function (r) {
+        t.appendChild(el('tr', null, [
+          el('td', { 'class': 'eval-badge' }, [badge(LABELS[r[0]], r[0])]),
+          el('th', { text: r[1] }),
+          el('td', null, [el('strong', { text: r[2] }), el('span', { 'class': 'muted', text: ' ' + r[3] })])
+        ]));
+      });
+      root.appendChild(card('Avaliação TCP/IP', 'O que os pacotes da sua conexão mostram. A maior parte só descreve o seu sistema e a sua rede (azul): não existe valor "melhor".', [t]));
+    }
+
     var sig = signals(b, os);
     if (sig.length) {
       var ul = el('ul', { 'class': 'signals' });
       sig.forEach(function (x) {
-        var label = x[0] === 'ok' ? 'OK' : x[0] === 'warn' ? 'Atenção' : 'Alerta';
-        ul.appendChild(el('li', null, [badge(label, x[0]), ' ', x[1]]));
+        ul.appendChild(el('li', null, [badge(LABELS[x[0]], x[0]), ' ', x[1]]));
       });
       root.appendChild(card('Sinais', 'Coerência entre o que o navegador diz e o que a conexão mostra.', [ul]));
     }

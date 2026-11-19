@@ -1,0 +1,81 @@
+# Critérios de avaliação TCP/IP do infopage
+
+Base do cartão "Avaliação TCP/IP" e dos "Sinais" da aba Resumo (`static/assets/app.js`, funções
+`evaluate` e `signals`). Pesquisa de 2026-11-19 (RFCs, código do kernel Linux, p0f, FoxIO JA4T, Cloudflare
+AIM, ITU-T, Anatel).
+
+**Princípio:** quase nada no SYN e no `TCP_INFO` de uma conexão recém-aberta diz se a conexão é boa ou
+ruim; a maior parte descreve o sistema operacional ou a rede de acesso. Cores:
+
+| Cor | Uso |
+|---|---|
+| Verde (`ok`) | Valor que efetivamente ajuda o usuário (latência baixa, SACK, escala de janela). |
+| Azul (`info`) | Característica do sistema ou da rede, sem valor "melhor" (timestamps, ECN, MSS de PPPoE, saltos, reenvios). |
+| Amarelo (`warn`) | Incoerência ou anomalia (TTL × User-Agent, DF desligado, opções IP, sem SACK, sem escala de janela). |
+| Vermelho (`bad`) | Só o que o usuário sente com certeza (automação declarada, sem criptografia, relógio > 5 min). |
+
+## Camada IP
+
+| Valor | Ideal | Classificação | Por quê |
+|---|---|---|---|
+| `ttl`, `hops` | — | azul | Saltos não medem qualidade (MPLS esconde saltos, VPN encurta). RFC 791/8200. |
+| `ttl_init` × User-Agent | igual | verde / amarelo se diferente | 64 = Linux, Android, macOS, iOS; 128 = Windows; 255 = equipamento. Diferente = proxy, VPN, Private Relay ou reescrita de TTL; nunca fraude por si só (p0f). |
+| `dscp` | 0 | azul | Remarcado na maioria dos caminhos da internet (RFC 2474, 8325). |
+| `ecn` (IP do SYN) | 0 | azul; CE (3) amarelo | RFC 3168 §6.1.1; ECT no SYN é experimento (RFC 8311). |
+| `df` (IPv4) | 1 | amarelo se 0 | Todo SO moderno liga DF (RFC 1191). |
+| `ipid` | qualquer | azul | Com DF o ID não tem significado (RFC 6864); Linux manda ID ≠ 0 no SYN (`id+` no p0f). |
+| `ipopt` | 0 | amarelo se > 0 | Navegadores não usam opções IP (RFC 7126). |
+| `flow_label` | ≠ 0 | azul | Só identifica a pilha (RFC 6437). |
+| `syn_mss` | 1460 (v4) / 1440 (v6) | verde no padrão; azul de 1200/1220 até o padrão; amarelo abaixo | PPPoE 1452/1432, WireGuard 1380/1360, Tailscale 1240/1220, móvel 1360–1460. Impacto real de 1% a 3% (APNIC 2019). |
+| `mtu_est`, `pmtu` | 1500 | azul | `mtu_est` é estimativa do MSS anunciado; `pmtu` no SYN é o MTU local do servidor. Só um blackhole de PMTUD seria problema, e não aparece no SYN (RFC 2923). |
+
+## Opções TCP do SYN
+
+| Valor | Classificação | Por quê |
+|---|---|---|
+| `syn_win` | azul | Arredondado para múltiplo do MSS (64240 = 44×1460) ou fixo 65535 na Apple; nunca escalado (RFC 7323 §2.2). |
+| `syn_wscale` | verde ≥ 5, azul 1–4, amarelo 0/ausente | Sem escala a janela fica em 64 KB. 65535 × 2^ws é teto teórico: a janela real vem do autotuning. |
+| `syn_sack` | verde; amarelo se ausente | RFC 2018. |
+| `syn_ts` | azul | Windows desliga por padrão. |
+| `syn_ecn` | azul | Apple pede; Linux (`tcp_ecn=2`) e Windows não. |
+| `syn_tfo` | azul | RFC 7413; raro na web. |
+| `syn_opts` | azul | Assinatura do SO (JA4T). |
+
+`tcp_info` do Linux (lado do servidor, conferido no código do kernel):
+
+- `mss_snd` (`tcpi_snd_mss`) = min(MSS do cliente, PMTU − 40) − 12 com timestamps.
+- `mss_adv` (`tcpi_advmss`) também desconta os 12 bytes após o handshake (`tcp_input.c`): 1448/1448 é
+  coerente. É dado do **servidor**.
+- `mss_rcv` (`tcpi_rcv_mss`) começa em 536 e só sobe com segmentos grandes: 536 é normal.
+- `wscale_rcv`, `cc`, `cwnd` são do servidor: azul ou omitidos.
+
+## Métricas da conexão
+
+| Valor | Classificação | Por quê |
+|---|---|---|
+| Latência (`rtt_min_us`, depois `tcp_rtt_us`, `rtt_syn_us`, `quic_min_rtt_us`) | verde < 80 ms; azul 80–300 ms; amarelo > 300 ms | Depende da distância (≈ 1 ms por 100 km de fibra). Cloudflare AIM; Anatel ≤ 80 ms terrestre, ≤ 900 ms satélite. Não usar `rtt_us` (srtt): inclui a verificação do certificado pelo cliente. |
+| `rttvar_us` | não exibir como jitter | O kernel o inicia em RTT/2 (RFC 6298); jitter exige várias medições no navegador. |
+| `retrans` | azul | Conexão curta não mede perda; 1 reenvio pode ser sonda TLP (RFC 8985). |
+| `lost` | não usar | `tcpi_lost` é instantâneo, não acumulado. |
+| `rtt_gap_us` | amarelo "possível proxy" se > 30 ms **e** > 50% de `tcp_rtt_us` | Falsos positivos: cliente lento, SYN proxy diante do Traefix. Agregar conexões para confirmar. |
+| Relógio | amarelo > 60 s; vermelho > 5 min | TOTP e Kerberos falham a partir de minutos; certificados a partir de 1 dia. |
+
+## Erros que o infopage não deve cometer
+
+1. Nota percentual por MSS (1448 contra 1460 é 0,8%, não 3%).
+2. MSS abaixo de 1460 em vermelho.
+3. Timestamps, ECN ou TFO ausentes como defeito.
+4. `rttvar` chamado de jitter.
+5. "RWIN máximo limita a X Mbps" como fato.
+6. Retransmissões ou perdas de uma conexão curta como qualidade.
+7. Dados do servidor (`advmss`, `rcv_mss`, `wscale_rcv`, `cc`, `pmtu`) apresentados como do cliente.
+
+## Fontes principais
+
+- RFCs 791, 1191, 2018, 2474, 2923, 3168, 6298, 6437, 6864, 6928, 7126, 7323, 7413, 8200, 8311, 8325, 8985.
+- Kernel Linux: `net/ipv4/tcp.c` (`tcp_get_info`), `tcp_input.c` (`tcp_rtt_estimator`,
+  `tcp_initialize_rcv_mss`, desconto de `TCPOLEN_TSTAMP_ALIGNED` no `advmss`), `tcp_output.c`
+  (`tcp_mtu_to_mss`, `tcp_select_initial_window`).
+- p0f (`p0f.fp`, README); FoxIO JA4T; goldens em `pkg/fingerprint/testdata/golden/tcp/`.
+- APNIC, "TCP MSS values – what's changed?" (2019); Cloudflare AIM (`ScoresCalculations.ts`);
+  Anatel, indicadores SCM; ITU-T G.114, G.1010, Y.1541.
