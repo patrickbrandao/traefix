@@ -302,6 +302,18 @@
     return 'Desconhecido';
   }
 
+  // deviceKind uses the Client Hints when the browser has them (Chromium), else the User-Agent, as Firefox
+  // and Safari have no navigator.userAgentData.
+  function deviceKind(b) {
+    var ch = b.userAgentData;
+    if (ch && ch.model) return ch.model;
+    if (ch) return ch.mobile ? 'Celular' : 'Computador';
+    var ua = b.navigator.userAgent || '';
+    if (/Mobi|iPhone/.test(ua)) return 'Celular';
+    if (/iPad|Tablet|Android/.test(ua) || (/Mac OS X/.test(ua) && b.navigator.maxTouchPoints > 1)) return 'Tablet';
+    return 'Computador';
+  }
+
   function osFamily(name) {
     if (/Windows/.test(name)) return 'windows';
     if (/Desconhecido/.test(name)) return '';
@@ -405,7 +417,7 @@
     root.appendChild(card('Seu navegador e dispositivo', 'O que o navegador conta a qualquer site que você visita.', [dl([
       ['Navegador', browserName(b)],
       ['Sistema operacional', os],
-      ['Dispositivo', b.userAgentData && b.userAgentData.model ? b.userAgentData.model : (b.userAgentData ? (b.userAgentData.mobile ? 'Celular' : 'Computador') : undefined)],
+      ['Dispositivo', deviceKind(b)],
       ['Arquitetura', b.userAgentData && b.userAgentData.architecture ? b.userAgentData.architecture + (b.userAgentData.bitness ? ' ' + b.userAgentData.bitness + ' bits' : '') : undefined],
       ['Idiomas', b.navigator.languages],
       ['Fuso horário', b.intl.timeZone + ' (UTC' + (b.intl.utcOffsetMinutes >= 0 ? '+' : '-') + Math.abs(b.intl.utcOffsetMinutes / 60) + ')'],
