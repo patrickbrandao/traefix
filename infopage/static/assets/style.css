@@ -117,7 +117,8 @@ table.score-table tfoot td { font-weight: 600; border-top: 2px solid var(--line)
 .verdict p { margin: 8px 0 0; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
 table.timeline td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.tl-bar { display: flex; height: 12px; margin: 12px 0; border-radius: 6px; overflow: hidden; background: var(--code); }
+.tl-scale { padding: 0 18px; margin: 14px 0 6px; }
+.tl-bar { display: flex; height: 12px; margin: 0; border-radius: 6px; overflow: hidden; background: var(--code); }
 .tl-seg { display: block; min-width: 2px; border-right: 1px solid var(--card); }
 .tl-tcp { background: var(--accent); }
 .tl-first { background: var(--bad); }
@@ -153,3 +154,12 @@ footer { margin-top: 24px; color: var(--muted); font-size: 13px; text-align: cen
   dd { margin-bottom: 8px; }
   th { width: 120px; }
 }
+
+.tl-gauge { position: relative; margin-top: 2px; }
+.tl-mark { position: absolute; width: 0; display: flex; flex-direction: column; align-items: center; }
+.tl-badges { display: flex; gap: 2px; margin-top: 8px; z-index: 1; }
+.tl-line { position: absolute; left: 0; width: 1px; background: var(--muted); }
+.tl-num { display: inline-block; min-width: 20px; height: 20px; line-height: 20px; border-radius: 10px; background: var(--fg); color: var(--card); font-size: 12px; font-weight: 600; text-align: center; }
+.tl-at { font-size: 11px; color: var(--muted); white-space: nowrap; margin-top: 1px; }
+.tl-scale + .scroll { margin-top: 8px; }
+.timeline + dl, .scroll + dl { margin-top: 14px; }

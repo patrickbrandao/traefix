@@ -570,11 +570,12 @@
     var t0 = ev[0].us;
     var tbl = el('table', { 'class': 'score-table timeline' });
     tbl.appendChild(el('thead', null, [el('tr', null, [
-      el('th', { text: 'Marco' }), el('th', { text: 'Horário (UTC)' }), el('th', { 'class': 'num', text: 'Desde o início' }), el('th', { 'class': 'num', text: 'Diferença' })
+      el('th', { 'class': 'num', text: 'Nº' }), el('th', { text: 'Marco' }), el('th', { text: 'Horário (UTC)' }), el('th', { 'class': 'num', text: 'Desde o início' }), el('th', { 'class': 'num', text: 'Diferença' })
     ])]));
     var body = el('tbody');
     ev.forEach(function (e, i) {
       body.appendChild(el('tr', null, [
+        el('td', { 'class': 'num' }, [el('span', { 'class': 'tl-num', text: String(i + 1) })]),
         el('td', null, [el('strong', { text: e.name }), el('div', { 'class': 'muted small', text: e.what })]),
         el('td', { 'class': 'mono', text: base !== undefined ? clockText(base + e.us) : '—' }),
         el('td', { 'class': 'num', text: msUs(e.us - t0) }),
@@ -596,6 +597,37 @@
       }
     }
 
+    // Numbered gauge under the bar: the number of each mark is the one of its row in the table. Marks that would
+    // overlap go to the next level down.
+    var gauge = el('div', { 'class': 'tl-gauge' });
+    var groups = [];
+    ev.forEach(function (e, i) {
+      var pos = total > 0 ? (e.us - t0) / total * 100 : 0;
+      var g = groups[groups.length - 1];
+      if (g && pos - g.pos < 3.5) { g.items.push({ n: i + 1, e: e }); g.last = e; return; }
+      groups.push({ pos: pos, first: e, last: e, items: [{ n: i + 1, e: e }] });
+    });
+    var lastAt = [];
+    groups.forEach(function (g) {
+      var level = 0;
+      while (lastAt[level] !== undefined && g.pos - lastAt[level] < 9) level++;
+      lastAt[level] = g.pos;
+      var badges = el('span', { 'class': 'tl-badges' }, g.items.map(function (it) {
+        return el('span', { 'class': 'tl-num', title: it.e.name + ': ' + msUs(it.e.us - t0), text: String(it.n) });
+      }));
+      var label = msUs(g.first.us - t0) + (g.last.us - g.first.us >= 10 ? ' a ' + msUs(g.last.us - t0) : '');
+      var mark = el('span', { 'class': 'tl-mark' }, [
+        el('span', { 'class': 'tl-line' }), badges, el('span', { 'class': 'tl-at', text: label })
+      ]);
+      mark.style.left = g.pos + '%';
+      mark.style.top = (level * 40) + 'px';
+      mark.firstChild.style.height = (level * 40 + 10) + 'px';
+      mark.firstChild.style.top = (-level * 40 - 2) + 'px';
+      gauge.appendChild(mark);
+    });
+    gauge.style.height = (lastAt.length * 40 + 6) + 'px';
+    var scale = el('div', { 'class': 'tl-scale' }, [bar, gauge]);
+
     var rl = relayVerdict();
     var rows = [];
     if (transport.proto !== 'udp' && timing.proto !== 'udp') {
@@ -616,7 +648,7 @@
     var verdict = rl ? el('div', { 'class': 'verdict ' + rl.cls }, [el('h3', { text: 'Diagnóstico: ' + rl.title }), el('p', { text: rl.text })]) : null;
 
     return card('Linha do tempo da conexão', 'Cada marco da abertura da sua conexão, como o servidor viu. O handshake TCP termina em quem abriu a conexão; a volta do TLS vai até o navegador. Com proxy ou SOCKS no caminho, os dois se separam e o primeiro byte atrasa: pela pontuação, isso pesa como automação (contorno de limites por IP).',
-      [el('div', { 'class': 'scroll' }, [tbl]), bar, dl(rows), verdict]);
+      [scale, el('div', { 'class': 'scroll' }, [tbl]), dl(rows), verdict]);
   }
 
   // evaluate grades the IP and TCP values per infopage/CRITERIA.md: most of them only describe the
