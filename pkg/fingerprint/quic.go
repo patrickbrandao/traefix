@@ -103,6 +103,11 @@ func (e *EntryPoint) QUICGetConfigForClient(next func(*tls.ClientHelloInfo) (*tl
 			e.quic.mu.Lock()
 			if h := e.quic.get(info.Conn.RemoteAddr().String(), true); h != nil {
 				h.fromInfo = hello
+				// Without the packet wrapper (no raw Initial capture) this callback is the first moment the
+				// ClientHello is known, a few microseconds after the Initial arrived: better than no time at all.
+				if h.initial.firstAt.IsZero() {
+					h.initial.firstAt = time.Now()
+				}
 			}
 			e.quic.mu.Unlock()
 		}

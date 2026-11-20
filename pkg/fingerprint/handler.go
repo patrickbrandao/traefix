@@ -56,6 +56,7 @@ func (e *EntryPoint) Handler(next http.Handler) http.Handler {
 
 		st := &requestState{start: time.Now(), conn: connInfoFromContext(req.Context())}
 		if info := st.conn; info != nil {
+			info.settleQUICHandshake(st.start)
 			switch {
 			case info.capture != nil:
 				st.wire = info.capture.take(req)

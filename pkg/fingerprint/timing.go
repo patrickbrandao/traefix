@@ -31,6 +31,25 @@ type connTiming struct {
 	done bool
 }
 
+// settleQUICHandshake gives the end of the QUIC handshake when the goroutine watching it has not run yet by the time
+// the first request arrives: the client sends the request in the flight that completes the handshake, so the request
+// is the first moment the handshake is known to be over.
+func (info *connInfo) settleQUICHandshake(at time.Time) {
+	if info.quic == nil {
+		return
+	}
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	if !info.timing.handshakeDone.IsZero() {
+		return
+	}
+	select {
+	case <-info.quic.HandshakeComplete():
+		info.timing.handshakeDone = at
+	default:
+	}
+}
+
 func micros(from, to time.Time) (int64, bool) {
 	if from.IsZero() || to.IsZero() {
 		return 0, false
