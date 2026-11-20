@@ -4,6 +4,7 @@
 .vscode/
 .DS_Store
 /dist
+/utils
 /webui/.tmp/
 /site/
 /docs/site/
