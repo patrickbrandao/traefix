@@ -356,6 +356,131 @@
     return undefined;
   }
 
+  // ---------- estimated MTU ----------
+
+  // MTU ruler (infopage/CRITERIA.md, "MTU estimado"): 1500 is the top grade, the PPPoE range (1480 to 1492)
+  // loses a little, and below it the grade falls linearly to zero at 1340, the critical minimum.
+  var MTU_RULER = [[1340, 0], [1480, 90], [1492, 95], [1500, 100]];
+  // Ticks of the ruler; only the spaced ones carry a label, so they do not overlap on a phone.
+  var MTU_MARKS = [[1340, 'crítico', true], [1400, 'IPsec', true], [1420, 'WireGuard'], [1480, 'PPPoE com VLAN'], [1492, 'PPPoE'], [1500, 'Ethernet', true]];
+
+  function mtuGrade(mtu) {
+    var p = MTU_RULER;
+    if (mtu <= p[0][0]) return 0;
+    if (mtu >= p[p.length - 1][0]) return 100;
+    for (var i = 1; i < p.length; i++) {
+      if (mtu <= p[i][0]) {
+        var a = p[i - 1], c = p[i];
+        return Math.round(a[1] + (c[1] - a[1]) * (mtu - a[0]) / (c[0] - a[0]));
+      }
+    }
+    return 100;
+  }
+
+  function mtuClass(g) {
+    return g >= 95 ? 'ok' : g >= 60 ? 'info' : g >= 30 ? 'warn' : 'bad';
+  }
+
+  function mtuReading(mtu) {
+    if (mtu > 1500) return 'Acima de 1500: jumbo frames ou ajuste manual.';
+    if (mtu === 1500) return 'Ethernet/Wi-Fi sem túnel: o máximo da internet.';
+    if (mtu >= 1480) return 'Faixa do PPPoE (fibra e DSL) ou de um túnel leve: diferença desprezível.';
+    if (mtu >= 1400) return 'Túnel ou VPN no caminho (WireGuard 1420, IPsec ~1400), ou rede móvel.';
+    if (mtu > 1340) return 'Muito encapsulamento no caminho: túneis empilhados, VPN sobre VPN ou ajuste agressivo.';
+    return 'No mínimo crítico ou abaixo: pacotes grandes podem se perder (blackhole de PMTU).';
+  }
+
+  // quicMaxUDPPayload reads max_udp_payload from the QUIC transport parameters in X-Traefix-H3 (tp=a:1-b:2).
+  function quicMaxUDPPayload() {
+    var h3 = parseKV(tx('H3')) || {};
+    var m = /(?:^|-)max_udp_payload:(\d+)/.exec(h3.tp || '');
+    return m ? Number(m[1]) : undefined;
+  }
+
+  // mtuEstimate is the MTU the client sized its packets for: the MSS of the SYN plus 20 bytes of TCP, or
+  // max_udp_payload of QUIC plus 8 bytes of UDP, plus the IP header (20 bytes in IPv4, 40 in IPv6).
+  function mtuEstimate() {
+    var v6 = transport.ipv === '6';
+    var o = { ipv: v6 ? 6 : 4, ip: v6 ? 40 : 20 };
+    var mss = num(transport.syn_mss);
+    if (transport.proto !== 'udp' && mss !== undefined) {
+      o.base = 'MSS'; o.payload = mss; o.l4Name = 'TCP'; o.l4 = 20; o.source = 'opção MSS do SYN';
+    } else if (transport.proto === 'udp') {
+      var p = quicMaxUDPPayload();
+      o.l4Name = 'UDP'; o.l4 = 8; o.initial = num(transport.initial_size);
+      // 65527 is the default of RFC 9000: the client set no limit, so there is no MTU to read from it.
+      if (p !== undefined && p < 65527) {
+        o.base = 'max_udp_payload'; o.payload = p; o.source = 'parâmetro de transporte max_udp_payload do QUIC';
+      } else {
+        o.note = 'O cliente QUIC não declarou max_udp_payload (padrão 65527): não há MTU planejado para ler.' +
+          (o.initial ? ' O primeiro datagrama Initial teve ' + o.initial + ' bytes de UDP (' + (o.initial + 8 + o.ip) + ' bytes no IP), tamanho fixo do cliente, não do caminho.' : '');
+        return o;
+      }
+    } else {
+      return null;
+    }
+    o.mtu = o.payload + o.l4 + o.ip;
+    o.grade = mtuGrade(o.mtu);
+    return o;
+  }
+
+  function mtuRuler(mtu) {
+    var lo = 1300, hi = 1520;
+    var pos = function (v) { return Math.round(100 * (Math.min(Math.max(v, lo), hi) - lo) / (hi - lo) * 10) / 10 + '%'; };
+    // The CSP forbids style attributes; the CSSOM is allowed.
+    var track = el('div', { 'class': 'ruler-track' });
+    var crit = el('span', { 'class': 'ruler-seg crit' });
+    crit.style.left = '0';
+    crit.style.width = pos(MTU_RULER[0][0]);
+    track.appendChild(crit);
+    MTU_RULER.slice(1).forEach(function (p, i) {
+      var seg = el('span', { 'class': 'ruler-seg seg' + i });
+      seg.style.left = pos(MTU_RULER[i][0]);
+      seg.style.width = 'calc(' + pos(p[0]) + ' - ' + pos(MTU_RULER[i][0]) + ')';
+      track.appendChild(seg);
+    });
+    var marks = el('div', { 'class': 'ruler-marks' });
+    MTU_MARKS.forEach(function (m) {
+      var tick = el('span', { 'class': 'ruler-tick', text: m[2] ? String(m[0]) : '' });
+      tick.style.left = pos(m[0]);
+      tick.setAttribute('title', m[1]);
+      marks.appendChild(tick);
+    });
+    var wrap = el('div', { 'class': 'ruler' }, [track, marks]);
+    if (mtu !== undefined) {
+      var mk = el('span', { 'class': 'ruler-marker ' + mtuClass(mtuGrade(mtu)), text: '▲ ' + mtu });
+      mk.style.left = pos(mtu);
+      wrap.appendChild(mk);
+    }
+    return wrap;
+  }
+
+  function mtuCard() {
+    var mt = mtuEstimate();
+    if (!mt) return null;
+    var legend = el('table', { 'class': 'eval' }, [
+      [1500, 'Ethernet/Wi-Fi sem túnel'], [1492, 'PPPoE (fibra e DSL)'], [1480, 'PPPoE com VLAN, túnel leve'],
+      [1420, 'WireGuard'], [1400, 'IPsec, rede móvel'], [1340, 'Mínimo crítico']
+    ].map(function (r) {
+      var g = mtuGrade(r[0]);
+      return el('tr', null, [el('td', { 'class': 'eval-badge' }, [badge(String(g), mtuClass(g))]), el('th', { text: r[0] + ' bytes' }), el('td', { 'class': 'muted', text: r[1] })]);
+    }));
+    var intro = 'O MTU para o qual o seu sistema dimensionou os pacotes, pelo que ele anunciou ao abrir a conexão. Mede a rede de acesso (túneis, PPPoE, VPN), não a velocidade, e não entra na pontuação de automação.';
+    if (mt.mtu === undefined) {
+      return card('MTU estimado', intro, [el('p', { 'class': 'muted', text: mt.note }), mtuRuler(), legend]);
+    }
+    var calc = dl([
+      ['Base', mt.base + ' = ' + mt.payload + ' bytes (' + mt.source + ')'],
+      ['Cabeçalho ' + mt.l4Name, '+ ' + mt.l4 + ' bytes'],
+      ['Cabeçalho IPv' + mt.ipv, '+ ' + mt.ip + ' bytes'],
+      ['MTU estimado', el('strong', { text: mt.mtu + ' bytes' })],
+      ['Nota', el('span', null, [badge(mt.grade + '/100', mtuClass(mt.grade)), ' ' + mtuReading(mt.mtu)])],
+      ['Datagrama Initial', mt.initial ? mt.initial + ' bytes de UDP (tamanho fixo do cliente, não do caminho)' : undefined],
+      ['MTU do servidor (PMTU)', transport.pmtu ? transport.pmtu + ' bytes (rota do servidor até você, não o seu MTU)' : undefined]
+    ]);
+    return card('MTU estimado', intro, [calc, mtuRuler(mt.mtu), legend]);
+  }
+
   // evaluate grades the IP and TCP values per infopage/CRITERIA.md: most of them only describe the
   // operating system or the access network, and stay informative.
   function evaluate() {
@@ -372,14 +497,11 @@
       else add('warn', 'Latência', ms(rtt), 'Alta: chamadas e jogos sofrem. Comum em satélite geoestacionário.');
     }
 
-    var mss = num(transport.syn_mss);
-    if (mss !== undefined) {
-      var full = v6 ? 1440 : 1460;
-      if (mss === full) add('ok', 'Tamanho do pacote (MSS)', mss + ' bytes', 'O máximo de uma rede Ethernet/Wi-Fi comum (MTU 1500).');
-      else if (mss === full - 8) add('info', 'Tamanho do pacote (MSS)', mss + ' bytes', 'Típico de PPPoE (fibra e DSL). Diferença de velocidade desprezível.');
-      else if (mss > full) add('info', 'Tamanho do pacote (MSS)', mss + ' bytes', 'Acima do padrão: rede com jumbo frames ou configuração manual.');
-      else if (mss >= (v6 ? 1220 : 1200)) add('info', 'Tamanho do pacote (MSS)', mss + ' bytes', 'Menor que o padrão: túnel, VPN ou rede móvel no caminho. A perda de velocidade é de 1% a 3%.');
-      else add('warn', 'Tamanho do pacote (MSS)', mss + ' bytes', 'Muito pequeno: pilha de rede limitada ou ajuste de MSS incorreto.');
+    var mt = mtuEstimate();
+    if (mt && mt.mtu !== undefined) {
+      add(mtuClass(mt.grade), 'MTU estimado', mt.mtu + ' bytes · nota ' + mt.grade + '/100', mt.base + ' ' + mt.payload + ' + ' + mt.l4Name + ' ' + mt.l4 + ' + IPv' + mt.ipv + ' ' + mt.ip + '. ' + mtuReading(mt.mtu) + ' Régua no cartão "MTU estimado".');
+    } else if (mt) {
+      add('info', 'MTU estimado', 'sem plano', mt.note);
     }
 
     var ws = num(transport.syn_wscale);
@@ -573,7 +695,7 @@
     var R = Math.round(100 / (1 + Math.exp(-(sc.a * S + sc.b))));
     var cov = total ? Math.round(100 * evaluated / total) : 0;
     var band = cov < 50 ? 'Evidência insuficiente' : R <= 20 ? 'Compatível com navegador' : R <= 50 ? 'Indeterminado' : R <= 80 ? 'Suspeito de automação' : 'Automação provável';
-    return { S: S, R: R, coverage: cov, band: band, families: fams };
+    return { S: S, R: R, coverage: cov, band: band, families: fams, raw: sum, evaluated: evaluated, weight: total };
   }
 
   function fullScore(b) {
@@ -611,32 +733,91 @@
     if (net.cloud) facts.push(['Rede de datacenter', net.cloud]);
     if (net.crawlers && net.crawlers.length) facts.push(['Endereço de robô', net.crawlerLabel + ' (' + net.crawlers.join(', ') + ')']);
 
-    var bars = el('div', { 'class': 'score-bars' });
-    Object.keys(FAMILIES).forEach(function (k) {
-      if (!(k in t.families)) return;
-      var cap = sc.families[k], v = t.families[k];
-      var pctW = v >= 0 ? (cap.max ? v / cap.max : 0) : (cap.min ? v / cap.min : 0);
-      // The CSP forbids style attributes; the CSSOM is allowed.
-      var fill = el('span', { 'class': 'fill ' + (v > 0 ? 'pos' : v < 0 ? 'neg' : '') });
-      fill.style.width = Math.round(Math.abs(pctW) * 100) + '%';
-      bars.appendChild(el('div', { 'class': 'score-bar' }, [
-        el('span', { text: FAMILIES[k] }),
-        el('span', { 'class': 'track' }, [fill]),
-        el('span', { 'class': 'pts', text: (v > 0 ? '+' : '') + v + ' / ' + cap.max })
+    return card('Pontuação de automação', 'Quanto o seu acesso se parece com um programa, pela coerência entre o que o navegador declara e o que a conexão mostra. Todos os itens analisados aparecem abaixo, agrupados por tipo de análise, com o resultado, os pontos e a soma de cada tipo. Valores fora do ideal de rede (MSS, latência) não contam.',
+      [head, facts.length ? dl(facts) : null, scoreBreakdown(f), scoreVerdict(f)]);
+  }
+
+  function dec(n) {
+    return String(n).replace('.', ',');
+  }
+
+  function signed(n) {
+    return (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n);
+  }
+
+  // scoreBreakdown is the table of every rule evaluated, grouped by family, with the raw sum of each family,
+  // the sum after the family cap, and the total S and index R.
+  function scoreBreakdown(f) {
+    var t = f.total, sc = f.sc;
+    var tbl = el('table', { 'class': 'score-table' });
+    tbl.appendChild(el('thead', null, [el('tr', null, [
+      el('th', { text: 'Item analisado' }),
+      el('th', { text: 'Observado / esperado' }),
+      el('th', { 'class': 'res', text: 'Resultado' }),
+      el('th', { 'class': 'num', text: 'Pontos' })
+    ])]));
+
+    var order = Object.keys(FAMILIES);
+    f.results.forEach(function (x) { if (order.indexOf(x.family) < 0) order.push(x.family); });
+    var body = el('tbody');
+    order.forEach(function (k) {
+      var rows = f.results.filter(function (x) { return x.family === k; });
+      if (!rows.length) return;
+      var cap = sc.families[k] || { max: 0, min: 0 };
+      body.appendChild(el('tr', { 'class': 'fam' }, [el('th', { colspan: '4', text: (FAMILIES[k] || k) + ' · teto ' + signed(cap.max) + (cap.min ? ' / ' + signed(cap.min) : '') })]));
+      rows.forEach(function (x) {
+        var st = STATE[x.state] || STATE.normal;
+        body.appendChild(el('tr', null, [
+          el('td', null, [el('strong', { text: x.name }), el('span', { 'class': 'muted', text: ' ' + x.id }),
+            x.reason ? el('div', { 'class': 'muted small', text: x.reason + (x.benign ? ' Explicação benigna: ' + x.benign : '') }) : null]),
+          el('td', null, [x.value ? el('div', { text: x.value }) : el('div', { 'class': 'muted', text: '—' }),
+            x.expected ? el('div', { 'class': 'muted small', text: 'esperado: ' + x.expected }) : null]),
+          el('td', { 'class': 'res' }, [badge(st[1], st[0])]),
+          el('td', { 'class': 'num ' + (x.points > 0 ? 'bad' : x.points < 0 ? 'ok' : 'muted'), text: signed(x.points) })
+        ]));
+      });
+      var raw = t.raw[k] || 0, v = t.families[k] || 0;
+      var capped = raw !== v ? ' → ' + signed(v) + ' (limitado pelo teto)' : '';
+      body.appendChild(el('tr', { 'class': 'subtotal' }, [
+        el('td', { colspan: '3', text: 'Soma ' + (FAMILIES[k] || k) + ': ' + rows.length + (rows.length === 1 ? ' item' : ' itens') + ', ' + signed(raw) + capped }),
+        el('td', { 'class': 'num', text: signed(v) })
       ]));
     });
+    tbl.appendChild(body);
 
-    var ul = el('ul', { 'class': 'signals' });
-    f.results.filter(function (x) { return x.points !== 0; })
-      .sort(function (a, c) { return c.points - a.points; })
-      .forEach(function (x) {
-        var st = STATE[x.state] || STATE.normal;
-        ul.appendChild(el('li', null, [badge((x.points > 0 ? '+' : '') + x.points, st[0]), ' ', el('strong', { text: x.name + ': ' }), x.reason || '',
-          x.benign ? el('span', { 'class': 'muted', text: ' Explicação benigna: ' + x.benign }) : null]));
-      });
+    var parts = order.filter(function (k) { return k in t.families; }).map(function (k) { return (FAMILIES[k] || k) + ' ' + signed(t.families[k]); });
+    tbl.appendChild(el('tfoot', null, [
+      el('tr', null, [el('td', { colspan: '3', text: 'Total S = ' + parts.join(' ') }), el('td', { 'class': 'num', text: signed(t.S) })]),
+      el('tr', null, [el('td', { colspan: '3', text: 'Índice R = 100 / (1 + e^−(' + dec(sc.a) + ' × S ' + (sc.b < 0 ? '− ' + dec(Math.abs(sc.b)) : '+ ' + dec(sc.b)) + '))' }), el('td', { 'class': 'num', text: t.R + '/100' })]),
+      el('tr', null, [el('td', { colspan: '3', text: 'Cobertura: peso dos itens com dado sobre o peso de todos (' + t.evaluated + ' de ' + t.weight + ')' }), el('td', { 'class': 'num', text: t.coverage + '%' })])
+    ]));
+    return el('div', { 'class': 'scroll' }, [tbl]);
+  }
 
-    return card('Pontuação de automação', 'Quanto o seu acesso se parece com um programa, pela coerência entre o que o navegador declara e o que a conexão mostra. Valores fora do ideal de rede (MSS, latência) não contam. Detalhes de cada regra na aba Técnico.',
-      [head, facts.length ? dl(facts) : null, bars, ul]);
+  // scoreVerdict is the full evaluation in words: the band, the role, and what weighed each way.
+  function scoreVerdict(f) {
+    var t = f.total;
+    var byPoints = function (a, c) { return Math.abs(c.points) - Math.abs(a.points); };
+    var pos = f.results.filter(function (x) { return x.points > 0; }).sort(byPoints);
+    var neg = f.results.filter(function (x) { return x.points < 0; }).sort(byPoints);
+    var unknown = f.results.filter(function (x) { return x.state === 'desconhecido'; });
+    var fmt = function (l) { return l.map(function (x) { return x.name + ' (' + signed(x.points) + ')'; }).join('; '); };
+    var capped = Object.keys(t.families).filter(function (k) { return (t.raw[k] || 0) !== t.families[k]; })
+      .map(function (k) { return FAMILIES[k] || k; });
+
+    var lines = [
+      ['Resultado', t.band + ' · índice ' + t.R + '/100 · S = ' + signed(t.S)],
+      ['Papel do cliente', ROLES[f.role] || f.role],
+      ['Itens analisados', f.results.length + ' (' + (f.results.length - unknown.length) + ' com dado, ' + unknown.length + ' sem dado)'],
+      ['A favor de automação', pos.length ? fmt(pos) : 'nenhum item'],
+      ['A favor de navegador', neg.length ? fmt(neg) : 'nenhum item'],
+      ['Tetos aplicados', capped.length ? capped.join(', ') + ': itens da mesma origem contam como uma evidência' : undefined],
+      ['Sem dado', unknown.length ? unknown.map(function (x) { return x.name; }).join('; ') : undefined]
+    ];
+    var note = t.coverage < 50
+      ? 'Menos da metade do peso das regras tem dado: a faixa não é conclusiva.'
+      : 'Índice heurístico, não calibrado: descreve a coerência técnica do acesso, não prova que é uma pessoa ou um programa.';
+    return el('div', { 'class': 'verdict ' + bandClass(t) }, [el('h3', { text: 'Avaliação completa' }), dl(lines), el('p', { 'class': 'muted small', text: note })]);
   }
 
   function scoreTable(f) {
@@ -687,6 +868,9 @@
       ['Tipo de rede (navegador)', b.network ? [b.network.type, b.network.effectiveType].filter(Boolean).join(' · ') : undefined],
       ['Identificador da conexão', tx('Conn-Id')]
     ])]));
+
+    var mc = mtuCard();
+    if (mc) root.appendChild(mc);
 
     var sc = b.screen;
     root.appendChild(card('Seu navegador e dispositivo', 'O que o navegador conta a qualquer site que você visita.', [dl([

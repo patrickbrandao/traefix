@@ -101,13 +101,31 @@ ul.signals { margin: 0; padding: 0; list-style: none; }
 .score-head { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
 .score-value { font-size: 44px; font-weight: 700; line-height: 1; min-width: 72px; text-align: center; }
 .score-band { font-size: 18px; font-weight: 600; }
-.score-bars { margin: 12px 0; display: grid; gap: 4px; }
-.score-bar { display: grid; grid-template-columns: 130px 1fr 70px; gap: 10px; align-items: center; font-size: 13px; }
-.score-bar .track { height: 8px; background: var(--code); border-radius: 4px; overflow: hidden; }
-.score-bar .fill { display: block; height: 100%; }
-.score-bar .fill.pos { background: var(--bad); }
-.score-bar .fill.neg { background: var(--ok); }
-.score-bar .pts { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.small { font-size: 12px; }
+.scroll { overflow-x: auto; }
+table.score-table { table-layout: auto; font-size: 13px; margin-top: 8px; }
+table.score-table th, table.score-table td { font-family: inherit; word-break: normal; overflow-wrap: anywhere; }
+table.score-table thead th { width: auto; color: var(--muted); font-weight: 600; border-top: 0; }
+table.score-table .res, .badge { white-space: nowrap; }
+table.score-table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; width: 64px; }
+table.score-table tr.fam th { width: auto; padding-top: 12px; color: var(--fg); font-size: 14px; background: var(--code); }
+table.score-table tr.subtotal td { font-weight: 600; color: var(--muted); border-top: 1px dashed var(--line); }
+table.score-table tfoot td { font-weight: 600; border-top: 2px solid var(--line); }
+.verdict { margin-top: 14px; padding: 12px 14px; border: 1px solid currentColor; border-radius: 8px; }
+.verdict h3 { margin: 0 0 8px; font-size: 15px; }
+.verdict dl, .verdict p { color: var(--fg); }
+.verdict p { margin: 8px 0 0; }
+.ruler { position: relative; margin: 30px 0 34px; }
+.ruler-track { position: relative; height: 10px; background: var(--code); border-radius: 5px; }
+.ruler-seg { position: absolute; top: 0; height: 100%; }
+.ruler-seg.crit { background: var(--bad); opacity: .45; }
+.ruler-seg.seg0 { background: linear-gradient(90deg, var(--bad), var(--warn) 55%, var(--accent)); }
+.ruler-seg.seg1 { background: var(--accent); }
+.ruler-seg.seg2 { background: linear-gradient(90deg, var(--accent), var(--ok)); }
+.ruler-marks { position: relative; height: 0; }
+.ruler-tick { position: absolute; top: 0; transform: translateX(-50%); padding-top: 12px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.ruler-tick::before { content: ""; position: absolute; top: 0; left: 50%; height: 8px; border-left: 1px solid var(--muted); }
+.ruler-marker { position: absolute; top: -20px; transform: translateX(-50%); font-size: 12px; font-weight: 700; white-space: nowrap; }
 ul.signals li { padding: 4px 0; }
 
 .actions { display: flex; gap: 8px; margin-bottom: 14px; }

@@ -26,8 +26,37 @@ ruim; a maior parte descreve o sistema operacional ou a rede de acesso. Cores:
 | `ipid` | qualquer | azul | Com DF o ID não tem significado (RFC 6864); Linux manda ID ≠ 0 no SYN (`id+` no p0f). |
 | `ipopt` | 0 | amarelo se > 0 | Navegadores não usam opções IP (RFC 7126). |
 | `flow_label` | ≠ 0 | azul | Só identifica a pilha (RFC 6437). |
-| `syn_mss` | 1460 (v4) / 1440 (v6) | verde no padrão; azul de 1200/1220 até o padrão; amarelo abaixo | PPPoE 1452/1432, WireGuard 1380/1360, Tailscale 1240/1220, móvel 1360–1460. Impacto real de 1% a 3% (APNIC 2019). |
-| `mtu_est`, `pmtu` | 1500 | azul | `mtu_est` é estimativa do MSS anunciado; `pmtu` no SYN é o MTU local do servidor. Só um blackhole de PMTUD seria problema, e não aparece no SYN (RFC 2923). |
+| `syn_mss` | 1460 (v4) / 1440 (v6) | vira o MTU estimado (abaixo) | PPPoE 1452/1432, WireGuard 1380/1360, Tailscale 1240/1220, móvel 1360–1460. Impacto real de 1% a 3% na vazão (APNIC 2019). |
+| MTU estimado | 1500 | régua de MTU (abaixo) | MTU para o qual o cliente dimensionou os pacotes; não entra na pontuação de automação. |
+| `pmtu` | — | azul | MTU da rota do servidor até o cliente, não o do cliente. Um blackhole de PMTUD não aparece no SYN (RFC 2923). |
+
+## MTU estimado
+
+O cartão "MTU estimado" da aba Resumo mostra o MTU para o qual o cliente dimensionou os pacotes, somando os
+cabeçalhos ao que ele anunciou ao abrir a conexão:
+
+| Conexão | Base | Transporte | IP | Exemplo |
+|---|---|---:|---:|---|
+| TCP | `syn_mss` (opção MSS do SYN) | TCP 20 | IPv4 20, IPv6 40 | 1460 + 20 + 20 = 1500; 1440 + 20 + 40 = 1500 |
+| HTTP/3 | `max_udp_payload` (parâmetro de transporte do QUIC, em `X-Traefix-H3` `tp=`) | UDP 8 | IPv4 20, IPv6 40 | Chrome 1472 + 8 + 20 = 1500; quic-go 1452 + 8 + 20 = 1480 |
+
+- Igual ao `mtu_est` do `X-Traefix-Transport` no TCP (MSS + 40 ou + 60).
+- Sem `max_udp_payload`, ou com o padrão 65527 do RFC 9000 (curl, Firefox), o cliente não planejou um MTU: o
+  cartão diz "sem plano" e mostra só o tamanho do primeiro datagrama Initial, que é fixo do cliente (Chrome 1250,
+  curl 1200) e não do caminho.
+- **Régua** (nota de 0 a 100, interpolação linear entre os pontos):
+
+| MTU | Nota | Leitura |
+|---:|---:|---|
+| ≥ 1500 | 100 | Ethernet/Wi-Fi sem túnel |
+| 1492 | 95 | PPPoE (fibra e DSL) |
+| 1480 | 90 | PPPoE com VLAN, túnel leve |
+| 1420 | 51 | WireGuard |
+| 1400 | 39 | IPsec, rede móvel |
+| ≤ 1340 | 0 | Mínimo crítico: pacotes grandes podem se perder |
+
+  Cores: verde ≥ 95, azul 60–94, amarelo 30–59, vermelho < 30. A nota mede a rede de acesso (túneis,
+  encapsulamento), não a vazão, e **não entra na pontuação de automação**.
 
 ## Opções TCP do SYN
 
@@ -62,7 +91,7 @@ ruim; a maior parte descreve o sistema operacional ou a rede de acesso. Cores:
 
 ## Erros que o infopage não deve cometer
 
-1. Nota percentual por MSS (1448 contra 1460 é 0,8%, não 3%).
+1. Nota de MTU como perda de vazão (1448 contra 1460 é 0,8%, não 3%): a régua de MTU mede o encapsulamento do caminho.
 2. MSS abaixo de 1460 em vermelho.
 3. Timestamps, ECN ou TFO ausentes como defeito.
 4. `rttvar` chamado de jitter.

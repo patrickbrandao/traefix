@@ -45,17 +45,23 @@ em português do Brasil. A aba ativa fica no fragmento (`#tecnico`).
 1. **Destaque**: IP, navegador (nome e versão principal) e sistema operacional.
 1. **Pontuação de automação** ([SCORE.md](SCORE.md)): índice 0–100 não calibrado, faixa, papel (navegador,
    automação declarada, robô verificado ou não), cobertura, TLS reconhecido, relay/datacenter/robô pelo
-   endereço, barras por família com o teto e as regras que deram pontos, com a explicação benigna.
-2. **Sua conexão**: endereço e família (IPv4/IPv6), porta de origem, protocolo HTTP (`X-Traefix-Proto`),
+   endereço; tabela com **todos** os itens analisados, agrupados por família (valor observado, esperado,
+   resultado e pontos), a soma bruta e a soma com teto de cada família, o total `S`, o índice `R` com a fórmula
+   e a cobertura; no fim, a **avaliação completa** (resultado, papel, itens com e sem dado, o que pesou para cada
+   lado, tetos aplicados).
+2. **MTU estimado** ([CRITERIA.md](CRITERIA.md), "MTU estimado"): base (MSS do SYN ou `max_udp_payload` do
+   QUIC), + TCP 20 ou UDP 8, + IPv4 20 ou IPv6 40, nota de 0 a 100 pela régua (1500 = 100, PPPoE 1480–1492 =
+   90–95, 1340 = 0) e a régua desenhada. Não entra na pontuação de automação.
+3. **Sua conexão**: endereço e família (IPv4/IPv6), porta de origem, protocolo HTTP (`X-Traefix-Proto`),
    TLS (versão, cifra, grupo, SNI), latência (`rtt_us` do Transport ou `tcp_rtt_us` do Timing),
    saltos, sistema sugerido pelo TTL inicial, tipo de rede do navegador, ID da conexão.
-3. **Seu navegador e dispositivo**: navegador, sistema, dispositivo/modelo, arquitetura, idiomas, fuso,
+4. **Seu navegador e dispositivo**: navegador, sistema, dispositivo/modelo, arquitetura, idiomas, fuso,
    tela, janela, tema, toque, núcleos, memória, GPU (WebGL), cookies. A latência é a do caminho
    (`rtt_min_us`, `tcp_rtt_us`…), não o RTT suavizado.
-4. **Avaliação TCP/IP**: latência, MSS, escala de janela, SACK, timestamps, ECN, saltos, DF, opções IP,
+5. **Avaliação TCP/IP**: latência, MTU estimado, escala de janela, SACK, timestamps, ECN, saltos, DF, opções IP,
    DSCP e reenvios, com `OK` / `Info` / `Atenção` / `Alerta` pelos critérios de
    [CRITERIA.md](CRITERIA.md). A maior parte é `Info`: descreve o sistema, não a qualidade.
-5. **Sinais** (`OK` / `Atenção` / `Alerta`), coerência entre o que o navegador diz e o que a conexão
+6. **Sinais** (`OK` / `Atenção` / `Alerta`), coerência entre o que o navegador diz e o que a conexão
    mostra:
    - `navigator.webdriver` (automação);
    - versão do TLS; troca de chaves pós-quântica (`MLKEM`); sessão retomada; ECH aceito;
@@ -64,7 +70,7 @@ em português do Brasil. A aba ativa fica no fragmento (`#tecnico`).
      *Fingerprint Signals* (15–20 ms e 30%, pensada para várias conexões agregadas);
    - Chromium sem Client Hints; GPC/DNT; cookies desativados; relógio com mais de 60 s de diferença
      (`Alerta` acima de 5 min).
-6. **Impressões digitais**: JA4, JA3, JA4H, Akamai H2, JA4T, com explicação leiga (identificam o tipo
+7. **Impressões digitais**: JA4, JA3, JA4H, Akamai H2, JA4T, com explicação leiga (identificam o tipo
    de cliente, não a pessoa). Sem cabeçalhos do Traefix, explica que o fingerprint não está ativo.
 
 ### Aba "Técnico" (todos os detalhes)

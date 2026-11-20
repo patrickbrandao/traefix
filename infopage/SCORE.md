@@ -229,7 +229,10 @@ automatizado**. Só comportamento, rota e resultado de negócio pegam, e o infop
   (`Automation-Score`, `Automation-Rule`). A família `js` e a agregação final no `app.js`, com os tetos e a
   calibração que o servidor envia. Versão das regras: `score/v1`.
 - **Aba Resumo.** Cartão "Pontuação de automação" logo após o destaque: índice, faixa, papel, cobertura, TLS
-  reconhecido, relay/datacenter/robô, barras por família e as regras com pontos, com a explicação benigna.
+  reconhecido, relay/datacenter/robô; tabela com todas as regras avaliadas por família (valor, esperado, estado,
+  pontos e explicação benigna), a soma bruta e a soma com teto de cada família, o total `S`, o índice `R` com a
+  fórmula e a cobertura; por fim a "Avaliação completa": faixa, papel, itens com e sem dado, regras que pesaram
+  para automação e para navegador, e as famílias limitadas pelo teto.
 - **Aba Técnico.** "Regras da pontuação": todas as regras com valor, esperado, estado e pontos.
 - **CRITERIA.md** continua sendo o critério de qualidade; este documento, o de automação.
 
