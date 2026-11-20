@@ -22,7 +22,8 @@ gRPC). Acrescenta:
 |---|---|
 | `/` | `GET` com `Accept` contendo `text/html` (navegador) recebe a página; os demais (curl, scripts) recebem o texto do whoami. `?format=html` ou `?format=text` força um dos dois. |
 | `/assets/*` | `app.js` e `style.css` embutidos no binário (`static/`, `go:embed`). Sem listagem de diretório. |
-| `/api` | JSON do whoami com os campos novos `proto`, `prefix` e `time` (RFC 3339 UTC). |
+| `/api` | JSON do whoami com os campos novos `proto`, `prefix`, `time` (RFC 3339 UTC) e `score` (pontuação passiva). |
+| texto (curl) | Acrescenta `Automation-Score`, `Automation-Known-TLS` e uma linha `Automation-Rule` por regra com pontos. |
 
 - A página recebe os dados da **própria requisição de navegação**, embutidos no HTML como JSON
   (`<script id="infopage-data" type="application/json">`), e não de um `fetch` posterior: o `fetch` tem
@@ -42,6 +43,9 @@ em português do Brasil. A aba ativa fica no fragmento (`#tecnico`).
 ### Aba "Resumo" (para pessoas)
 
 1. **Destaque**: IP, navegador (nome e versão principal) e sistema operacional.
+1. **Pontuação de automação** ([SCORE.md](SCORE.md)): índice 0–100 não calibrado, faixa, papel (navegador,
+   automação declarada, robô verificado ou não), cobertura, TLS reconhecido, relay/datacenter/robô pelo
+   endereço, barras por família com o teto e as regras que deram pontos, com a explicação benigna.
 2. **Sua conexão**: endereço e família (IPv4/IPv6), porta de origem, protocolo HTTP (`X-Traefix-Proto`),
    TLS (versão, cifra, grupo, SNI), latência (`rtt_us` do Transport ou `tcp_rtt_us` do Timing),
    saltos, sistema sugerido pelo TTL inicial, tipo de rede do navegador, ID da conexão.
@@ -74,7 +78,28 @@ em português do Brasil. A aba ativa fica no fragmento (`#tecnico`).
 - **Navegador**: `navigator`, Client Hints de alta entropia, `Intl`, tela, media queries, Network
   Information, Navigation Timing, WebGL, recursos, armazenamento, relógio (diferença para o servidor).
 - **Servidor infopage**: nome, hostname, IPs.
-- Botões **Copiar JSON** e **Baixar JSON** (`{server, browser}`).
+- **Regras da pontuação**: todas as regras avaliadas, com valor, esperado, estado e pontos.
+- Botões **Copiar JSON** e **Baixar JSON** (`{server, browser, score}`).
+
+## Pontuação de automação
+
+Especificação e pesos em [SCORE.md](SCORE.md). O servidor calcula as regras passivas (`score.go`) sobre os
+cabeçalhos da requisição e as embute em `infopage-data`; o `app.js` acrescenta a família `js` e agrega com os
+mesmos tetos e a mesma calibração.
+
+Listas de endereços (`lists.go`), baixadas no início e a cada 24 h (1 h após falha), mantendo a cópia anterior
+quando o download falha ou encolhe mais da metade; desligadas com `INFOPAGE_LISTS=0`:
+
+- robôs verificáveis: Google (3 listas), Bing, Apple, OpenAI (GPTBot, OAI-SearchBot, ChatGPT-User),
+  DuckDuckGo, Perplexity (2), Common Crawl; Google, Bing e Apple também por DNS reverso e direto (cache 24 h);
+- nuvens: AWS, Google Cloud, Oracle, DigitalOcean, Cloudflare;
+- iCloud Private Relay (exceção: TCP, TTL e tempo do relay não contam).
+
+Memória: as faixas ficam em 16 bytes por endereço (285 mil só no Private Relay), os downloads são lidos em
+streaming e o processo usa `GOMEMLIMIT` de 40 MiB por padrão; no container de 64 MB, pico de 46 MB na
+atualização e 37 MB estável (medido com `docker run --memory=64m`).
+
+Clientes medidos (JA4) vêm da base própria do finger-sniffer (`known_clients.json`) e dos goldens.
 
 ## Regra de propagação
 
@@ -105,4 +130,5 @@ labels do Traefik).
 
 - Sinais que dependem de várias conexões (TCP contra HTTP/3 do mesmo cliente).
 - Botão para repetir a medição em HTTP/3 (o navegador só usa h3 após o `Alt-Svc`).
-- Comparar o JA4 com uma base de navegadores conhecidos.
+- Medir Windows, Linux, Android, iOS, Safari e Edge para a base de clientes conhecidos.
+- ASN, Tor e reputação (iptoasn, lista de saídas Tor, Spamhaus DROP) na família `net`.

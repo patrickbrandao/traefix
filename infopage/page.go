@@ -37,7 +37,7 @@ func pageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// json.Marshal escapes <, > and &, so a header value can't close the script block.
-	data, err := json.Marshal(newData(r))
+	data, err := json.Marshal(newData(r, true))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

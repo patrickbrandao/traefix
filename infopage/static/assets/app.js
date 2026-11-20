@@ -198,7 +198,8 @@
         colorDepth: screen.colorDepth,
         devicePixelRatio: window.devicePixelRatio,
         orientation: screen.orientation ? screen.orientation.type : undefined,
-        viewport: window.innerWidth + 'x' + window.innerHeight
+        viewport: window.innerWidth + 'x' + window.innerHeight,
+        outer: window.outerWidth + 'x' + window.outerHeight
       },
       media: {
         colorScheme: firstMatch([['(prefers-color-scheme: dark)', 'dark'], ['(prefers-color-scheme: light)', 'light']]),
@@ -460,6 +461,201 @@
     return s;
   }
 
+
+  // ---------- automation score (infopage/SCORE.md) ----------
+
+  // The server computes the passive rules from the request (data.score); the page adds the rules of the browser
+  // APIs, family js, which the client controls, and aggregates with the same caps and calibration.
+  var STATE = {
+    ideal: ['ok', 'Ideal'], normal: ['info', 'Normal'], atipico: ['warn', 'Atípico'],
+    contradicao: ['bad', 'Contradição'], declarado: ['bad', 'Declarado'], desconhecido: ['muted', 'Sem dado']
+  };
+  var ROLES = {
+    navegador: 'Navegador', automacao_declarada: 'Automação declarada', crawler_verificado: 'Robô verificado',
+    crawler_nao_verificado: 'Robô não verificado', desconhecido: 'Cliente não identificado'
+  };
+  var FAMILIES = { decl: 'Declaração', tls: 'TLS', http: 'HTTP', tcp: 'TCP/IP', time: 'Tempo', net: 'Rede', js: 'Navegador (JS)' };
+
+  function firstLang(s) {
+    return String(s || '').split(',')[0].split(';')[0].trim().toLowerCase().split('-')[0];
+  }
+
+  function jsRules(b, sc) {
+    var r = [];
+    var add = function (o) { o.family = o.family || 'js'; o.points = o.points || 0; r.push(o); };
+    var c = sc.client || {};
+    var nav = b.navigator;
+
+    if (nav.webdriver) {
+      add({ id: 'DECL-WD', family: 'decl', name: 'navigator.webdriver', value: 'true', expected: 'false', state: 'declarado', points: 50, weight: 50,
+        reason: 'O navegador declara estar sob controle de automação.', benign: 'Testes automatizados do próprio dono do site.' });
+    }
+    if (!c.engine || c.crawler) return r;
+
+    var headerUA = hdr('User-Agent') || '';
+    var o = { id: 'JS-UA', name: 'User-Agent do JS × cabeçalho', value: nav.userAgent === headerUA ? 'iguais' : 'diferentes', expected: 'iguais', weight: 30, state: 'ideal' };
+    if (nav.userAgent !== headerUA) { o.state = 'contradicao'; o.points = 30; o.reason = 'navigator.userAgent difere do User-Agent enviado.'; o.benign = 'Extensão que troca o UA só no cabeçalho.'; }
+    add(o);
+
+    var chPlat = (hdr('Sec-Ch-Ua-Platform') || '').replace(/"/g, '');
+    if (b.userAgentData && chPlat) {
+      o = { id: 'JS-CH-HDR', name: 'Client Hints do JS × cabeçalho', value: b.userAgentData.platform, expected: chPlat, weight: 30, state: 'ideal' };
+      var mob = hdr('Sec-Ch-Ua-Mobile');
+      if (b.userAgentData.platform !== chPlat || (mob && (mob === '?1') !== !!b.userAgentData.mobile)) {
+        o.state = 'contradicao'; o.points = 30; o.reason = 'Os Client Hints do cabeçalho não são os da API: cabeçalho fabricado por ferramenta.';
+      }
+      add(o);
+    }
+
+    var plat = nav.platform || '';
+    var want = { windows: /^Win/, macos: /^Mac/, ios: /^(iPhone|iPad|iPod|Mac)/, android: /Linux|Android|arm/i, linux: /Linux/, chromeos: /Linux|CrOS/ }[c.os];
+    if (want && plat) {
+      o = { id: 'JS-PLAT', name: 'navigator.platform', value: plat, expected: c.os, weight: 20, state: 'ideal' };
+      if (!want.test(plat)) { o.state = 'contradicao'; o.points = 20; o.reason = 'A plataforma do JavaScript não é a do User-Agent.'; }
+      add(o);
+    }
+
+    if (b.webgl && b.webgl.renderer) {
+      o = { id: 'JS-GPU', name: 'Placa de vídeo (WebGL)', value: b.webgl.renderer, expected: 'GPU real', weight: 15, state: 'ideal' };
+      if (/SwiftShader|llvmpipe|softpipe|Basic Render/i.test(b.webgl.renderer)) {
+        o.state = 'atipico'; o.points = 15; o.reason = 'Renderização por software, padrão do Chrome headless.'; o.benign = 'Máquina virtual, RDP, GPU desativada.';
+      }
+      add(o);
+    } else {
+      add({ id: 'JS-GPU', name: 'Placa de vídeo (WebGL)', state: 'desconhecido', weight: 15, reason: 'WebGL indisponível.' });
+    }
+
+    var al = hdr('Accept-Language');
+    if (al && nav.languages) {
+      o = { id: 'JS-LANG', name: 'Idioma do JS × Accept-Language', value: nav.language, expected: al.split(',')[0], weight: 10, state: 'ideal' };
+      if (firstLang(nav.languages) !== firstLang(al)) { o.state = 'contradicao'; o.points = 10; o.reason = 'O idioma do navegador não é o do cabeçalho.'; }
+      add(o);
+    }
+
+    if (c.mobile) {
+      o = { id: 'JS-TOUCH', name: 'Toque em celular', value: String(nav.maxTouchPoints), expected: 'mais de 0', weight: 15, state: 'ideal' };
+      if (!nav.maxTouchPoints) { o.state = 'contradicao'; o.points = 15; o.reason = 'UA de celular sem tela de toque.'; o.benign = 'Emulação de dispositivo do DevTools.'; }
+      add(o);
+    }
+
+    var sc2 = b.screen;
+    // outerWidth is 0 in embedded webviews too: only the screen counts.
+    o = { id: 'JS-SCREEN', name: 'Tela', value: sc2.width + '×' + sc2.height, expected: 'dimensões reais', weight: 20, state: 'ideal' };
+    if (!sc2.width || !sc2.height) { o.state = 'contradicao'; o.points = 20; o.reason = 'Tela de tamanho zero, típico de navegador sem interface.'; }
+    add(o);
+
+    if (c.engine === 'chromium' && !c.mobile && nav.pdfViewerEnabled === false) {
+      add({ id: 'JS-PDF', name: 'Leitor de PDF', value: 'não', expected: 'sim', state: 'atipico', points: 5, weight: 5,
+        reason: 'Chrome desktop tem leitor de PDF embutido.', benign: 'Política corporativa.' });
+    }
+
+    var n = 0, pos = false;
+    r.forEach(function (x) { if (x.family === 'js' && x.state !== 'desconhecido') { n++; if (x.points > 0) pos = true; } });
+    if (n >= 3 && !pos) add({ id: 'JS-MATCH', name: 'APIs coerentes', state: 'ideal', points: -10, weight: 10, reason: 'APIs do navegador coerentes com o User-Agent.' });
+    return r;
+  }
+
+  function aggregateScore(results, sc) {
+    var sum = {}, evaluated = 0, total = 0;
+    results.forEach(function (x) {
+      sum[x.family] = (sum[x.family] || 0) + x.points;
+      var w = Math.abs(x.weight || 0);
+      total += w;
+      if (x.state !== 'desconhecido') evaluated += w;
+    });
+    var fams = {}, S = 0;
+    Object.keys(sum).forEach(function (f) {
+      var cap = (sc.families || {})[f] || { max: 0, min: 0 };
+      var v = Math.min(Math.max(sum[f], cap.min || 0), cap.max || 0);
+      fams[f] = v;
+      S += v;
+    });
+    var R = Math.round(100 / (1 + Math.exp(-(sc.a * S + sc.b))));
+    var cov = total ? Math.round(100 * evaluated / total) : 0;
+    var band = cov < 50 ? 'Evidência insuficiente' : R <= 20 ? 'Compatível com navegador' : R <= 50 ? 'Indeterminado' : R <= 80 ? 'Suspeito de automação' : 'Automação provável';
+    return { S: S, R: R, coverage: cov, band: band, families: fams };
+  }
+
+  function fullScore(b) {
+    var sc = data.score;
+    if (!sc) return null;
+    var results = sc.results.concat(jsRules(b, sc));
+    var role = sc.role;
+    if (b.navigator.webdriver && role === 'navegador') role = 'automacao_declarada';
+    if (role === 'automacao_declarada') {
+      results = results.map(function (x) {
+        return x.points < 0 ? Object.assign({}, x, { points: 0, reason: (x.reason || '') + ' Sem alívio: automação declarada.' }) : x;
+      });
+    }
+    return { sc: sc, role: role, results: results, total: aggregateScore(results, sc) };
+  }
+
+  function bandClass(t) {
+    if (t.coverage < 50) return 'muted';
+    return t.R <= 20 ? 'ok' : t.R <= 50 ? 'info' : t.R <= 80 ? 'warn' : 'bad';
+  }
+
+  function scoreCard(f) {
+    var t = f.total, sc = f.sc, net = sc.network || {};
+    var head = el('div', { 'class': 'score-head' }, [
+      el('div', { 'class': 'score-value ' + bandClass(t), text: String(t.R) }),
+      el('div', null, [
+        el('div', { 'class': 'score-band ' + bandClass(t), text: t.band }),
+        el('div', { 'class': 'muted', text: ROLES[f.role] + ' · cobertura ' + t.coverage + '% · índice não calibrado, de 0 a 100' })
+      ])
+    ]);
+
+    var facts = [];
+    if (sc.client && sc.client.known) facts.push(['TLS reconhecido', sc.client.known + ' (medido em laboratório)']);
+    if (net.relay) facts.push(['Relay de privacidade', net.relay + (net.relayDetail ? ' · ' + net.relayDetail.replace(/,/g, ', ') : '')]);
+    if (net.cloud) facts.push(['Rede de datacenter', net.cloud]);
+    if (net.crawlers && net.crawlers.length) facts.push(['Endereço de robô', net.crawlerLabel + ' (' + net.crawlers.join(', ') + ')']);
+
+    var bars = el('div', { 'class': 'score-bars' });
+    Object.keys(FAMILIES).forEach(function (k) {
+      if (!(k in t.families)) return;
+      var cap = sc.families[k], v = t.families[k];
+      var pctW = v >= 0 ? (cap.max ? v / cap.max : 0) : (cap.min ? v / cap.min : 0);
+      // The CSP forbids style attributes; the CSSOM is allowed.
+      var fill = el('span', { 'class': 'fill ' + (v > 0 ? 'pos' : v < 0 ? 'neg' : '') });
+      fill.style.width = Math.round(Math.abs(pctW) * 100) + '%';
+      bars.appendChild(el('div', { 'class': 'score-bar' }, [
+        el('span', { text: FAMILIES[k] }),
+        el('span', { 'class': 'track' }, [fill]),
+        el('span', { 'class': 'pts', text: (v > 0 ? '+' : '') + v + ' / ' + cap.max })
+      ]));
+    });
+
+    var ul = el('ul', { 'class': 'signals' });
+    f.results.filter(function (x) { return x.points !== 0; })
+      .sort(function (a, c) { return c.points - a.points; })
+      .forEach(function (x) {
+        var st = STATE[x.state] || STATE.normal;
+        ul.appendChild(el('li', null, [badge((x.points > 0 ? '+' : '') + x.points, st[0]), ' ', el('strong', { text: x.name + ': ' }), x.reason || '',
+          x.benign ? el('span', { 'class': 'muted', text: ' Explicação benigna: ' + x.benign }) : null]));
+      });
+
+    return card('Pontuação de automação', 'Quanto o seu acesso se parece com um programa, pela coerência entre o que o navegador declara e o que a conexão mostra. Valores fora do ideal de rede (MSS, latência) não contam. Detalhes de cada regra na aba Técnico.',
+      [head, facts.length ? dl(facts) : null, bars, ul]);
+  }
+
+  function scoreTable(f) {
+    var t = el('table', { 'class': 'eval' });
+    f.results.forEach(function (x) {
+      var st = STATE[x.state] || STATE.normal;
+      t.appendChild(el('tr', null, [
+        el('td', { 'class': 'eval-badge' }, [badge(st[1], st[0])]),
+        el('th', { text: x.name + ' (' + x.id + ')' }),
+        el('td', null, [
+          el('strong', { text: (x.points > 0 ? '+' : '') + x.points + ' ' }),
+          el('span', { text: FAMILIES[x.family] + (x.value ? ' · ' + x.value : '') + (x.expected ? ' · esperado: ' + x.expected : '') }),
+          x.reason ? el('div', { 'class': 'muted', text: x.reason + (x.benign ? ' Explicação benigna: ' + x.benign : '') }) : null
+        ])
+      ]));
+    });
+    return card('Regras da pontuação (' + f.sc.version + ')', 'Cada regra com o valor observado, o esperado para o cliente declarado, o estado e os pontos. Família com teto: TLS ' + f.sc.families.tls.max + ', HTTP ' + f.sc.families.http.max + ', TCP/IP ' + f.sc.families.tcp.max + '. S = ' + f.total.S + '.', [t]);
+  }
+
   // ---------- render: Resumo ----------
 
   function renderResumo(b) {
@@ -473,6 +669,9 @@
       el('div', null, [el('div', { 'class': 'label', text: 'Navegador' }), el('div', { 'class': 'value', text: browserName(b) })]),
       el('div', null, [el('div', { 'class': 'label', text: 'Sistema' }), el('div', { 'class': 'value', text: os })])
     ]));
+
+    var fs = fullScore(b);
+    if (fs) root.appendChild(scoreCard(fs));
 
     var ipv = transport.ipv ? 'IPv' + transport.ipv : (ip && ip.indexOf(':') >= 0 ? 'IPv6' : 'IPv4');
     root.appendChild(card('Sua conexão', 'Como o seu acesso chegou até este servidor.', [dl([
@@ -584,6 +783,9 @@
     });
     root.appendChild(card('Demais cabeçalhos', order.length > 1 ? 'Na ordem em que o navegador os enviou (X-Forwarded-* e similares são do proxy).' : null, [t2]));
 
+    var fs = fullScore(b);
+    if (fs) root.appendChild(scoreTable(fs));
+
     var sections = [
       ['Navegador (navigator)', b.navigator],
       ['Client Hints (userAgentData)', b.userAgentData],
@@ -629,7 +831,7 @@
     renderTecnico(b);
 
     var report = function () {
-      return JSON.stringify({ server: data, browser: b }, null, 2);
+      return JSON.stringify({ server: data, browser: b, score: fullScore(b) }, null, 2);
     };
     document.getElementById('copy-json').addEventListener('click', function (ev) {
       var btn = ev.currentTarget;

@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,6 +55,8 @@ var (
 	name    string
 	prefix  string
 	verbose bool
+
+	withLists bool
 )
 
 func init() {
@@ -64,6 +67,7 @@ func init() {
 	flag.StringVar(&port, "port", getEnv("INFOPAGE_PORT_NUMBER", "80"), "give me a port number")
 	flag.StringVar(&name, "name", os.Getenv("INFOPAGE_NAME"), "give me a name")
 	flag.StringVar(&prefix, "prefix", getEnv("INFOPAGE_HEADER_PREFIX", "X-Traefix-"), "prefix of the headers added by Traefix")
+	flag.BoolVar(&withLists, "lists", getEnv("INFOPAGE_LISTS", "1") != "0", "download the address lists of robots, clouds and iCloud Private Relay")
 }
 
 // Data infopage information.
@@ -80,10 +84,21 @@ type Data struct {
 	Proto      string            `json:"proto,omitempty"`
 	Prefix     string            `json:"prefix,omitempty"`
 	Time       string            `json:"time,omitempty"`
+	Score      *Score            `json:"score,omitempty"`
 }
 
 func main() {
 	flag.Parse()
+
+	// The container has 64 MB: keep the heap well under it while the lists are refreshed.
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(40 << 20)
+	}
+
+	if withLists {
+		lists = newListStore()
+		go lists.run(context.Background())
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/data", handle(dataHandler, verbose))
@@ -275,6 +290,7 @@ func infopageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, _ = fmt.Fprintln(w, "RemoteAddr:", r.RemoteAddr)
+	writeScoreText(w, computeScore(r.Context(), r, prefix, false, lists))
 
 	if r.TLS != nil {
 		for i, cert := range r.TLS.PeerCertificates {
@@ -296,13 +312,13 @@ func infopageHandler(w http.ResponseWriter, r *http.Request) {
 
 func apiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(newData(r)); err != nil {
+	if err := json.NewEncoder(w).Encode(newData(r, false)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
 
-func newData(r *http.Request) Data {
+func newData(r *http.Request, nav bool) Data {
 	queryParams := r.URL.Query()
 
 	hostname, _ := os.Hostname()
@@ -329,6 +345,7 @@ func newData(r *http.Request) Data {
 		Proto:      r.Proto,
 		Prefix:     prefix,
 		Time:       time.Now().UTC().Format(time.RFC3339Nano),
+		Score:      computeScore(r.Context(), r, prefix, nav, lists),
 	}
 }
 

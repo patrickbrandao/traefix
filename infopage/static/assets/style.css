@@ -98,6 +98,16 @@ table.eval th { width: 190px; color: var(--fg); }
 table.eval td { font-family: inherit; word-break: normal; }
 table.eval .eval-badge { width: 70px; }
 ul.signals { margin: 0; padding: 0; list-style: none; }
+.score-head { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
+.score-value { font-size: 44px; font-weight: 700; line-height: 1; min-width: 72px; text-align: center; }
+.score-band { font-size: 18px; font-weight: 600; }
+.score-bars { margin: 12px 0; display: grid; gap: 4px; }
+.score-bar { display: grid; grid-template-columns: 130px 1fr 70px; gap: 10px; align-items: center; font-size: 13px; }
+.score-bar .track { height: 8px; background: var(--code); border-radius: 4px; overflow: hidden; }
+.score-bar .fill { display: block; height: 100%; }
+.score-bar .fill.pos { background: var(--bad); }
+.score-bar .fill.neg { background: var(--ok); }
+.score-bar .pts { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 ul.signals li { padding: 4px 0; }
 
 .actions { display: flex; gap: 8px; margin-bottom: 14px; }

@@ -104,7 +104,9 @@ Especificação: `tmp/report-waf-features.md` (fases 0 a 4). Implementado até a
 
 `infopage/` (fork do `traefik/whoami`, imagem `tmsoftbrasil/traefix-infopage`, em
 https://infopage.traefix.tmsoft.com.br) mostra ao visitante as informações do navegador e os cabeçalhos
-do Traefix, nas abas "Resumo" e "Técnico". Especificação: `infopage/SPEC.md`.
+do Traefix, nas abas "Resumo" e "Técnico", com uma pontuação de automação explicável (`infopage/SCORE.md`:
+coerência UA × TLS × HTTP/2 × TCP, clientes medidos, listas de robôs, nuvens e iCloud Private Relay).
+Especificação: `infopage/SPEC.md`.
 
 **Todo recurso novo do Traefix transmitido em cabeçalhos deve ser propagado para o infopage** (regra de
 propagação em `infopage/SPEC.md`).

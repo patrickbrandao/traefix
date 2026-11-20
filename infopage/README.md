@@ -64,6 +64,7 @@ Heath check.
 | `port`    | `INFOPAGE_PORT_NUMBER` | Give me a port number. (default: `80`)  |
 | `name`    | `INFOPAGE_NAME`        | Give me a name.                         |
 | `prefix`  | `INFOPAGE_HEADER_PREFIX` | Prefix of the Traefix headers, the `fingerprint.headerPrefix` of the entry point. (default: `X-Traefix-`) |
+| `lists`   | `INFOPAGE_LISTS`       | Download the address lists of robots, clouds and iCloud Private Relay for the automation score; `0` turns it off. (default: on) |
 | `verbose` |                      | Enable verbose logging.                 |
 
 ## Examples
