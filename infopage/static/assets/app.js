@@ -391,9 +391,12 @@
   }
 
   // quicMaxUDPPayload reads max_udp_payload from the QUIC transport parameters in X-Traefix-H3 (tp=a:1-b:2).
+  // It returns null when the Traefix sent no transport parameters, and undefined when the client left the
+  // parameter out.
   function quicMaxUDPPayload() {
     var h3 = parseKV(tx('H3')) || {};
-    var m = /(?:^|-)max_udp_payload:(\d+)/.exec(h3.tp || '');
+    if (!h3.tp) return null;
+    var m = /(?:^|-)max_udp_payload:(\d+)/.exec(h3.tp);
     return m ? Number(m[1]) : undefined;
   }
 
@@ -409,6 +412,11 @@
       var p = quicMaxUDPPayload();
       o.l4Name = 'UDP'; o.l4 = 8; o.initial = num(transport.initial_size);
       // 65527 is the default of RFC 9000: the client set no limit, so there is no MTU to read from it.
+      if (p === null) {
+        o.note = 'O Traefix não enviou os parâmetros de transporte do QUIC (' + data.prefix + 'H3 com tp=) nesta conexão: sem dado para estimar o MTU.' +
+          (o.initial ? ' O primeiro datagrama Initial teve ' + o.initial + ' bytes de UDP, tamanho fixo do cliente, não do caminho.' : '');
+        return o;
+      }
       if (p !== undefined && p < 65527) {
         o.base = 'max_udp_payload'; o.payload = p; o.source = 'parâmetro de transporte max_udp_payload do QUIC';
       } else {

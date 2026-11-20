@@ -44,6 +44,8 @@ cabeçalhos ao que ele anunciou ao abrir a conexão:
 - Sem `max_udp_payload`, ou com o padrão 65527 do RFC 9000 (curl, Firefox), o cliente não planejou um MTU: o
   cartão diz "sem plano" e mostra só o tamanho do primeiro datagrama Initial, que é fixo do cliente (Chrome 1250,
   curl 1200) e não do caminho.
+- Sem `X-Traefix-H3` com `tp=` (o Traefix não leu o ClientHello do QUIC nesta conexão, por exemplo numa conexão
+  retomada), o cartão diz que não há dado, sem culpar o cliente.
 - **Régua** (nota de 0 a 100, interpolação linear entre os pontos):
 
 | MTU | Nota | Leitura |
