@@ -20,6 +20,9 @@ import (
 
 const scoreVersion = "score/v1"
 
+// idTimeRelay is the rule of a proxy or SOCKS seen by the timing of the connection.
+const idTimeRelay = "TIME-RELAY"
+
 // Rule states.
 const (
 	stIdeal         = "ideal"
@@ -58,8 +61,10 @@ const (
 
 // Roles.
 const (
-	roleBrowser            = "navegador"
-	roleAutomation         = "automacao_declarada"
+	roleBrowser    = "navegador"
+	roleAutomation = "automacao_declarada"
+	// roleProxy is a browser whose connection crossed a proxy or SOCKS (TIME-RELAY confirmed).
+	roleProxy              = "via_proxy"
 	roleCrawlerVerified    = "crawler_verificado"
 	roleCrawlerNotVerified = "crawler_nao_verificado"
 	roleUnknown            = "desconhecido"
@@ -104,7 +109,7 @@ var familyCaps = map[string]familyCap{
 	famTLS:  {Max: 45, Min: -15},
 	famHTTP: {Max: 40, Min: -15},
 	famTCP:  {Max: 30, Min: -10},
-	famTime: {Max: 20},
+	famTime: {Max: 60},
 	famNet:  {Max: 45},
 	famJS:   {Max: 40, Min: -10},
 }
@@ -524,17 +529,28 @@ func computeScore(ctx context.Context, r *http.Request, pfx string, nav bool, st
 		s.httpRules()
 	}
 	s.tcpRules(&m)
-	s.timeRules(&m)
+	relay := s.timeRules(&m)
 	s.netRules(store, &m, sc.Role)
 
 	// A browser that declares its automation is coherent by construction: the reliefs only help who claims to
 	// be an ordinary browser.
 	if sc.Role == roleAutomation {
+		s.noRelief(" Sem alívio: automação declarada.")
+	}
+	// Through a proxy, the SYN is the proxy's: the TCP rules describe it, not the client, and would count the same
+	// cause twice. A coherent browser behind a proxy is exactly the case of a client spreading requests over
+	// addresses, so the coherence does not relieve it either.
+	if relay {
 		for i := range s.results {
-			if s.results[i].Points < 0 {
+			if s.results[i].Family == famTCP && s.results[i].Points > 0 {
 				s.results[i].Points = 0
-				s.results[i].Reason += " Sem alívio: automação declarada."
+				s.results[i].State = stNormal
+				s.results[i].Reason += " Não conta: o SYN é do proxy (TIME-RELAY)."
 			}
+		}
+		s.noRelief(" Sem alívio: proxy ou SOCKS no caminho.")
+		if sc.Role == roleBrowser {
+			sc.Role = roleProxy
 		}
 	}
 
@@ -1168,35 +1184,70 @@ func (s *scorer) tcpTTL(ttlInit string, mismatch bool, m *netMatch) {
 	s.add(&r)
 }
 
-func (s *scorer) timeRules(m *netMatch) {
+// Thresholds of TIME-RELAY, from the measures of finger-sniffer on finger-01 (task 313, SOCKS5 relay and direct
+// clients): rtt_gap > 10 ms with est_to_first > 5 ms caught 43 of 50 relayed connections and 2 of 40 direct ones.
+const (
+	relayGapMicros   = 10_000
+	relayGapFrac     = 0.3
+	relayFirstMicros = 5_000
+)
+
+// timeRules looks for a proxy or SOCKS between the client and the Traefix. The TCP handshake ends at whoever opened
+// the TCP connection, the TLS round trip goes up to the browser: through a relay, the TLS round trip exceeds the
+// TCP one by the distance from the relay to the client (rtt_gap_us), and the first byte of the ClientHello comes one
+// relay round trip after the ACK (est_to_first_us), because the relay only tells the client that the tunnel is up
+// after it. A direct client sends the ClientHello right after the ACK. It reports whether the relay is confirmed.
+func (s *scorer) timeRules(m *netMatch) bool {
 	t := kv(s.tx("Timing"))
 	gap, ok1 := atoi(t["rtt_gap_us"])
 	rtt, ok2 := atoi(t["tcp_rtt_us"])
 	if !ok1 || !ok2 {
 		if s.browser && s.tx("Proto") != "h3" {
-			s.unknown("TIME-RELAY", famTime, "Proxy TCP pelo tempo", 15, "Sem X-Traefix-Timing.")
+			s.unknown(idTimeRelay, famTime, "Proxy ou SOCKS pelo tempo", 60, "Sem X-Traefix-Timing (headerDetail basic).")
 		}
-		return
+		return false
+	}
+	est, okEst := atoi(t["est_to_first_us"])
+	value := "TLS +" + msText(gap) + " sobre o TCP"
+	if okEst {
+		value += "; ClientHello " + msText(est) + " após o ACK"
 	}
 	r := scoreResult{
-		ID: "TIME-RELAY", Family: famTime, Name: "Proxy TCP pelo tempo", Value: strconv.Itoa(gap/1000) + " ms a mais no TLS",
-		Expected: "perto de 0", Weight: 15, State: stIdeal,
+		ID: idTimeRelay, Family: famTime, Name: "Proxy ou SOCKS pelo tempo", Value: value,
+		Expected: "diferença perto de 0 e ClientHello em até 5 ms", Weight: 60, State: stIdeal,
 	}
-	if gap > 30000 && float64(gap) > 0.5*float64(rtt) {
-		est, okEst := atoi(t["est_to_first_us"])
-		switch {
-		case m.Relay != "":
-			r.State, r.Reason = stNormal, "Atraso do "+m.Relay+"."
-		case okEst && est < 5000:
-			r.State, r.Points = stAtypical, 5
-			r.Reason = "O TLS demorou, mas o primeiro byte chegou logo: mais provável um dispositivo lento que um relay."
-		default:
-			r.State, r.Points = stContradiction, 15
-			r.Reason = "O TLS levou bem mais que o TCP: proxy ou relay (SOCKS, CONNECT) no caminho."
-			r.Benign = "Dispositivo lento, satélite, SYN proxy; uma conexão só é ruidosa."
-		}
+	slowTLS := gap > relayGapMicros && float64(gap) > relayGapFrac*float64(rtt)
+	confirmed := false
+	switch {
+	case !slowTLS:
+	case m.Relay != "":
+		r.State, r.Reason = stNormal, "Atraso do "+m.Relay+", relay de privacidade da Apple: não conta."
+	case okEst && est > relayFirstMicros:
+		r.State, r.Points, confirmed = stContradiction, 60, true
+		r.Reason = "O TLS levou " + msText(gap) + " a mais que o TCP e o ClientHello chegou " + msText(est) +
+			" depois do ACK: quem abriu o TCP não é o navegador. Proxy ou SOCKS no caminho, recurso comum para contornar limites por IP."
+		r.Benign = "VPN corporativa ou proxy de empresa; Wi-Fi com pico de atraso na mesma conexão (raro com os dois sinais juntos)."
+	default:
+		r.State, r.Points = stAtypical, 5
+		r.Reason = "O TLS demorou, mas o ClientHello chegou logo após o ACK: mais provável um dispositivo lento ou Wi-Fi que um proxy."
 	}
 	s.add(&r)
+	return confirmed
+}
+
+// noRelief zeroes the negative points, appending why to the reason.
+func (s *scorer) noRelief(why string) {
+	for i := range s.results {
+		if s.results[i].Points < 0 {
+			s.results[i].Points = 0
+			s.results[i].Reason += why
+		}
+	}
+}
+
+// msText formats microseconds as milliseconds with one decimal.
+func msText(us int) string {
+	return strconv.FormatFloat(float64(us)/1000, 'f', 1, 64) + " ms"
 }
 
 func (s *scorer) netRules(store *listStore, m *netMatch, role string) {

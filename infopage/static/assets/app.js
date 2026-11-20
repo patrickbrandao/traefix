@@ -489,6 +489,136 @@
     return card('MTU estimado', intro, [calc, mtuRuler(mt.mtu), legend]);
   }
 
+  // ---------- connection timeline ----------
+
+  // Same thresholds as TIME-RELAY in score.go (measures of finger-sniffer, task 313).
+  var RELAY = { gap: 10000, frac: 0.3, first: 5000 };
+
+  // relayVerdict reads the timing of the connection: through a proxy or SOCKS, the TLS round trip exceeds the TCP
+  // one (the TCP ends at the proxy) and the ClientHello comes one proxy round trip after the ACK.
+  function relayVerdict() {
+    if (transport.proto === 'udp' || timing.proto === 'udp') {
+      return { cls: 'info', state: 'na', title: 'Não aplicável', text: 'HTTP/3 (QUIC) não tem handshake TCP separado do TLS: a comparação de tempos não se aplica.' };
+    }
+    var gap = num(timing.rtt_gap_us), rtt = num(timing.tcp_rtt_us), est = num(timing.est_to_first_us);
+    if (gap === undefined || rtt === undefined) return null;
+    var relay = data.score && data.score.network && data.score.network.relay;
+    var slow = gap > RELAY.gap && gap > RELAY.frac * rtt;
+    if (!slow) return { cls: 'ok', state: 'direct', title: 'Conexão direta', text: 'Sem sinal de proxy ou SOCKS: o TLS levou o mesmo que o TCP' + (est !== undefined ? ' e o ClientHello chegou ' + msUs(est) + ' após o ACK.' : '.') };
+    if (relay) return { cls: 'info', state: 'relay', title: 'Relay de privacidade', text: 'Atraso do ' + relay + ' (relay de privacidade da Apple): não conta como proxy.' };
+    if (est !== undefined && est > RELAY.first) {
+      return { cls: 'bad', state: 'proxy', title: 'Proxy ou SOCKS no caminho', text: 'Proxy ou SOCKS no caminho: o TLS levou ' + msUs(gap) + ' a mais que o TCP e o ClientHello chegou ' + msUs(est) + ' depois do ACK. Quem abriu o TCP não foi o seu navegador.' };
+    }
+    return { cls: 'warn', state: 'slow', title: 'Indício fraco', text: 'O TLS levou ' + msUs(gap) + ' a mais que o TCP, mas o ClientHello chegou logo após o ACK: mais provável Wi-Fi ou dispositivo lento que um proxy.' };
+  }
+
+  // utcMicros parses the RFC 3339 time of X-Traefix-Transport accepted= into microseconds of the day (UTC); the
+  // Date type only keeps milliseconds.
+  function utcMicros(s) {
+    var m = /T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$/.exec(s || '');
+    if (!m) return undefined;
+    var frac = ((m[4] || '') + '000000').slice(0, 6);
+    return ((Number(m[1]) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1e6 + Number(frac);
+  }
+
+  function clockText(us) {
+    var day = 86400e6;
+    us = ((us % day) + day) % day;
+    var p = function (n, w) { return String(n).padStart(w, '0'); };
+    var sec = Math.floor(us / 1e6);
+    return p(Math.floor(sec / 3600), 2) + ':' + p(Math.floor(sec / 60) % 60, 2) + ':' + p(sec % 60, 2) + '.' + p(us % 1e6, 6);
+  }
+
+  function msUs(us) {
+    return (us < 0 ? '−' : '') + (Math.abs(us) / 1000).toFixed(Math.abs(us) < 10000 ? 2 : 1) + ' ms';
+  }
+
+  // timelineEvents rebuilds the milestones of the connection from X-Traefix-Transport (accepted) and
+  // X-Traefix-Timing, in microseconds from the accept of the connection (the ACK of the handshake).
+  function timelineEvents() {
+    var ev = [];
+    var at = function (us, name, what, seg) { if (us !== undefined && isFinite(us)) ev.push({ us: us, name: name, what: what, seg: seg }); };
+    if (transport.proto === 'udp' || timing.proto === 'udp') {
+      at(0, 'Primeiro Initial do QUIC', 'Primeiro datagrama do cliente (ClientHello cifrado).');
+      at(num(timing.initial_to_hs_us), 'Handshake QUIC concluído', 'TLS 1.3 dentro do QUIC, em 1 volta.', 'hs');
+      at(num(timing.req_us), 'Requisição HTTP', 'Esta requisição chegou ao Traefix.', 'req');
+      return ev;
+    }
+    var rtt = num(timing.tcp_rtt_us), est = num(timing.est_to_first_us);
+    if (rtt !== undefined) at(-rtt, 'SYN (estimado)', 'Pedido de conexão. Estimado: aceite menos a volta TCP.');
+    at(0, 'ACK: conexão aceita', 'Fim do handshake TCP com quem abriu a conexão.', 'tcp');
+    if (est !== undefined) {
+      at(est, 'Primeiro byte (ClientHello)', 'Direto, sai junto com o ACK (< 5 ms). Por proxy, só depois que o proxy avisa o cliente.', 'first');
+      var ch = num(timing.ch_us), srv = num(timing.srv_us), tr = num(timing.tls_rtt_us), tlsUs = num(timing.tls_us);
+      if (ch !== undefined) at(est + ch, 'ClientHello completo', 'Fim da mensagem inicial do TLS.', 'ch');
+      if (ch !== undefined && srv !== undefined) {
+        at(est + ch + srv, 'Resposta do servidor', 'ServerHello até o Finished do servidor, enviados.', 'srv');
+        if (tr !== undefined) at(est + ch + srv + tr, 'Finished do cliente', 'Resposta do navegador: fecha a volta TLS, que vai até o navegador.', 'tls');
+      }
+      if (tlsUs !== undefined) at(est + tlsUs, 'Handshake TLS concluído', 'Conexão cifrada pronta.', 'hs');
+    }
+    at(num(timing.req_us), 'Requisição HTTP', 'Esta requisição chegou ao Traefix' + (num(transport.req_seq) > 1 ? ' (conexão reaproveitada: requisição ' + transport.req_seq + ')' : '') + '.', 'req');
+    ev.sort(function (a, c) { return a.us - c.us; });
+    return ev;
+  }
+
+  function timelineCard(b) {
+    if (!timing.proto && !timing.tcp_rtt_us) return null;
+    var ev = timelineEvents();
+    if (!ev.length) return null;
+    var base = utcMicros(transport.accepted);
+    var t0 = ev[0].us;
+    var tbl = el('table', { 'class': 'score-table timeline' });
+    tbl.appendChild(el('thead', null, [el('tr', null, [
+      el('th', { text: 'Marco' }), el('th', { text: 'Horário (UTC)' }), el('th', { 'class': 'num', text: 'Desde o início' }), el('th', { 'class': 'num', text: 'Diferença' })
+    ])]));
+    var body = el('tbody');
+    ev.forEach(function (e, i) {
+      body.appendChild(el('tr', null, [
+        el('td', null, [el('strong', { text: e.name }), el('div', { 'class': 'muted small', text: e.what })]),
+        el('td', { 'class': 'mono', text: base !== undefined ? clockText(base + e.us) : '—' }),
+        el('td', { 'class': 'num', text: msUs(e.us - t0) }),
+        el('td', { 'class': 'num', text: i ? '+' + msUs(e.us - ev[i - 1].us) : '—' })
+      ]));
+    });
+    tbl.appendChild(body);
+
+    // Proportional bar of the intervals; the CSP forbids style attributes, the CSSOM is allowed.
+    var total = ev[ev.length - 1].us - t0;
+    var bar = el('div', { 'class': 'tl-bar' });
+    if (total > 0) {
+      for (var i = 1; i < ev.length; i++) {
+        var w = (ev[i].us - ev[i - 1].us) / total * 100;
+        if (w <= 0) continue;
+        var seg = el('span', { 'class': 'tl-seg tl-' + (ev[i].seg || 'x'), title: ev[i - 1].name + ' → ' + ev[i].name + ': ' + msUs(ev[i].us - ev[i - 1].us) });
+        seg.style.width = w + '%';
+        bar.appendChild(seg);
+      }
+    }
+
+    var rl = relayVerdict();
+    var rows = [];
+    if (transport.proto !== 'udp' && timing.proto !== 'udp') {
+      rows = [
+        ['Volta TCP (servidor ↔ quem abriu o TCP)', timing.tcp_rtt_us !== undefined ? msUs(num(timing.tcp_rtt_us)) : undefined],
+        ['Volta TLS (servidor ↔ navegador)', timing.tls_rtt_us !== undefined ? msUs(num(timing.tls_rtt_us)) : undefined],
+        ['Diferença TLS − TCP', timing.rtt_gap_us !== undefined ? msUs(num(timing.rtt_gap_us)) + ' (limiar: > 10 ms e > 30% da volta TCP)' : undefined],
+        ['ACK → primeiro byte', timing.est_to_first_us !== undefined ? msUs(num(timing.est_to_first_us)) + ' (limiar: > 5 ms)' : undefined]
+      ];
+    } else {
+      rows = [['Volta QUIC (mínima)', timing.quic_min_rtt_us ? msUs(num(timing.quic_min_rtt_us)) : undefined]];
+    }
+    var n = b && b.navigation;
+    if (n && n.connectMs > 0) {
+      rows.push(['Visão do navegador', 'conexão ' + n.connectMs + ' ms' + (n.tlsMs ? ' (TLS ' + n.tlsMs + ' ms)' : '') + ', medido pelo próprio navegador: só para comparação, não pontua']);
+    }
+    rows.push(['Origem dos tempos', timing.src === 'kernel' ? 'kernel (horário de chegada dos pacotes)' : 'Traefix (horário de leitura)']);
+    var verdict = rl ? el('div', { 'class': 'verdict ' + rl.cls }, [el('h3', { text: 'Diagnóstico: ' + rl.title }), el('p', { text: rl.text })]) : null;
+
+    return card('Linha do tempo da conexão', 'Cada marco da abertura da sua conexão, como o servidor viu. O handshake TCP termina em quem abriu a conexão; a volta do TLS vai até o navegador. Com proxy ou SOCKS no caminho, os dois se separam e o primeiro byte atrasa: pela pontuação, isso pesa como automação (contorno de limites por IP).',
+      [el('div', { 'class': 'scroll' }, [tbl]), bar, dl(rows), verdict]);
+  }
+
   // evaluate grades the IP and TCP values per infopage/CRITERIA.md: most of them only describe the
   // operating system or the access network, and stay informative.
   function evaluate() {
@@ -568,13 +698,8 @@
       else add('warn', 'O sistema sugerido pela rede (TTL ' + transport.ttl_init + ': ' + ttlOS(transport.ttl_init) + ') difere do informado pelo navegador (' + os + '): comum com VPN, proxy ou roteador.');
     }
 
-    // One connection is noisy (slow certificate check, SYN proxy before Traefix): only a large gap counts,
-    // and it stays a hint, never an alert.
-    var gap = Number(timing.rtt_gap_us), rtt = Number(timing.tcp_rtt_us);
-    if (isFinite(gap) && isFinite(rtt) && timing.rtt_gap_us !== undefined && timing.tcp_rtt_us !== undefined) {
-      if (gap > 30000 && gap > rtt * 0.5) add('warn', 'O TLS levou ' + ms(gap) + ' a mais que o TCP: possível proxy ou relay no caminho (SOCKS, CONNECT). Uma única conexão pode enganar.');
-      else add('ok', 'Sem sinal de proxy TCP no caminho (tempos de TCP e TLS coerentes).');
-    }
+    var rl = relayVerdict();
+    if (rl) add(rl.cls, rl.text);
 
     var ua = b.navigator.userAgent || '';
     if (/Chrome\//.test(ua) && !/Edg|OPR|CriOS|SamsungBrowser/.test(ua) && b.features.secureContext && !b.userAgentData) {
@@ -602,7 +727,7 @@
   };
   var ROLES = {
     navegador: 'Navegador', automacao_declarada: 'Automação declarada', crawler_verificado: 'Robô verificado',
-    crawler_nao_verificado: 'Robô não verificado', desconhecido: 'Cliente não identificado'
+    crawler_nao_verificado: 'Robô não verificado', via_proxy: 'Navegador por proxy ou SOCKS', desconhecido: 'Cliente não identificado'
   };
   var FAMILIES = { decl: 'Declaração', tls: 'TLS', http: 'HTTP', tcp: 'TCP/IP', time: 'Tempo', net: 'Rede', js: 'Navegador (JS)' };
 
@@ -712,9 +837,10 @@
     var results = sc.results.concat(jsRules(b, sc));
     var role = sc.role;
     if (b.navigator.webdriver && role === 'navegador') role = 'automacao_declarada';
-    if (role === 'automacao_declarada') {
+    if (role === 'automacao_declarada' || role === 'via_proxy') {
+      var why = role === 'via_proxy' ? ' Sem alívio: proxy ou SOCKS no caminho.' : ' Sem alívio: automação declarada.';
       results = results.map(function (x) {
-        return x.points < 0 ? Object.assign({}, x, { points: 0, reason: (x.reason || '') + ' Sem alívio: automação declarada.' }) : x;
+        return x.points < 0 ? Object.assign({}, x, { points: 0, reason: (x.reason || '') + why }) : x;
       });
     }
     return { sc: sc, role: role, results: results, total: aggregateScore(results, sc) };
@@ -876,6 +1002,9 @@
       ['Tipo de rede (navegador)', b.network ? [b.network.type, b.network.effectiveType].filter(Boolean).join(' · ') : undefined],
       ['Identificador da conexão', tx('Conn-Id')]
     ])]));
+
+    var tc = timelineCard(b);
+    if (tc) root.appendChild(tc);
 
     var mc = mtuCard();
     if (mc) root.appendChild(mc);

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -50,6 +51,7 @@ type client struct {
 	browserHeaders                        string // "chrome", "firefox", "safari" or ""
 	ttlInit                               string
 	gapUs, rttUs                          string
+	estUs                                 string
 }
 
 var (
@@ -99,7 +101,7 @@ func newScoreRequest(t *testing.T, c *client, ip string) *http.Request {
 	if gap == "" {
 		gap, rtt = "900", "23000"
 	}
-	set("Timing", "src=kernel,proto=tcp,tcp_rtt_us="+rtt+",est_to_first_us=300,rtt_gap_us="+gap)
+	set("Timing", "src=kernel,proto=tcp,tcp_rtt_us="+rtt+",est_to_first_us="+cmp.Or(c.estUs, "300")+",rtt_gap_us="+gap)
 
 	switch c.browserHeaders {
 	case "chrome":
@@ -119,6 +121,15 @@ func newScoreRequest(t *testing.T, c *client, ip string) *http.Request {
 	}
 	return req
 }
+
+// chromeSOCKS is Chrome through a SOCKS5 proxy on the host of the Traefix, with the times measured by
+// finger-sniffer on finger-01 (task 313): the SYN is the proxy's Linux stack, the TCP round trip is local, the TLS
+// round trip and the first byte carry the distance to the client.
+var chromeSOCKS = func() client {
+	c := chromeH2
+	c.ja4t, c.gapUs, c.rttUs, c.estUs = ja4tLinux, "14600", "20", "17500"
+	return c
+}()
 
 func rule(sc *Score, id string) *scoreResult {
 	for i := range sc.Results {
@@ -157,7 +168,9 @@ func TestScoreClients(t *testing.T) {
 		{desc: "headless Chrome", c: forged(chromeH2, uaHeadless), minR: 81, role: roleAutomation},
 		{desc: "no User-Agent", c: forged(curlH2, ""), minR: 51, role: roleUnknown},
 		{desc: "Chrome UA over a Linux TCP stack", c: func() client { c := chromeH2; c.ja4t = ja4tLinux; return c }(), maxR: 20, fired: []string{idTCPOS}},
-		{desc: "Chrome through a relay", c: func() client { c := chromeH2; c.gapUs, c.rttUs = "80000", "20000"; return c }(), maxR: 20, fired: []string{"TIME-RELAY"}},
+		{desc: "Chrome with a slow TLS, ClientHello on time", c: func() client { c := chromeH2; c.gapUs, c.rttUs = "80000", "20000"; return c }(), maxR: 20, fired: []string{idTimeRelay}},
+		{desc: "Chrome through a SOCKS proxy", c: chromeSOCKS, minR: 81, role: roleProxy, fired: []string{idTimeRelay}, silent: []string{idTCPOS}},
+		{desc: "Chrome with a short gap and a late ClientHello", c: func() client { c := chromeH2; c.gapUs, c.estUs = "6000", "12000"; return c }(), maxR: 20, role: roleBrowser, silent: []string{idTimeRelay}},
 	}
 
 	for _, test := range testCases {
@@ -166,6 +179,24 @@ func TestScoreClients(t *testing.T) {
 			checkScore(t, sc, test.minR, test.maxR, test.role, test.known)
 			checkRules(t, sc, test.fired, test.silent)
 		})
+	}
+}
+
+func TestScoreProxyHasNoRelief(t *testing.T) {
+	sc := computeScore(t.Context(), newScoreRequest(t, &chromeSOCKS, "203.0.113.7"), "X-Traefix-", true, nil)
+	if r := rule(sc, idTimeRelay); r == nil || r.Points != 60 || r.State != stContradiction {
+		t.Fatalf("TIME-RELAY: %+v", r)
+	}
+	if r := rule(sc, idTCPOS); r == nil || r.Points != 0 {
+		t.Errorf("TCP-OS counted with the SYN of the proxy: %+v", r)
+	}
+	for _, r := range sc.Results {
+		if r.Points < 0 {
+			t.Errorf("%s relieves a proxied connection: %+d", r.ID, r.Points)
+		}
+	}
+	if sc.Passive.Families[famTime] != 60 {
+		t.Errorf("time family = %d", sc.Passive.Families[famTime])
 	}
 }
 
@@ -241,7 +272,7 @@ func TestScoreNetwork(t *testing.T) {
 		if sc.Network == nil || sc.Network.Relay == "" {
 			t.Fatalf("relay not found: %+v", sc.Network)
 		}
-		for _, id := range []string{idTCPOS, "TIME-RELAY"} {
+		for _, id := range []string{idTCPOS, idTimeRelay} {
 			if r := rule(sc, id); r == nil || r.Points != 0 {
 				t.Errorf("%s: %+v", id, r)
 			}

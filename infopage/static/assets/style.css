@@ -115,6 +115,16 @@ table.score-table tfoot td { font-weight: 600; border-top: 2px solid var(--line)
 .verdict h3 { margin: 0 0 8px; font-size: 15px; }
 .verdict dl, .verdict p { color: var(--fg); }
 .verdict p { margin: 8px 0 0; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+table.timeline td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.tl-bar { display: flex; height: 12px; margin: 12px 0; border-radius: 6px; overflow: hidden; background: var(--code); }
+.tl-seg { display: block; min-width: 2px; border-right: 1px solid var(--card); }
+.tl-tcp { background: var(--accent); }
+.tl-first { background: var(--bad); }
+.tl-ch, .tl-srv { background: var(--muted); }
+.tl-tls { background: var(--warn); }
+.tl-hs { background: var(--ok); }
+.tl-req, .tl-x { background: var(--line); }
 .ruler { position: relative; margin: 30px 0 34px; }
 .ruler-track { position: relative; height: 10px; background: var(--code); border-radius: 5px; }
 .ruler-seg { position: absolute; top: 0; height: 100%; }

@@ -88,7 +88,7 @@ cabeçalhos ao que ele anunciou ao abrir a conexão:
 | `rttvar_us` | não exibir como jitter | O kernel o inicia em RTT/2 (RFC 6298); jitter exige várias medições no navegador. |
 | `retrans` | azul | Conexão curta não mede perda; 1 reenvio pode ser sonda TLP (RFC 8985). |
 | `lost` | não usar | `tcpi_lost` é instantâneo, não acumulado. |
-| `rtt_gap_us` | amarelo "possível proxy" se > 30 ms **e** > 50% de `tcp_rtt_us` | Falsos positivos: cliente lento, SYN proxy diante do Traefix. Agregar conexões para confirmar. |
+| `rtt_gap_us`, `est_to_first_us` | vermelho "proxy ou SOCKS" se `rtt_gap_us` > 10 ms, > 30% de `tcp_rtt_us` **e** `est_to_first_us` > 5 ms; amarelo "indício fraco" só com o gap | Os dois juntos separam proxy de Wi-Fi lento (task 313 do finger-sniffer: 43 de 50 conexões por SOCKS, 2 de 40 diretas). Detalhes e peso na pontuação: SCORE.md §4.5. |
 | Relógio | amarelo > 60 s; vermelho > 5 min | TOTP e Kerberos falham a partir de minutos; certificados a partir de 1 dia. |
 
 ## Erros que o infopage não deve cometer

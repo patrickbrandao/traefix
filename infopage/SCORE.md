@@ -49,7 +49,7 @@ Cada regra avaliada produz:
 | `ideal` | verde | ≤ 0 | Igual ao esperado para o cliente declarado. |
 | `normal` | azul | 0 | Variação legítima (rede, SO, versão). |
 | `atipico` | amarelo | 0 a +10 | Raro para o cliente declarado, com causa benigna comum. |
-| `contradicao` | laranja | +10 a +45 | Incompatível com o cliente declarado. |
+| `contradicao` | laranja | +10 a +60 | Incompatível com o cliente declarado (+60 só para proxy ou SOCKS confirmado pelo tempo). |
 | `declarado` | vermelho | +40 a +60 | O próprio cliente diz ser automação (UA de biblioteca, `webdriver`). |
 | `desconhecido`, `nao_aplicavel` | cinza | 0 | Não medido ou sem sentido neste protocolo; reduz a cobertura. |
 
@@ -71,7 +71,7 @@ cobertura = peso das regras avaliadas / peso das regras aplicáveis
 | `tls` | `Ja4`, `Tls`, `Tls-Hello`, `Alpn` | 45 | −15 | médio (uTLS, curl-impersonate) |
 | `http` | `Header-Order`, `Ja4h`, `H2`, `H2-Detail`, `H3`, cabeçalhos | 40 | −15 | médio |
 | `tcp` | `Ja4t`, `Transport` (SYN, TTL) | 30 | −10 | alto (kernel) |
-| `time` | `Timing` | 20 | 0 | alto (física) |
+| `time` | `Timing` | 60 | 0 | alto (física) |
 | `js` | APIs do navegador, coletadas pelo `app.js` | 40 | −10 | baixo (controlado pelo cliente) |
 | `net` | listas de robôs, nuvens e iCloud Private Relay (`lists.go`) | 45 | 0 | alto (endereço) |
 
@@ -164,12 +164,34 @@ escala de janela, SACK, DSCP, reenvios) **não pontua**.
 | TCP-RAW | `syn_opts` só MSS, ou sem opções | opções completas | SYN mínimo de ferramenta de pacote cru | +25 | Equipamento muito antigo |
 | TCP-HOPS | `hops` ≤ 2 com UA de consumidor | — | origem na mesma rede/datacenter | +5 (+25 quando houver `net` = hosting) | Rede local, teste do próprio dono |
 
-### 4.5 `time` — temporização da conexão
+### 4.5 `time` — temporização da conexão (proxy ou SOCKS)
+
+O handshake TCP termina em quem abriu a conexão; a volta do TLS vai até o navegador. Com um proxy ou SOCKS entre o
+cliente e o Traefix:
+
+- a volta TLS (`tls_rtt_us`) passa a volta TCP (`tcp_rtt_us`) pela distância do proxy ao cliente (`rtt_gap_us`);
+- o primeiro byte do ClientHello chega uma volta do proxy depois do ACK (`est_to_first_us`), porque o proxy só
+  avisa o cliente que o túnel abriu depois do handshake TCP com o servidor. Direto, o ClientHello sai junto com o
+  ACK.
 
 | ID | Parâmetro | Ideal | Fora do ideal | Pontos | Falso positivo |
 |---|---|---|---|---:|---|
-| TIME-RELAY | `Timing` `rtt_gap_us` | próximo de 0 | > 30 ms **e** > 50% de `tcp_rtt_us` | +15; +5 se `est_to_first_us` < 5 ms (mais provável dispositivo lento); 0 no iCloud Private Relay | Dispositivo lento, SYN proxy, satélite; uma conexão só é ruidosa |
+| TIME-RELAY | `Timing` `rtt_gap_us`, `tcp_rtt_us`, `est_to_first_us` | diferença perto de 0, ClientHello em até 5 ms | `rtt_gap_us` > 10 ms **e** > 30% de `tcp_rtt_us` **e** `est_to_first_us` > 5 ms | **+60**, papel `via_proxy`; +5 com `est_to_first_us` ≤ 5 ms (Wi-Fi ou dispositivo lento); 0 no iCloud Private Relay | VPN ou proxy corporativo; pico de Wi-Fi que atrase o TLS e o primeiro byte na mesma conexão |
 | TIME-NEG | `rtt_gap_us` / `est_to_first_us` negativos | — | — | 0 | Legítimos pela semântica do coletor (§9.3) |
+
+- **Limiares** medidos pelo finger-sniffer no finger-01 (task 313, `docs/dev/traefix-finger-01.md` daquele
+  projeto): SOCKS5 com gap de 5,8–68,7 ms e primeiro byte de 5,1–442 ms; clientes diretos com primeiro byte de
+  0,1–4,9 ms. Com `rtt_gap` > 10 ms e `est_to_first` > 5 ms, 43 de 50 conexões pelo SOCKS e 2 de 40 diretas
+  (picos de Wi-Fi com os dois sinais juntos).
+- **Peso.** Proxy ou SOCKS é tratado como contorno de limites por IP: +60 leva sozinho a `R` = 88 ("Automação
+  provável"). Como na automação declarada, **não há alívio**: os pontos negativos de coerência (TLS, HTTP, JS) são
+  zerados, porque um navegador real atrás de um proxy é exatamente o caso de quem espalha requisições por
+  endereços.
+- **Mesma causa.** Com o proxy confirmado, o SYN é do proxy: as regras `tcp` com pontos positivos (TCP-OS,
+  TCP-TTL) ficam com 0.
+- **HTTP/3** não tem handshake TCP separado do TLS: a regra não se aplica.
+- **iCloud Private Relay** (lista `net`) continua sem pontos: é o relay de privacidade do Safari, não um contorno
+  escolhido pelo cliente.
 
 Relógio adiantado, latência alta e reenvios são qualidade (CRITERIA.md): `0` ponto.
 
@@ -217,6 +239,7 @@ Os cinco primeiros são testes de `score_test.go` com os valores dos goldens.
 | curl ou Go honestos | DECL-UA +60 (contradições não se aplicam) | 60 | 88 | Automação provável, papel "declarada" |
 | Chrome headless | DECL-UA +60, sem alívios; com `webdriver` e SwiftShader, `decl` fica no teto e JS +15 | 60–75 | 88–95 | Automação provável |
 | Safari pelo iCloud Private Relay | TCP-OS, TCP-TTL e TIME-RELAY zerados | ≤ 0 | ≤ 10 | Compatível |
+| Chrome real por SOCKS5 (task 313) | TIME-RELAY +60; TCP-OS zerado (SYN do proxy); sem alívios | 60 | 88 | Automação provável, papel "por proxy ou SOCKS" |
 | Playwright com stealth | só JS-GPU +15; TLS −15; HTTP −15; TCP −10 | −25 | 2 | Compatível |
 
 O último caso é a limitação que o relatório registra: **fingerprint passivo não pega navegador real
