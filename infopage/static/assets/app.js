@@ -546,7 +546,7 @@
       if (hs !== undefined) hs -= acc;
       at(-acc, 'Primeiro Initial do QUIC', 'Primeiro datagrama do cliente (ClientHello cifrado).');
       if (acc) at(0, 'Conexão aceita', 'O servidor processou o Initial e respondeu com o seu handshake.', 'srv');
-      at(hs, 'Handshake QUIC concluído', 'TLS 1.3 dentro do QUIC, em 1 volta.', 'hs');
+      at(hs, 'Handshake QUIC concluído', 'TLS 1.3 dentro do QUIC, em 1 volta.', 'tls');
       // A request before the end of the handshake is 0-RTT data: on a resumed session the browser sends the request
       // in its first flight, without waiting for the server.
       var early = hs !== undefined && rq !== undefined && rq < hs;
@@ -558,12 +558,14 @@
     if (rtt !== undefined) at(-rtt, 'SYN (estimado)', 'Pedido de conexão. Estimado: aceite menos a volta TCP.');
     at(0, 'ACK: conexão aceita', 'Fim do handshake TCP com quem abriu a conexão.', 'tcp');
     if (est !== undefined) {
-      at(est, 'Primeiro byte (ClientHello)', 'Direto, sai junto com o ACK (< 5 ms). Por proxy, só depois que o proxy avisa o cliente.', 'first');
+      at(est, 'Primeiro byte (ClientHello)', 'Direto, sai junto com o ACK (< 5 ms). Por proxy, só depois que o proxy avisa o cliente.', est > RELAY.first ? 'hot' : 'first');
       var ch = num(timing.ch_us), srv = num(timing.srv_us), tr = num(timing.tls_rtt_us), tlsUs = num(timing.tls_us);
       if (ch !== undefined) at(est + ch, 'ClientHello completo', 'Fim da mensagem inicial do TLS.', 'ch');
       if (ch !== undefined && srv !== undefined) {
         at(est + ch + srv, 'Resposta do servidor', 'ServerHello até o Finished do servidor, enviados.', 'srv');
-        if (tr !== undefined) at(est + ch + srv + tr, 'Finished do cliente', 'Resposta do navegador: fecha a volta TLS, que vai até o navegador.', 'tls');
+        var gapUs = num(timing.rtt_gap_us);
+        var slowTLS = gapUs !== undefined && rtt !== undefined && gapUs > RELAY.gap && gapUs > RELAY.frac * rtt;
+        if (tr !== undefined) at(est + ch + srv + tr, 'Finished do cliente', 'Resposta do navegador: fecha a volta TLS, que vai até o navegador.', slowTLS ? (est > RELAY.first ? 'hot' : 'warm') : 'tls');
       }
       if (tlsUs !== undefined) at(est + tlsUs, 'Handshake TLS concluído', 'Conexão cifrada pronta.', 'hs');
     }
@@ -721,7 +723,7 @@
             reqUs !== undefined ? msUs(reqUs) + ' após o aceite' : ''
           ].filter(Boolean).join(' · ');
           var det = el('details', { 'class': 'session-req' }, [el('summary', null, [
-            what, r.time === mine ? el('span', { 'class': 'badge', text: 'esta página' }) : null
+            what, r.time === mine ? el('span', { 'class': 'here', text: 'esta página' }) : null
           ])]);
           var built = false;
           det.addEventListener('toggle', function () {
@@ -857,8 +859,8 @@
   // The server computes the passive rules from the request (data.score); the page adds the rules of the browser
   // APIs, family js, which the client controls, and aggregates with the same caps and calibration.
   var STATE = {
-    ideal: ['ok', 'Ideal'], normal: ['info', 'Normal'], atipico: ['warn', 'Atípico'],
-    contradicao: ['bad', 'Contradição'], declarado: ['bad', 'Declarado'], desconhecido: ['muted', 'Sem dado']
+    ideal: ['ok', 'Ideal'], normal: ['info', 'Normal'], atipico: ['amber', 'Atípico'],
+    contradicao: ['orange', 'Contradição'], declarado: ['bad', 'Declarado'], desconhecido: ['muted', 'Sem dado']
   };
   var ROLES = {
     navegador: 'Navegador', automacao_declarada: 'Automação declarada', crawler_verificado: 'Robô verificado',
@@ -1014,6 +1016,47 @@
     return (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n);
   }
 
+  // relayTimeline shows, under the TIME-RELAY rule, how long each part of the opening of the connection took. The
+  // parts that give a proxy or SOCKS away are in red: the wait between the ACK and the ClientHello, and what the TLS
+  // round trip took beyond the TCP one. With only one of the two signals, the part is in orange (weak hint).
+  function relayTimeline() {
+    if (transport.proto === 'udp' || timing.proto === 'udp') return null;
+    var rtt = num(timing.tcp_rtt_us), est = num(timing.est_to_first_us), ch = num(timing.ch_us), srv = num(timing.srv_us);
+    var tr = num(timing.tls_rtt_us), gap = num(timing.rtt_gap_us), tlsUs = num(timing.tls_us), rq = num(timing.req_us);
+    if (rtt === undefined || est === undefined || tr === undefined || gap === undefined) return null;
+    var slow = gap > RELAY.gap && gap > RELAY.frac * rtt;
+    var late = est > RELAY.first;
+    var hot = slow && late ? 'bad' : 'orange';
+    var parts = [{ name: 'Handshake TCP (SYN → ACK)', us: rtt, cls: 'tcp' }];
+    parts.push({
+      name: 'ACK → ClientHello', us: Math.max(est, 0), cls: late ? hot : 'n1', mark: late,
+      note: late ? 'acima de ' + msUs(RELAY.first) + ': o cliente esperou o aviso do proxy' : 'direto: sai junto com o ACK'
+    });
+    if (ch !== undefined && srv !== undefined) parts.push({ name: 'ClientHello → resposta do servidor', us: ch + srv, cls: 'n2' });
+    var base = slow ? Math.max(tr - gap, 0) : tr;
+    parts.push({ name: 'Volta TLS' + (slow ? ' (parte igual à volta TCP)' : ' (resposta → Finished do cliente)'), us: base, cls: 'tls' });
+    if (slow) parts.push({ name: 'Volta TLS além da volta TCP', us: gap, cls: hot, mark: true, note: 'trecho entre o proxy e o navegador' });
+    if (tlsUs !== undefined && rq !== undefined && rq > est + tlsUs) parts.push({ name: 'Fim do handshake → requisição', us: rq - est - tlsUs, cls: 'n1' });
+
+    var total = parts.reduce(function (a, p) { return a + p.us; }, 0);
+    if (!(total > 0)) return null;
+    var bar = el('div', { 'class': 'rt-bar' });
+    var list = el('ul', { 'class': 'rt-parts' });
+    parts.forEach(function (p) {
+      if (p.us > 0) {
+        var seg = el('span', { 'class': 'rt-seg rt-' + p.cls, title: p.name + ': ' + msUs(p.us) });
+        seg.style.width = (p.us / total * 100) + '%';
+        bar.appendChild(seg);
+      }
+      var tone = p.mark ? (p.cls === 'bad' ? 'hot' : 'warm') : '';
+      list.appendChild(el('li', null, [
+        el('span', { 'class': 'rt-dot rt-' + p.cls }),
+        el('span', { 'class': tone }, [p.name + ': ', el('strong', { text: msUs(p.us) }), p.note ? ' · ' + p.note : ''])
+      ]));
+    });
+    return el('div', null, [bar, list]);
+  }
+
   // scoreBreakdown is the table of every rule evaluated, grouped by family, with the raw sum of each family,
   // the sum after the family cap, and the total S and index R.
   function scoreBreakdown(f) {
@@ -1044,6 +1087,10 @@
           el('td', { 'class': 'res' }, [badge(st[1], st[0])]),
           el('td', { 'class': 'num ' + (x.points > 0 ? 'bad' : x.points < 0 ? 'ok' : 'muted'), text: signed(x.points) })
         ]));
+        if (x.id === 'TIME-RELAY') {
+          var rt = relayTimeline();
+          if (rt) body.appendChild(el('tr', { 'class': 'rule-extra' }, [el('td', { colspan: '4' }, [rt])]));
+        }
       });
       var raw = t.raw[k] || 0, v = t.families[k] || 0;
       var capped = raw !== v ? ' → ' + signed(v) + ' (limitado pelo teto)' : '';

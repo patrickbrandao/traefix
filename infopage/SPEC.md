@@ -61,6 +61,12 @@ em português do Brasil. A aba ativa fica no fragmento (`#tecnico`).
    comparação; diagnóstico "Conexão direta", "Indício fraco", "Proxy ou SOCKS no caminho" ou "Relay de
    privacidade" pela regra TIME-RELAY ([SCORE.md](SCORE.md) §4.5). Em HTTP/3, o Initial, o fim do handshake QUIC e
    a requisição.
+   Na tabela da pontuação, a regra TIME-RELAY mostra embaixo uma barra com a duração de cada parte (handshake TCP,
+   ACK → ClientHello, ClientHello → resposta, volta TLS, fim do handshake → requisição). O que denuncia proxy fica
+   em vermelho: a espera do ClientHello acima de 5 ms e o que a volta TLS passou da volta TCP; com só um dos dois
+   sinais, em laranja. Na régua da linha do tempo, os mesmos trechos ficam vermelhos ou laranja.
+   Pílulas: verde = ideal/OK, azul = normal/informativo, âmbar = atípico, laranja = contradição/atenção,
+   vermelho = declarado/alerta, cinza = sem dado.
 5. **Requisições desta sessão**: as requisições que o servidor recebeu deste navegador nos últimos 30 minutos
    (`/api/session`, lido depois do `load`, com botão "Atualizar"), agrupadas por conexão (protocolo, TCP ou QUIC,
    horário de abertura, ID). Cada requisição mostra número, horário, método e caminho, tipo, status, posição na
