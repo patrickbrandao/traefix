@@ -322,7 +322,9 @@ func (e *EntryPoint) QUICConnContext(ctx context.Context, c *quic.Conn) context.
 			select {
 			case <-c.HandshakeComplete():
 				info.mu.Lock()
-				info.timing.handshakeDone = time.Now()
+				if info.timing.handshakeDone.IsZero() {
+					info.timing.handshakeDone = time.Now()
+				}
 				info.mu.Unlock()
 			case <-c.Context().Done():
 			}

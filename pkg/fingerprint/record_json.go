@@ -123,6 +123,7 @@ func (r *connectionRecord) appendJSON(b []byte) []byte {
 			{"handshakeMicros", t.Handshake},
 			{"rttGapMicros", t.RTTGap},
 			{"initialToHandshakeMicros", t.InitialToHS},
+			{"initialToAcceptMicros", t.InitialToAccept},
 			{"quicRttMicros", t.QUICRTTMicros},
 			{"quicMinRttMicros", t.QUICMinRTTMicro},
 		} {

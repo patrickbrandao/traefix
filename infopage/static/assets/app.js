@@ -539,9 +539,19 @@
     var ev = [];
     var at = function (us, name, what, seg) { if (us !== undefined && isFinite(us)) ev.push({ us: us, name: name, what: what, seg: seg }); };
     if (transport.proto === 'udp' || timing.proto === 'udp') {
-      at(0, 'Primeiro Initial do QUIC', 'Primeiro datagrama do cliente (ClientHello cifrado).');
-      at(num(timing.initial_to_hs_us), 'Handshake QUIC concluído', 'TLS 1.3 dentro do QUIC, em 1 volta.', 'hs');
-      at(num(timing.req_us), 'Requisição HTTP', 'Esta requisição chegou ao Traefix.', 'req');
+      // Times from the accept of the connection, like over TCP: the Initial and the handshake count from the first
+      // Initial, the request from the accept, which comes after the server processed that Initial (initial_to_acc_us).
+      var acc = num(timing.initial_to_acc_us) || 0;
+      var hs = num(timing.initial_to_hs_us), rq = num(timing.req_us);
+      if (hs !== undefined) hs -= acc;
+      at(-acc, 'Primeiro Initial do QUIC', 'Primeiro datagrama do cliente (ClientHello cifrado).');
+      if (acc) at(0, 'Conexão aceita', 'O servidor processou o Initial e respondeu com o seu handshake.', 'srv');
+      at(hs, 'Handshake QUIC concluído', 'TLS 1.3 dentro do QUIC, em 1 volta.', 'hs');
+      // A request before the end of the handshake is 0-RTT data: on a resumed session the browser sends the request
+      // in its first flight, without waiting for the server.
+      var early = hs !== undefined && rq !== undefined && rq < hs;
+      at(rq, 'Requisição HTTP', early ? 'Chegou antes do fim do handshake: 0-RTT, a requisição foi junto com o primeiro voo de uma sessão retomada.' : 'Esta requisição chegou ao Traefix.', 'req');
+      ev.sort(function (a, c) { return a.us - c.us; });
       return ev;
     }
     var rtt = num(timing.tcp_rtt_us), est = num(timing.est_to_first_us);
@@ -604,7 +614,7 @@
     var gauge = el('div', { 'class': 'tl-gauge' });
     var groups = [];
     ev.forEach(function (e, i) {
-      var pos = total > 0 ? (e.us - t0) / total * 100 : 0;
+      var pos = total > 0 ? Math.min(100, Math.max(0, (e.us - t0) / total * 100)) : 0;
       var g = groups[groups.length - 1];
       if (g && pos - g.pos < 3.5) { g.items.push({ n: i + 1, e: e }); g.last = e; return; }
       groups.push({ pos: pos, first: e, last: e, items: [{ n: i + 1, e: e }] });

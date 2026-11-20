@@ -75,6 +75,11 @@ func timingHeader(info *connInfo, start time.Time) string {
 		if v, ok := micros(t.firstByte, t.handshakeDone); ok {
 			w.int("initial_to_hs_us", v)
 		}
+		// The accept of a QUIC connection comes after the server processed the first Initial: the request times
+		// (req_us) count from the accept, the handshake from the Initial.
+		if v, ok := micros(t.firstByte, info.accepted); ok {
+			w.int("initial_to_acc_us", v)
+		}
 		stats := info.quic.ConnectionStats()
 		w.int("quic_rtt_us", stats.SmoothedRTT.Microseconds())
 		w.int("quic_min_rtt_us", stats.MinRTT.Microseconds())
@@ -127,6 +132,7 @@ type timingRecord struct {
 	Handshake       *int64     `json:"handshakeMicros,omitempty"`
 	RTTGap          *int64     `json:"rttGapMicros,omitempty"`
 	InitialToHS     *int64     `json:"initialToHandshakeMicros,omitempty"`
+	InitialToAccept *int64     `json:"initialToAcceptMicros,omitempty"`
 	QUICRTTMicros   *int64     `json:"quicRttMicros,omitempty"`
 	QUICMinRTTMicro *int64     `json:"quicMinRttMicros,omitempty"`
 }
@@ -153,6 +159,7 @@ func newTimingRecord(info *connInfo) *timingRecord {
 
 	if info.quic != nil {
 		rec.InitialToHS = ptr(micros(t.firstByte, t.handshakeDone))
+		rec.InitialToAccept = ptr(micros(t.firstByte, info.accepted))
 		stats := info.quic.ConnectionStats()
 		rec.QUICRTTMicros = ptr(stats.SmoothedRTT.Microseconds(), true)
 		rec.QUICMinRTTMicro = ptr(stats.MinRTT.Microseconds(), true)

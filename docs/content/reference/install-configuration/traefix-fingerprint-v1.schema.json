@@ -107,6 +107,7 @@
             "handshakeMicros": { "type": "integer" },
             "rttGapMicros": { "type": "integer" },
             "initialToHandshakeMicros": { "type": "integer" },
+            "initialToAcceptMicros": { "type": "integer" },
             "quicRttMicros": { "type": "integer", "minimum": 0 },
             "quicMinRttMicros": { "type": "integer", "minimum": 0 }
           }

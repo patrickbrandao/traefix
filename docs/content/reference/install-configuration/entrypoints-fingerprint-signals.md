@@ -134,12 +134,13 @@ The record also carries `firstByte`, the absolute arrival time of the first byte
 Over HTTP/3:
 
 ```text
-src=user,proto=udp,initial_to_hs_us=48210,quic_rtt_us=23500,quic_min_rtt_us=23100,req_us=49800
+src=user,proto=udp,initial_to_hs_us=48210,initial_to_acc_us=9400,quic_rtt_us=23500,quic_min_rtt_us=23100,req_us=39800
 ```
 
 | Key | Record field | Content |
 |:----|:-------------|:--------|
-| `initial_to_hs_us` | `initialToHandshakeMicros` | First Initial datagram → end of the QUIC handshake, with `rawBytes`. |
+| `initial_to_hs_us` | `initialToHandshakeMicros` | First Initial datagram → end of the QUIC handshake. Without `rawBytes`, the first Initial is timed when its ClientHello is read. |
+| `initial_to_acc_us` | `initialToAcceptMicros` | First Initial datagram → accept of the QUIC connection, the origin of `req_us`: add it to `req_us` to place a request on the same scale as `initial_to_hs_us`. |
 | `quic_rtt_us`, `quic_min_rtt_us` | `quicRttMicros`, `quicMinRttMicros` | Smoothed and lowest round trip of the QUIC connection, end to end. |
 | `req_us` | — | Connection → end of the request header block. |
 
