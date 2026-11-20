@@ -33,6 +33,12 @@ Returns the infopage information (and some extra information) as JSON.
 
 The optional `env` query parameter can be set to `true` to add the environment variables to the response.
 
+#### `/api/session`
+
+Returns, as JSON, the requests the server received with the session cookie (`infopage_sid`, set on the first page
+navigation, 30 minutes, kept in memory only), with the `X-Traefix-Timing` of each one, so that the page can draw the
+timeline of every request of the visit, across connections (HTTP/2, then HTTP/3 after a reload).
+
 #### `/bench`
 
 Always return the same response (`1`).

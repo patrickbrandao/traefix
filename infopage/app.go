@@ -105,6 +105,7 @@ func main() {
 	mux.Handle("/echo", handle(echoHandler, verbose))
 	mux.Handle("/bench", handle(benchHandler, verbose))
 	mux.Handle("/api", handle(apiHandler, verbose))
+	mux.Handle("/api/session", handle(sessionHandler, verbose))
 	mux.Handle("/health", handle(healthHandler, verbose))
 	mux.Handle("/openapi.yaml", handle(openAPIHandler, verbose))
 	mux.Handle("/assets/", handle(assetsHandler(), verbose))
@@ -114,7 +115,7 @@ func main() {
 	grpcInfopage.RegisterInfopageServer(serverGRPC, infopageServer{})
 	mux.Handle("/infopage.Infopage/", serverGRPC)
 
-	h := handle(mux.ServeHTTP, verbose)
+	h := handle(sessions.middleware(mux).ServeHTTP, verbose)
 
 	if cert == "" || key == "" {
 		log.Printf("Starting up on port %s", port)

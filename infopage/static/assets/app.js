@@ -535,7 +535,7 @@
 
   // timelineEvents rebuilds the milestones of the connection from X-Traefix-Transport (accepted) and
   // X-Traefix-Timing, in microseconds from the accept of the connection (the ACK of the handshake).
-  function timelineEvents() {
+  function timelineEvents(timing, transport) {
     var ev = [];
     var at = function (us, name, what, seg) { if (us !== undefined && isFinite(us)) ev.push({ us: us, name: name, what: what, seg: seg }); };
     if (transport.proto === 'udp' || timing.proto === 'udp') {
@@ -562,9 +562,11 @@
     return ev;
   }
 
-  function timelineCard(b) {
-    if (!timing.proto && !timing.tcp_rtt_us) return null;
-    var ev = timelineEvents();
+  // timelineView draws the numbered gauge and the table of the milestones of one request: its connection's timing
+  // (X-Traefix-Timing) and the accept time and position of the request (X-Traefix-Transport).
+  function timelineView(timing, transport) {
+    if (!timing || (!timing.proto && !timing.tcp_rtt_us)) return null;
+    var ev = timelineEvents(timing, transport);
     if (!ev.length) return null;
     var base = utcMicros(transport.accepted);
     var t0 = ev[0].us;
@@ -627,7 +629,12 @@
     });
     gauge.style.height = (lastAt.length * 40 + 6) + 'px';
     var scale = el('div', { 'class': 'tl-scale' }, [bar, gauge]);
+    return [scale, el('div', { 'class': 'scroll' }, [tbl])];
+  }
 
+  function timelineCard(b) {
+    var view = timelineView(timing, transport);
+    if (!view) return null;
     var rl = relayVerdict();
     var rows = [];
     if (transport.proto !== 'udp' && timing.proto !== 'udp') {
@@ -648,7 +655,91 @@
     var verdict = rl ? el('div', { 'class': 'verdict ' + rl.cls }, [el('h3', { text: 'Diagnóstico: ' + rl.title }), el('p', { text: rl.text })]) : null;
 
     return card('Linha do tempo da conexão', 'Cada marco da abertura da sua conexão, como o servidor viu. O handshake TCP termina em quem abriu a conexão; a volta do TLS vai até o navegador. Com proxy ou SOCKS no caminho, os dois se separam e o primeiro byte atrasa: pela pontuação, isso pesa como automação (contorno de limites por IP).',
-      [scale, el('div', { 'class': 'scroll' }, [tbl]), dl(rows), verdict]);
+      view.concat([dl(rows), verdict]));
+  }
+
+  // ---------- requests of the session ----------
+
+  var PROTOS = { h1: 'HTTP/1.1', 'http/1.1': 'HTTP/1.1', h2: 'HTTP/2', h2c: 'HTTP/2 (h2c)', h3: 'HTTP/3' };
+  var DESTS = { document: 'página', script: 'script', style: 'estilo', image: 'imagem', font: 'fonte', empty: 'fetch', manifest: 'manifesto' };
+
+  function protoText(p) { return PROTOS[p] || p || '?'; }
+
+  function timeOfDay(rfc) {
+    var us = utcMicros(rfc);
+    return us === undefined ? '?' : clockText(us).slice(0, 12);
+  }
+
+  // sessionCard lists the requests the server saw with the session cookie, grouped by connection: a refresh that
+  // switches from HTTP/2 to HTTP/3, a reused connection, the assets of the page. Each one opens its own timeline.
+  function sessionCard() {
+    var box = el('div', { 'class': 'session-list' }, [el('p', { 'class': 'muted', text: 'Carregando as requisições da sessão…' })]);
+    var btn = el('button', { type: 'button', 'class': 'small-btn', text: 'Atualizar' });
+
+    function draw(d) {
+      box.textContent = '';
+      var reqs = (d && d.requests) || [];
+      if (!reqs.length) {
+        box.appendChild(el('p', { 'class': 'muted', text: 'Nenhuma requisição registrada: o navegador recusou o cookie da sessão, ou a sessão expirou.' }));
+        return;
+      }
+      var conns = [], byId = {};
+      reqs.forEach(function (r) {
+        var key = r.connId || ('sem-id-' + r.n);
+        var c = byId[key];
+        if (!c) { c = byId[key] = { id: r.connId, reqs: [], first: r }; conns.push(c); }
+        c.reqs.push(r);
+      });
+      var mine = tx('Time');
+      conns.forEach(function (c, ci) {
+        var f = c.first;
+        var transp = f.transport === 'udp' ? 'QUIC (UDP)' : (f.transport === 'tcp' ? 'TCP' : '');
+        box.appendChild(el('h3', { 'class': 'session-conn' }, [
+          'Conexão ' + (ci + 1) + ' · ' + protoText(f.proto) + (transp ? ' · ' + transp : '') + (f.accepted ? ' · aberta às ' + timeOfDay(f.accepted) : ''),
+          c.id ? el('span', { 'class': 'muted mono small', text: ' ' + c.id }) : null
+        ]));
+        c.reqs.forEach(function (r) {
+          var tm = parseKV(r.timing) || {};
+          var seq = num(r.reqSeq);
+          var reqUs = num(tm.req_us);
+          var what = [
+            '#' + r.n, timeOfDay(r.time), r.method + ' ' + r.path,
+            DESTS[r.dest] || r.dest || '', String(r.status),
+            seq ? (seq === 1 ? 'abriu a conexão' : 'requisição ' + seq + ' da conexão') : '',
+            reqUs !== undefined ? msUs(reqUs) + ' após o aceite' : ''
+          ].filter(Boolean).join(' · ');
+          var det = el('details', { 'class': 'session-req' }, [el('summary', null, [
+            what, r.time === mine ? el('span', { 'class': 'badge', text: 'esta página' }) : null
+          ])]);
+          var built = false;
+          det.addEventListener('toggle', function () {
+            if (!det.open || built) return;
+            built = true;
+            var view = timelineView(tm, { proto: r.transport, accepted: r.accepted, req_seq: r.reqSeq });
+            if (!view) { det.appendChild(el('p', { 'class': 'muted', text: 'Sem X-Traefix-Timing para esta requisição.' })); return; }
+            if (seq > 1) det.appendChild(el('p', { 'class': 'muted small', text: 'Conexão reaproveitada: os marcos do handshake são os da abertura da conexão; o último marco é esta requisição.' }));
+            view.forEach(function (v) { det.appendChild(v); });
+          });
+          if (r.time === mine) det.open = true;
+          box.appendChild(det);
+        });
+      });
+      if (reqs.length >= d.max) box.appendChild(el('p', { 'class': 'muted small', text: 'Mostrando as ' + d.max + ' requisições mais recentes.' }));
+    }
+
+    function load() {
+      fetch('/api/session', { cache: 'no-store', credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(draw)
+        .catch(function () { box.textContent = ''; box.appendChild(el('p', { 'class': 'muted', text: 'Não foi possível ler as requisições da sessão.' })); });
+    }
+    btn.addEventListener('click', load);
+    // After the assets of the page, so that they are in the list too.
+    if (document.readyState === 'complete') setTimeout(load, 300);
+    else window.addEventListener('load', function () { setTimeout(load, 300); });
+
+    return card('Requisições desta sessão', 'Cada requisição que o servidor recebeu deste navegador nos últimos 30 minutos, agrupada por conexão: o recarregamento que troca HTTP/2 por HTTP/3, a conexão reaproveitada, os arquivos da página. Abra uma para ver a linha do tempo dela. Um cookie de sessão (infopage_sid, 30 min) agrupa as requisições; elas ficam só na memória do servidor.',
+      [el('div', { 'class': 'session-actions' }, [btn]), box]);
   }
 
   // evaluate grades the IP and TCP values per infopage/CRITERIA.md: most of them only describe the
@@ -1037,6 +1128,7 @@
 
     var tc = timelineCard(b);
     if (tc) root.appendChild(tc);
+    root.appendChild(sessionCard());
 
     var mc = mtuCard();
     if (mc) root.appendChild(mc);

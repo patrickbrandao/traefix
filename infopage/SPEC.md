@@ -23,6 +23,7 @@ gRPC). Acrescenta:
 | `/` | `GET` com `Accept` contendo `text/html` (navegador) recebe a página; os demais (curl, scripts) recebem o texto do whoami. `?format=html` ou `?format=text` força um dos dois. |
 | `/assets/*` | `app.js` e `style.css` embutidos no binário (`static/`, `go:embed`). Sem listagem de diretório. |
 | `/api` | JSON do whoami com os campos novos `proto`, `prefix`, `time` (RFC 3339 UTC) e `score` (pontuação passiva). |
+| `/api/session` | Requisições da sessão do cookie `infopage_sid` (veja "Requisições da sessão"), em JSON: número, horário, método, caminho, `Sec-Fetch-Dest`, status, protocolo, ID da conexão, `accepted`, `req_seq`, transporte e o `X-Traefix-Timing`. Nunca devolve o identificador da sessão. `no-store`. |
 | texto (curl) | Acrescenta `Automation-Score`, `Automation-Known-TLS` e uma linha `Automation-Rule` por regra com pontos. |
 
 - A página recebe os dados da **própria requisição de navegação**, embutidos no HTML como JSON
@@ -60,16 +61,22 @@ em português do Brasil. A aba ativa fica no fragmento (`#tecnico`).
    comparação; diagnóstico "Conexão direta", "Indício fraco", "Proxy ou SOCKS no caminho" ou "Relay de
    privacidade" pela regra TIME-RELAY ([SCORE.md](SCORE.md) §4.5). Em HTTP/3, o Initial, o fim do handshake QUIC e
    a requisição.
-5. **MTU estimado** ([CRITERIA.md](CRITERIA.md), "MTU estimado"): base (MSS do SYN ou `max_udp_payload` do
+5. **Requisições desta sessão**: as requisições que o servidor recebeu deste navegador nos últimos 30 minutos
+   (`/api/session`, lido depois do `load`, com botão "Atualizar"), agrupadas por conexão (protocolo, TCP ou QUIC,
+   horário de abertura, ID). Cada requisição mostra número, horário, método e caminho, tipo, status, posição na
+   conexão (`req_seq`) e o tempo após o aceite; aberta, mostra a **própria linha do tempo**, com a mesma régua
+   numerada do item 4. Numa conexão reaproveitada os marcos do handshake são os da abertura e o último é a
+   requisição. A requisição da página atual vem aberta e marcada.
+6. **MTU estimado** ([CRITERIA.md](CRITERIA.md), "MTU estimado"): base (MSS do SYN ou `max_udp_payload` do
    QUIC), + TCP 20 ou UDP 8, + IPv4 20 ou IPv6 40, nota de 0 a 100 pela régua (1500 = 100, PPPoE 1480–1492 =
    90–95, 1340 = 0) e a régua desenhada. Não entra na pontuação de automação.
-6. **Seu navegador e dispositivo**: navegador, sistema, dispositivo/modelo, arquitetura, idiomas, fuso,
+7. **Seu navegador e dispositivo**: navegador, sistema, dispositivo/modelo, arquitetura, idiomas, fuso,
    tela, janela, tema, toque, núcleos, memória, GPU (WebGL), cookies. A latência é a do caminho
    (`rtt_min_us`, `tcp_rtt_us`…), não o RTT suavizado.
-7. **Avaliação TCP/IP**: latência, MTU estimado, escala de janela, SACK, timestamps, ECN, saltos, DF, opções IP,
+8. **Avaliação TCP/IP**: latência, MTU estimado, escala de janela, SACK, timestamps, ECN, saltos, DF, opções IP,
    DSCP e reenvios, com `OK` / `Info` / `Atenção` / `Alerta` pelos critérios de
    [CRITERIA.md](CRITERIA.md). A maior parte é `Info`: descreve o sistema, não a qualidade.
-8. **Sinais** (`OK` / `Atenção` / `Alerta`), coerência entre o que o navegador diz e o que a conexão
+9. **Sinais** (`OK` / `Atenção` / `Alerta`), coerência entre o que o navegador diz e o que a conexão
    mostra:
    - `navigator.webdriver` (automação);
    - versão do TLS; troca de chaves pós-quântica (`MLKEM`); sessão retomada; ECH aceito;
@@ -78,7 +85,7 @@ em português do Brasil. A aba ativa fica no fragmento (`#tecnico`).
      *Fingerprint Signals* (15–20 ms e 30%, pensada para várias conexões agregadas);
    - Chromium sem Client Hints; GPC/DNT; cookies desativados; relógio com mais de 60 s de diferença
      (`Alerta` acima de 5 min).
-9. **Impressões digitais**: JA4, JA3, JA4H, Akamai H2, JA4T, com explicação leiga (identificam o tipo
+10. **Impressões digitais**: JA4, JA3, JA4H, Akamai H2, JA4T, com explicação leiga (identificam o tipo
    de cliente, não a pessoa). Sem cabeçalhos do Traefix, explica que o fingerprint não está ativo.
 
 ### Aba "Técnico" (todos os detalhes)
@@ -94,6 +101,16 @@ em português do Brasil. A aba ativa fica no fragmento (`#tecnico`).
 - **Servidor infopage**: nome, hostname, IPs.
 - **Regras da pontuação**: todas as regras avaliadas, com valor, esperado, estado e pontos.
 - Botões **Copiar JSON** e **Baixar JSON** (`{server, browser, score}`).
+
+## Requisições da sessão
+
+- Cookie `infopage_sid`: 16 bytes aleatórios em base64url, `HttpOnly`, `SameSite=Lax`, `Secure` em HTTPS, `Path=/`,
+  30 minutos. Só uma navegação de página (`text/html`) abre sessão: cliente sem cookie (curl) não ocupa a memória.
+  Cookie com formato inválido é ignorado.
+- Guarda na memória, por requisição, só o que a linha do tempo usa (campos de até 512 bytes): no máximo 500
+  sessões (expiradas saem primeiro, depois a usada há mais tempo) e as 30 requisições mais recentes de cada uma;
+  reiniciar o container apaga tudo. Pior caso de alguns MB, dentro dos 64 MB.
+- Ficam de fora `/health`, o próprio `/api/session` e o gRPC.
 
 ## Pontuação de automação
 

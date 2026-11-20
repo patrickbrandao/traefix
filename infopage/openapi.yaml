@@ -74,6 +74,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Data'
+  /api/session:
+    get:
+      operationId: apiSession
+      tags:
+        - info
+      summary: Requests of the session
+      description: >-
+        Returns the requests received with the `infopage_sid` session cookie (set on the first page navigation,
+        30 minutes, in memory only), with the Traefix timing of each one. The session identifier is never returned.
+      responses:
+        '200':
+          description: Requests of the session, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
   /bench:
     get:
       operationId: bench
