@@ -618,7 +618,9 @@
         return el('span', { 'class': 'tl-num', title: it.e.name + ': ' + msUs(it.e.us - t0), text: String(it.n) });
       }));
       var label = msUs(g.first.us - t0) + (g.last.us - g.first.us >= 10 ? ' a ' + msUs(g.last.us - t0) : '');
-      var mark = el('span', { 'class': 'tl-mark' }, [
+      // Near the ends the label grows inwards, so that it stays inside the card.
+      var edge = g.pos > 85 ? ' tl-end' : (g.pos < 8 && g.items.length > 1 ? ' tl-start' : '');
+      var mark = el('span', { 'class': 'tl-mark' + edge }, [
         el('span', { 'class': 'tl-line' }), badges, el('span', { 'class': 'tl-at', text: label })
       ]);
       mark.style.left = g.pos + '%';

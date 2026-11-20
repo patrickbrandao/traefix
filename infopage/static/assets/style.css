@@ -171,3 +171,5 @@ footer { margin-top: 24px; color: var(--muted); font-size: 13px; text-align: cen
 .session-req summary { cursor: pointer; font-size: 13px; line-height: 1.5; }
 .session-req[open] { padding-bottom: 12px; }
 .badge { display: inline-block; margin-left: 8px; padding: 0 8px; border-radius: 9px; font-size: 11px; background: var(--accent); color: var(--card); }
+.tl-mark.tl-end { align-items: flex-end; }
+.tl-mark.tl-start { align-items: flex-start; }
