@@ -215,8 +215,17 @@ servidor que o tem, sem rede overlay. Implementado até agora:
   conexão HTTP/1.1; gRPC e fluxos nos dois sentidos passam pela ligação. Respostas da malha levam
   `Proxy-Status`. Métricas `traefik_mesh_requests_total` e `traefik_mesh_received_total`. Código em
   `pkg/mesh/forward.go`; gancho no upstream em `pkg/server/routerfactory.go` (`buildMeshHandlers`).
-  **Uma rota que a instância também tem ainda é servida só localmente** (etapa 6), e TCP e UDP ainda não
-  são encaminhados (etapas 7 e 8).
+
+- **Prioridade** (etapa 6): quando a instância também tem o router, um ponto de decisão entra entre os
+  middlewares do entrypoint e os do router (`Manager.buildMiddlewaresAndService`, gancho de uma linha em
+  `buildHTTPHandler` de `pkg/server/router/router.go`; `RouterFactory.setMeshDecider`). A escolha
+  (`Mesh.plan`, em `pkg/mesh/forward.go`): maior `mesh.priority` entre os candidatos disponíveis; na
+  prioridade padrão a instância prefere a si mesma; no empate vale o `balance`. O dono anuncia `down`
+  quando o serviço do router não tem servidor de pé (`pkg/mesh/health.go`, conferido a cada segundo no
+  estado dos servidores do `runtime.Configuration`). Três falhas seguidas põem um par em quarentena para a
+  rota (5 s, dobrando até 60 s). Uma requisição que não saiu da instância (sinal `WroteHeaders` do
+  `httptrace`), ou que o dono disse não ter atendido e não tem corpo, vai ao candidato seguinte.
+  **TCP e UDP ainda não são encaminhados** (etapas 7 e 8).
 
 ## Infopage
 

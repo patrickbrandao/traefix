@@ -114,6 +114,8 @@ func (n *testNode) start() {
 	n.mesh.now = n.now
 	n.mesh.metrics = n.registry
 	n.mesh.routesPollTimeout = 200 * time.Millisecond
+	// The tests look at the servers when they mean to.
+	n.mesh.healthInterval = time.Hour
 	n.mesh.publishDelay = 10 * time.Millisecond
 	n.mesh.SetEntryPoints([]string{"traefik", "web", "websecure"}, []string{"dns"}, []string{"web", "websecure"})
 

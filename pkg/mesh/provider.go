@@ -139,6 +139,13 @@ func (g *routeGroup) peers() []string {
 func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 	m.mu.Lock()
 	local := m.localRouters
+
+	// The routers this instance announces, by key: another instance has the same route when its announcement has the same signature.
+	announced := map[string]Route{}
+	for _, route := range m.exported {
+		announced[routeKey(route.Kind, route.Name)] = route
+	}
+
 	groups := map[string]map[string]*routeGroup{}
 
 	for nodeID, table := range m.imported {
@@ -156,12 +163,12 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 				groups[key][signature] = group
 			}
 
-			group.candidates = append(group.candidates, forwardCandidate{nodeID: nodeID, priority: route.MeshPriority})
+			group.candidates = append(group.candidates, forwardCandidate{nodeID: nodeID, priority: route.MeshPriority, down: route.Down})
 		}
 	}
 	m.mu.Unlock()
 
-	targets := map[string]*forwardTarget{}
+	tables := &forwardTables{targets: map[string]*forwardTarget{}, shared: map[string]*forwardTarget{}}
 
 	// The maps are never nil: a configuration without any router still has to replace the previous one.
 	conf := &dynamic.Configuration{
@@ -210,6 +217,18 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 				imported.Status = ImportLocal
 				imported.Reason = "this instance has a router with the same name"
 
+				// With the same rule, entry points and TLS, it is the same route: the priorities choose where a request goes.
+				if own, ok := announced[key]; ok && group.route.Kind == KindHTTP && own.signature() == group.signature {
+					tables.shared[own.Name] = &forwardTarget{
+						router:        own.Name,
+						candidates:    group.candidates,
+						local:         true,
+						localPriority: own.MeshPriority,
+					}
+
+					imported.Reason = "this instance has the router too: the priorities choose where a request is served"
+				}
+
 			case group.route.Kind != KindHTTP:
 				imported.Status = ImportSkipped
 				imported.Reason = "the mesh does not forward " + strings.ToUpper(group.route.Kind) + " routers yet"
@@ -240,7 +259,7 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 				// The service has no configuration: the mesh builds its handler.
 				conf.HTTP.Services[name] = &dynamic.Service{}
 
-				targets[name+"@"+ProviderName] = &forwardTarget{router: group.route.Name, candidates: group.candidates}
+				tables.targets[name+"@"+ProviderName] = &forwardTarget{router: group.route.Name, candidates: group.candidates}
 
 				imported.Status = ImportImported
 				imported.Router = name + "@" + ProviderName
@@ -250,11 +269,9 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 		}
 	}
 
-	// The targets change with the routers, and also when an instance joins the ones that own a router that is already there:
-	// the services read them at each request.
-	m.mu.Lock()
-	m.targets = targets
-	m.mu.Unlock()
+	// The tables change with the routers, and also when an instance joins the ones that own a router that is already there,
+	// or when the servers of one of them go down: the requests read them each time.
+	m.tables.Store(tables)
 
 	return conf, report
 }

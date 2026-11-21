@@ -119,10 +119,12 @@ func (f *RouterFactory) CreateRouters(rtConf *runtime.Configuration) (map[string
 
 	routerManager.ParseRouterTree()
 
+	f.setMeshDecider(routerManager)
+
 	handlersNonTLS := routerManager.BuildHandlers(ctx, f.entryPointsTCP, false)
 	handlersTLS := routerManager.BuildHandlers(ctx, f.entryPointsTCP, true)
 
-	f.buildMeshHandlers(ctx, routerManager)
+	f.buildMeshHandlers(ctx, routerManager, rtConf)
 
 	serviceManager.LaunchHealthCheck(ctx)
 

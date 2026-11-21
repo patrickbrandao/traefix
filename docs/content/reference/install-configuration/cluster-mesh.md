@@ -7,7 +7,7 @@ The `cluster.mesh` option links the Traefix instances of a [cluster](./cluster.m
 
 !!! warning "Work in progress"
 
-    In this version, an instance forwards the HTTP requests for the routers that only other instances have. An instance that has a router doesn't send its requests to another instance yet, whatever the `mesh.priority`. The TCP and UDP routers are announced and not forwarded yet.
+    In this version, the mesh forwards the HTTP requests. The TCP and UDP routers are announced and not forwarded yet.
 
 ## Configuration Examples
 
@@ -114,7 +114,7 @@ Each instance announces its routers to the instances that link to it, and create
 - **The router uses the entry points that the instance has with the same names.** Use the same entry point names on every instance. A router with no entry point in common is not created.
 - **The TLS options and the certificate resolver of the router must exist on the instance, with the same names.** The instance requests the certificate of the router as it does for its own routers.
 - **The middlewares of the entry point apply to the router.** Declare them with their provider, such as `waf@file`: a name without a provider is looked up among the middlewares of the mesh, which has none.
-- **An instance keeps its own router.** When the instance has a router with the name of an announced router, it creates no router for the announcement.
+- **An instance keeps its own router.** When the instance has a router with the name of an announced router, it creates no router for the announcement. With the same rule, entry points and TLS, the two routers are one route, and the [priorities](#where-a-request-is-served) choose the instance that serves each request.
 - **A change reaches the other instances at once.** They follow the routers of an instance for as long as their link to it is up, and remove them when the link is lost.
 - **Routers with the same name and another rule are served apart.** While a router is being changed on its instances one at a time, the other instances create a second router, with a suffix in its name, and log a warning.
 
@@ -123,7 +123,7 @@ The options of a router, in the routing configuration:
 | Field | Description | Default |
 |:------|:------------|:--------|
 | <a id="opt-mesh-export" href="#opt-mesh-export" title="#opt-mesh-export">`mesh.export`</a> | Announces the router to the other instances, or not. When unset, `cluster.mesh.export` decides. | |
-| <a id="opt-mesh-priority" href="#opt-mesh-priority" title="#opt-mesh-priority">`mesh.priority`</a> | Chooses between the instances that have the router, from 0 to 1000. | 0 |
+| <a id="opt-mesh-priority" href="#opt-mesh-priority" title="#opt-mesh-priority">`mesh.priority`</a> | Chooses between the instances that have the router, from 0 to 1000. See [Where a Request Is Served](#where-a-request-is-served). | 0 |
 
 ```yaml tab="Labels"
 labels:
@@ -165,12 +165,36 @@ A request for a router that the instance learned from the mesh goes to an instan
 - **The instance that owns the router sees the client.** The request has the address and the port of the client, its TLS version, cipher and server name, and the `X-Forwarded-*` and `X-Real-Ip` headers that the entry point set. The `ipAllowList` and `rateLimit` middlewares of the router, and the `X-Forwarded-For` header sent to the server, are the same as for a request received directly.
 - **The fingerprints follow the request.** The `X-Traefix-*` headers reach the server, and the [`fingerprintList`](../routing-configuration/http/middlewares/fingerprintlist.md) middleware, the access log and the traces of the instance that owns the router use the fingerprints that the entry point measured. Enable the `fingerprint` option on the entry points of every instance that receives requests.
 - **The middlewares of the entry points only run where the request arrives.** A request that reaches the instance that owns the router through the mesh doesn't go through its entry points. Declare the same entry point middlewares on every instance.
-- **The highest `mesh.priority` gets the requests.** Among the instances that own the router and that the instance has a link to, the ones with the highest priority are used. With `balance: clientIP`, a client goes to the same instance whichever instance it reaches. With `balance: roundRobin`, the requests are spread evenly.
 - **WebSocket and gRPC work.** A request with an `Upgrade` header travels in a stream of its own, and streaming requests and responses flow in both directions at the same time.
 - **The client certificate stops at the entry point.** The [`passTLSClientCert`](../routing-configuration/http/middlewares/passtlsclientcert.md) middleware of a router has nothing to pass for a request that came through the mesh.
 - **An answer of the mesh carries a `Proxy-Status` header.** The instance answers `503` when it has no link to an instance that owns the router, and `502` when the request could not be delivered. An error of the service itself comes back as the service sent it, without the header.
 
-In the access log, the instance that received the request records the router of the mesh, with `mesh://<nodeID>` as the service URL. The instance that owns the router records the request with the `traefix-mesh` entry point, the address of the client and its own router.
+In the access log, the instance that received the request records its router, with `mesh://<nodeID>` as the service URL. The instance that owns the router records the request with the `traefix-mesh` entry point, the address of the client and its own router.
+
+### Where a Request Is Served
+
+The instances that own a router are the candidates for its requests: the instance that received the request, when it has the router, and the other instances that announce it.
+
+1. The instance takes the candidates that can serve the request now, and the highest `mesh.priority` among them.
+2. With a priority above 0, the candidates with that priority get the requests. The [`balance`](#configuration-options) option chooses between several of them.
+3. With the default priority, 0, the instance serves the request itself when it has the router. Otherwise, the `balance` option chooses between the other instances.
+
+| Instance that received the request | Other instances | Where the request goes |
+|:-----------------------------------|:----------------|:-----------------------|
+| Default | `srv2`: default | The instance itself. `srv2` only when the instance can't serve it. |
+| No router | `srv2` and `srv3`: default | `srv2` or `srv3`. |
+| Default | `srv2`: 10 | `srv2`. The instance itself when `srv2` can't serve it. |
+| 10 | `srv2`: 10, `srv3`: default | The instance itself or `srv2`. `srv3` when neither can. |
+| 5 | `srv2`: 10 | `srv2`. The instance itself when `srv2` can't serve it. |
+
+Different priorities make a primary and its backups. The same priority, above 0, shares the requests.
+
+- **With `balance: clientIP`, a client keeps its instance.** The choice only depends on the address of the client and on the candidates, so every instance that the client reaches sends it to the same one. With `balance: roundRobin`, the requests are spread evenly, and each instance counts on its own.
+- **An instance tells the others when its router has no server.** The servers of the service are all down, by its health check, or gone. The other instances stop sending it requests, and an instance in that state sends the requests it receives to another candidate.
+- **An instance without any other candidate serves the request itself.** Its answer is the one it gives without the mesh, such as `503` when its servers are down.
+- **An instance that fails three requests in a row is left alone for the router.** The instance comes back after 5 seconds, and after twice as long each time it fails again, up to 1 minute.
+- **A request that didn't leave the instance goes to the next candidate.** That is the case when the link was just lost, or when the other instance answers that it no longer has the router. A request that was sent is not sent a second time: the server may have received it.
+- **A request in transit to an instance that dies is lost.** It fails after `linkTimeout` at most, when the link is considered lost. The requests that follow go to the other candidates.
 
 ## API
 

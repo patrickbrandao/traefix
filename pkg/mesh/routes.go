@@ -62,6 +62,8 @@ type Route struct {
 	TLS         *RouteTLS `json:"tls,omitempty"`
 	// MeshPriority chooses between the instances that have the router.
 	MeshPriority int `json:"meshPriority,omitempty"`
+	// Down is true when the service of the router has no server to answer.
+	Down bool `json:"down,omitempty"`
 }
 
 // RouteTLS is the TLS configuration of an announced router.
@@ -139,22 +141,16 @@ func (m *Mesh) Transform(_ context.Context, configurations dynamic.Configuration
 	}
 
 	m.mu.Lock()
-	exportChanged := !reflect.DeepEqual(routes, m.exported)
-	if exportChanged {
-		m.exported = routes
-		m.exportGeneration++
-
-		close(m.exportChanged)
-		m.exportChanged = make(chan struct{})
-	}
+	m.localBase = routes
+	exportChanged := m.refreshExportedLocked()
 
 	localChanged := !reflect.DeepEqual(local, m.localRouters)
 	m.localRouters = local
 	m.localHTTP = served
 	m.mu.Unlock()
 
-	// A router that appears or goes locally changes what is taken from the other instances.
-	if localChanged {
+	// A router that appears, goes or changes locally changes what is made of the routes of the other instances.
+	if localChanged || exportChanged {
 		m.publish()
 	}
 

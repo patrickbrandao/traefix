@@ -35,7 +35,7 @@ type seen struct {
 func (n *testNode) owns(handler http.Handler, priority int) {
 	n.t.Helper()
 
-	n.mesh.SwitchHTTPHandlers(map[string]http.Handler{"app@docker": handler})
+	n.mesh.SwitchHTTPHandlers(map[string]http.Handler{"app@docker": handler}, nil)
 	n.mesh.Transform(n.t.Context(), dynamic.Configurations{
 		"docker": {HTTP: &dynamic.HTTPConfiguration{Routers: map[string]*dynamic.Router{
 			"app": {Rule: "Host(`app.example.com`)", EntryPoints: []string{"web"}, Service: "app", Mesh: &dynamic.RouterMesh{Priority: priority}},
@@ -54,6 +54,21 @@ func (n *testNode) entry() http.Handler {
 	require.NotNil(n.t, handler)
 
 	return handler
+}
+
+// candidates returns how many instances the instance knows to own the router of the tests.
+func (n *testNode) candidates() int {
+	tables := n.mesh.tables.Load()
+
+	if target := tables.targets["app-docker@mesh"]; target != nil {
+		return len(target.candidates)
+	}
+
+	if target := tables.shared["app@docker"]; target != nil {
+		return len(target.candidates)
+	}
+
+	return 0
 }
 
 func withTransport(transport string) func(conf *cluster.Configuration) {
@@ -325,7 +340,7 @@ func TestMesh_forward_unknownRouter(t *testing.T) {
 	handler := ingress.entry()
 
 	// The router is announced, and its handler is gone: the container stopped, and the news has not arrived yet.
-	owner.mesh.SwitchHTTPHandlers(map[string]http.Handler{})
+	owner.mesh.handlers.Store(&map[string]http.Handler{})
 
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil))
@@ -383,7 +398,7 @@ func TestMesh_forward_priority(t *testing.T) {
 
 	handler := ingress.entry()
 
-	require.Eventually(t, func() bool { return len(ingress.mesh.targetOf("app-docker@mesh").candidates) == 2 }, 10*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return ingress.candidates() == 2 }, 10*time.Second, 10*time.Millisecond)
 
 	// Every request goes to the instance with the highest priority.
 	for i := range 20 {
@@ -429,7 +444,7 @@ func TestMesh_forward_balance(t *testing.T) {
 			handler, otherHandler := ingress.entry(), other.entry()
 
 			for _, node := range []*testNode{ingress, other} {
-				require.Eventually(t, func() bool { return len(node.mesh.targetOf("app-docker@mesh").candidates) == 2 }, 10*time.Second, 10*time.Millisecond)
+				require.Eventually(t, func() bool { return node.candidates() == 2 }, 10*time.Second, 10*time.Millisecond)
 			}
 
 			counts := map[string]int{}

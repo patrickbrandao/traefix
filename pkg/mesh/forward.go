@@ -12,10 +12,13 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/http/httputil"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/traefik/traefik/v3/pkg/cluster"
@@ -132,17 +135,41 @@ func newForwardInfo(req *http.Request, kind, router string) forwardInfo {
 	return info
 }
 
-// forwardTarget is where the requests of a router learned from the mesh go.
+// forwardTarget is where the requests of a route go: the instances that own its router, this one included when it does.
 type forwardTarget struct {
 	// router is the name of the router on the instances that own it.
-	router     string
+	router string
+	// candidates are the other instances that own the router.
 	candidates []forwardCandidate
+	// local is true when this instance owns the router too.
+	local         bool
+	localPriority int
 }
 
 type forwardCandidate struct {
 	nodeID   string
 	priority int
+	// down is true when the instance says that the service of its router has no server to answer.
+	down bool
 }
+
+// forwardTables are the routes of the mesh as the requests need them. They are replaced as a whole when a route changes.
+type forwardTables struct {
+	// targets are the routes this instance does not have, by the name of their service.
+	targets map[string]*forwardTarget
+	// shared are the routes this instance has and other instances have too, by the name of the router.
+	shared map[string]*forwardTarget
+}
+
+// choice is a place to serve a request: this instance, or another one.
+type choice struct {
+	nodeID   string
+	local    bool
+	priority int
+}
+
+// errNotServed is the answer of an instance that did not serve the request: it does not have the router any more.
+var errNotServed = errors.New("the instance did not serve the request")
 
 // meshService forwards the requests of a router learned from the mesh to an instance that owns it.
 type meshService struct {
@@ -152,42 +179,89 @@ type meshService struct {
 }
 
 func (s *meshService) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
-	m := s.mesh
-
-	target := m.targetOf(s.name)
+	target := s.mesh.tables.Load().targets[s.name]
 	if target == nil {
-		m.refuse(rw, req, "", http.StatusServiceUnavailable, "no instance of the mesh announces the router")
-		return
-	}
-
-	// The first instance, in the order of preference, that this instance has a link to.
-	var session *session
-	var nodeID string
-
-	for _, candidate := range m.order(target, clientIP(req)) {
-		if session = m.sessionTo(candidate); session != nil {
-			nodeID = candidate
-			break
-		}
-	}
-
-	if session == nil {
-		m.refuse(rw, req, "", http.StatusServiceUnavailable, "no link to an instance that owns the router")
+		s.mesh.refuse(rw, req, "", http.StatusServiceUnavailable, "no instance of the mesh announces the router")
 		return
 	}
 
 	if data := accesslog.GetLogData(req); data != nil {
 		data.Core[accesslog.ServiceName] = s.name
+	}
+
+	s.mesh.dispatch(rw, req, target, nil)
+}
+
+// sharedRoute decides, for a router that this instance and other instances have, where a request is served.
+// It sits between the middlewares of the entry point, which ran, and the middlewares of the router, which run where
+// the request is served.
+type sharedRoute struct {
+	mesh *Mesh
+	name string
+	// local runs the middlewares of the router and its service on this instance.
+	local http.Handler
+}
+
+func (s *sharedRoute) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	// Most routers live on one instance: nothing is decided for them.
+	target := s.mesh.tables.Load().shared[s.name]
+	if target == nil {
+		s.local.ServeHTTP(rw, req)
+		return
+	}
+
+	s.mesh.dispatch(rw, req, target, s.local)
+}
+
+// dispatch serves a request where the priorities say, and falls back to the next place when one cannot take it.
+func (m *Mesh) dispatch(rw http.ResponseWriter, req *http.Request, target *forwardTarget, local http.Handler) {
+	m.try(rw, req, target, local, m.plan(target, clientIP(req)))
+}
+
+// try serves a request at the first of the places, and at the following ones for as long as nothing of it was sent.
+func (m *Mesh) try(rw http.ResponseWriter, req *http.Request, target *forwardTarget, local http.Handler, choices []choice) {
+	if len(choices) == 0 {
+		m.refuse(rw, req, "", http.StatusServiceUnavailable, "no instance that owns the router can be reached")
+		return
+	}
+
+	next, rest := choices[0], choices[1:]
+
+	if next.local {
+		local.ServeHTTP(rw, req)
+		return
+	}
+
+	nodeID := next.nodeID
+
+	session := m.sessionTo(nodeID)
+	if session == nil {
+		// The link went down since the places were chosen.
+		m.try(rw, req, target, local, rest)
+		return
+	}
+
+	if data := accesslog.GetLogData(req); data != nil {
 		data.Core[accesslog.ServiceURL] = "mesh://" + nodeID
 		data.Core[accesslog.ServiceAddr] = nodeID
 	}
 
 	if isUpgrade(req) {
-		m.forwardUpgrade(rw, req, session, nodeID, target.router)
+		if retry := m.forwardUpgrade(rw, req, session, nodeID, target.router); retry {
+			m.try(rw, req, target, local, rest)
+		}
+
 		return
 	}
 
 	info := newForwardInfo(req, forwardHTTP, target.router)
+
+	// The client of the link tells when the request starts to leave this instance: until then, another place can serve it.
+	var sent atomic.Bool
+
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteHeaders: func() { sent.Store(true) },
+	}))
 
 	proxy := &httputil.ReverseProxy{
 		Transport:     session,
@@ -210,20 +284,38 @@ func (s *meshService) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		ModifyResponse: func(resp *http.Response) error {
 			// The instance answered, but not with the router: its answer is not the one of the service.
 			if cause := resp.Header.Get(headerForwardError); cause != "" {
-				return fmt.Errorf("the instance %s did not serve the request: %s", nodeID, cause)
+				return fmt.Errorf("%w (%s): %s", errNotServed, nodeID, cause)
 			}
 
+			m.succeeded(target.router, nodeID)
 			m.countRequest(nodeID, forwardHTTP, resultForwarded)
 
 			return nil
 		},
 		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
+			m.failed(target.router, nodeID)
 			m.countRequest(nodeID, forwardHTTP, resultError)
+
+			// Nothing of the request left this instance, e.g. the connection was just closed. Or the other instance told
+			// that it did nothing with the request, which has no body that was consumed on the way.
+			// In both cases another place can serve it. Any other failure may have reached the server.
+			notSent := !sent.Load()
+			notServed := errors.Is(err, errNotServed) && hasNoBody(req)
+
+			if (notSent || notServed) && len(rest) > 0 {
+				m.try(rw, req, target, local, rest)
+				return
+			}
+
 			m.refuse(rw, req, nodeID, http.StatusBadGateway, err.Error())
 		},
 	}
 
 	proxy.ServeHTTP(rw, req)
+}
+
+func hasNoBody(req *http.Request) bool {
+	return req.Body == nil || req.Body == http.NoBody || req.ContentLength == 0
 }
 
 // refuse answers a request that could not be forwarded.
@@ -247,22 +339,33 @@ func (m *Mesh) refuse(rw http.ResponseWriter, req *http.Request, nodeID string, 
 // forwardUpgrade forwards a request that asks to switch protocols, such as a WebSocket handshake.
 // The request and what follows it travel as bytes in a stream of the link: the instance that owns the router serves it
 // as an HTTP/1.1 connection.
-func (m *Mesh) forwardUpgrade(rw http.ResponseWriter, req *http.Request, s *session, nodeID, router string) {
+//
+// It returns true when the stream could not be opened: nothing of the request was sent, and another place can serve it.
+func (m *Mesh) forwardUpgrade(rw http.ResponseWriter, req *http.Request, s *session, nodeID, router string) bool {
 	info := newForwardInfo(req, forwardUpgrade, router)
 
 	stream, err := s.OpenStream(req.Context(), http.Header{headerForward: {info.encode()}})
 	if err != nil {
+		m.failed(router, nodeID)
 		m.countRequest(nodeID, forwardUpgrade, resultError)
-		m.refuse(rw, req, nodeID, http.StatusBadGateway, err.Error())
+		m.logger.Debug().Err(err).Str("peer", nodeID).Msg("Unable to open a stream for a request through the mesh")
 
-		return
+		return true
 	}
 	defer func() { _ = stream.Close() }()
 
+	m.forwardUpgraded(rw, req, stream, nodeID, router)
+
+	return false
+}
+
+// forwardUpgraded carries a request that asks to switch protocols, and what follows it, over an open stream.
+func (m *Mesh) forwardUpgraded(rw http.ResponseWriter, req *http.Request, stream Stream, nodeID, router string) {
 	out := req.Clone(req.Context())
 	out.RequestURI = ""
 
 	if err := out.Write(stream); err != nil {
+		m.failed(router, nodeID)
 		m.countRequest(nodeID, forwardUpgrade, resultError)
 		m.refuse(rw, req, nodeID, http.StatusBadGateway, err.Error())
 
@@ -273,6 +376,7 @@ func (m *Mesh) forwardUpgrade(rw http.ResponseWriter, req *http.Request, s *sess
 
 	resp, err := http.ReadResponse(reader, out)
 	if err != nil {
+		m.failed(router, nodeID)
 		m.countRequest(nodeID, forwardUpgrade, resultError)
 		m.refuse(rw, req, nodeID, http.StatusBadGateway, err.Error())
 
@@ -280,6 +384,7 @@ func (m *Mesh) forwardUpgrade(rw http.ResponseWriter, req *http.Request, s *sess
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	m.succeeded(router, nodeID)
 	m.countRequest(nodeID, forwardUpgrade, resultForwarded)
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
@@ -343,14 +448,6 @@ func clientIP(req *http.Request) string {
 	return host
 }
 
-// targetOf returns where the requests of a service of the mesh go.
-func (m *Mesh) targetOf(serviceName string) *forwardTarget {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return m.targets[serviceName]
-}
-
 // sessionTo returns the session of the link to an instance, nil when the link is down.
 func (m *Mesh) sessionTo(nodeID string) *session {
 	m.mu.Lock()
@@ -361,54 +458,145 @@ func (m *Mesh) sessionTo(nodeID string) *session {
 		return nil
 	}
 
-	return entry.link.current()
-}
-
-// order returns the instances that own a router in the order they are tried:
-// the highest priority first, and among the instances of one priority, the choice of the balance option.
-func (m *Mesh) order(target *forwardTarget, client string) []string {
-	candidates := slices.Clone(target.candidates)
-
-	var turn uint64
-	if m.conf.Balance == cluster.MeshBalanceRoundRobin {
-		turn = m.turn.Add(1)
+	s := entry.link.current()
+	if s == nil {
+		return nil
 	}
 
-	slices.SortStableFunc(candidates, func(a, b forwardCandidate) int {
+	// A connection that was just closed is still the one of the link until its pings notice:
+	// a request must not be lost to it when another place can serve it.
+	select {
+	case <-s.Done():
+		return nil
+	default:
+		return s
+	}
+}
+
+// plan returns the places to serve a request of a route, in the order they are tried.
+//
+// The instances that can serve it now come first, the highest priority first. Among the instances of one priority,
+// the balance option chooses, except that the default priority, 0, prefers this instance.
+// When its health check says that the local router is down, this instance comes last: it still answers as it would alone.
+func (m *Mesh) plan(target *forwardTarget, client string) []choice {
+	var choices []choice
+
+	localUp := target.local && !m.isLocalDown(target.router)
+	if localUp {
+		choices = append(choices, choice{local: true, nodeID: m.member.NodeID(), priority: target.localPriority})
+	}
+
+	for _, candidate := range target.candidates {
+		if candidate.down || m.quarantined(target.router, candidate.nodeID) || m.sessionTo(candidate.nodeID) == nil {
+			continue
+		}
+
+		choices = append(choices, choice{nodeID: candidate.nodeID, priority: candidate.priority})
+	}
+
+	roundRobin := m.conf.Balance == cluster.MeshBalanceRoundRobin
+
+	slices.SortStableFunc(choices, func(a, b choice) int {
 		if a.priority != b.priority {
 			return b.priority - a.priority
 		}
 
-		if m.conf.Balance == cluster.MeshBalanceRoundRobin {
-			return 0
+		if a.priority == 0 && a.local != b.local {
+			if a.local {
+				return -1
+			}
+
+			return 1
+		}
+
+		if roundRobin {
+			return strings.Compare(a.nodeID, b.nodeID)
 		}
 
 		// The same client goes to the same instance, whichever instance it reaches: every instance computes the same order.
 		return compareUint64(rendezvous(client, b.nodeID), rendezvous(client, a.nodeID))
 	})
 
-	nodeIDs := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		nodeIDs = append(nodeIDs, candidate.nodeID)
+	if roundRobin && len(choices) > 1 {
+		// Each request starts one instance further among the ones of the highest priority, unless this instance is preferred.
+		top := 0
+		for top < len(choices) && choices[top].priority == choices[0].priority {
+			top++
+		}
+
+		if top > 1 && !(choices[0].priority == 0 && choices[0].local) {
+			shift := int(m.turn.Add(1) % uint64(top)) //nolint:gosec // The remainder of a division by a small count.
+			copy(choices, slices.Concat(choices[shift:top], choices[:shift]))
+		}
 	}
 
-	if m.conf.Balance != cluster.MeshBalanceRoundRobin {
-		return nodeIDs
+	if target.local && !localUp {
+		choices = append(choices, choice{local: true, nodeID: m.member.NodeID(), priority: target.localPriority})
 	}
 
-	// Each request starts one instance further among the ones of the highest priority.
-	first := 0
-	for first < len(candidates) && candidates[first].priority == candidates[0].priority {
-		first++
+	return choices
+}
+
+const (
+	// quarantineAfter is how many requests in a row an instance may fail before it is left alone for a route.
+	quarantineAfter = 3
+
+	quarantineFirst   = 5 * time.Second
+	quarantineLongest = time.Minute
+)
+
+// quarantine counts the failures of an instance for a route, and keeps the instance away from it for a while after too many.
+type quarantine struct {
+	failures int
+	span     time.Duration
+	until    time.Time
+}
+
+func quarantineKey(router, nodeID string) string {
+	return router + "\x00" + nodeID
+}
+
+// failed records that a request for a route could not be delivered to an instance.
+func (m *Mesh) failed(router, nodeID string) {
+	now := m.now()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	q := m.quarantines[quarantineKey(router, nodeID)]
+	if q == nil {
+		q = &quarantine{}
+		m.quarantines[quarantineKey(router, nodeID)] = q
 	}
 
-	if first > 1 {
-		shift := int(turn % uint64(first)) //nolint:gosec // The remainder of a division by a small count.
-		rotated := slices.Concat(nodeIDs[shift:first], nodeIDs[:shift])
-		copy(nodeIDs, rotated)
+	q.failures++
+	if q.failures < quarantineAfter {
+		return
 	}
 
-	return nodeIDs
+	// An instance that fails again right after its time away stays away twice as long.
+	q.failures = 0
+	q.span = min(max(2*q.span, quarantineFirst), quarantineLongest)
+	q.until = now.Add(q.span)
+}
+
+// succeeded records that an instance served a request for a route.
+func (m *Mesh) succeeded(router, nodeID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.quarantines, quarantineKey(router, nodeID))
+}
+
+func (m *Mesh) quarantined(router, nodeID string) bool {
+	now := m.now()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	q := m.quarantines[quarantineKey(router, nodeID)]
+
+	return q != nil && now.Before(q.until)
 }
 
 func rendezvous(client, nodeID string) uint64 {
@@ -437,11 +625,6 @@ func (m *Mesh) LocalHTTPRouters() map[string]*dynamic.Router {
 	defer m.mu.Unlock()
 
 	return m.localHTTP
-}
-
-// SwitchHTTPHandlers replaces the handlers that serve these routers.
-func (m *Mesh) SwitchHTTPHandlers(handlers map[string]http.Handler) {
-	m.handlers.Store(&handlers)
 }
 
 // serveForwarded serves a request that another instance received and forwarded, with the router it names.

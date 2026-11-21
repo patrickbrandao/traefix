@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/traefik/traefik/v3/pkg/cluster"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
+	"github.com/traefik/traefik/v3/pkg/config/runtime"
 	"github.com/traefik/traefik/v3/pkg/observability/metrics"
 	"github.com/traefik/traefik/v3/pkg/version"
 )
@@ -100,10 +101,20 @@ type Mesh struct {
 	localHTTP map[string]*dynamic.Router
 	// handlers serve these routers by name, for the requests the other instances forward.
 	handlers atomic.Pointer[map[string]http.Handler]
-	// targets are where the requests of the routers learned from the mesh go, by service name.
-	targets map[string]*forwardTarget
+	// runtime is the routing configuration the handlers were built from.
+	runtime atomic.Pointer[runtime.Configuration]
+	// tables are the routes as the requests need them.
+	tables atomic.Pointer[forwardTables]
 	// turn counts the requests, for the round robin.
 	turn atomic.Uint64
+	// quarantines are the instances that failed for a route, by route and instance.
+	quarantines map[string]*quarantine
+
+	healthInterval time.Duration
+	// localBase are the routers to announce, as the providers give them. The announced table adds their state.
+	localBase []Route
+	// localDown are the announced routers that have no server to answer.
+	localDown atomic.Pointer[map[string]struct{}]
 
 	runCtx  context.Context //nolint:containedctx // The links learned while the mesh runs are started under it.
 	stopped bool
@@ -208,8 +219,11 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 		warned:            map[string]struct{}{},
 		publishCh:         make(chan struct{}, 1),
 		localHTTP:         map[string]*dynamic.Router{},
-		targets:           map[string]*forwardTarget{},
+		quarantines:       map[string]*quarantine{},
+		healthInterval:    defaultHealthInterval,
 	}
+
+	m.tables.Store(&forwardTables{})
 
 	m.lookupSRV = func(ctx context.Context, name string) ([]*net.SRV, error) {
 		// Without a service and a protocol, the name is looked up as it is written.
@@ -244,6 +258,7 @@ func (m *Mesh) Run(ctx context.Context) {
 	wg.Go(func() { m.listener.serve(ctx, m) })
 	wg.Go(func() { m.discover(ctx) })
 	wg.Go(func() { m.publishLoop(ctx) })
+	wg.Go(func() { m.healthLoop(ctx) })
 
 	wg.Wait()
 

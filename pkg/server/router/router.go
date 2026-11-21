@@ -50,6 +50,9 @@ type Manager struct {
 	tlsManager          *tls.Manager
 	parser              httpmuxer.SyntaxParser
 	providersPrecedence []string
+
+	// mesh chooses where the requests for the routers shared with other instances are served (Traefix).
+	mesh MeshDecider
 }
 
 // NewManager creates a new Manager.
@@ -409,9 +412,7 @@ func (m *Manager) buildHTTPHandler(ctx context.Context, router *runtime.RouterIn
 		chain = chain.Append(respondingtimeout.WrapHandler(*router.RespondingTimeouts))
 	}
 
-	mHandler := m.middlewaresBuilder.BuildMiddlewareChain(ctx, router.Middlewares)
-
-	return chain.Extend(*mHandler).Then(nextHandler)
+	return m.buildMiddlewaresAndService(ctx, chain, router, entryPointName, routerName, nextHandler)
 }
 
 // hasAncestorWithRespondingTimeouts reports whether a router up the tree has responding timeouts.
