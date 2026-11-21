@@ -216,9 +216,12 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 		routinesPool.GoCtx(clusterMember.Run)
 
 		if staticConfiguration.Cluster.Mesh != nil {
-			if _, err := mesh.New(staticConfiguration.Cluster, clusterMember); err != nil {
+			meshNode, err := mesh.New(staticConfiguration.Cluster, clusterMember)
+			if err != nil {
 				return nil, fmt.Errorf("preparing the mesh: %w", err)
 			}
+
+			routinesPool.GoCtx(meshNode.Run)
 		}
 	}
 
@@ -255,6 +258,7 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 	auth.SetMetricsRegistry(metricsRegistry)
 	corazamw.SetMetricsRegistry(metricsRegistry)
 	cluster.SetMetricsRegistry(metricsRegistry)
+	mesh.SetMetricsRegistry(metricsRegistry)
 	acme.SetMetricsRegistry(metricsRegistry)
 	accessLog := setupAccessLog(ctx, staticConfiguration.AccessLog)
 	tracer, tracerCloser := setupTracing(ctx, staticConfiguration.Tracing)

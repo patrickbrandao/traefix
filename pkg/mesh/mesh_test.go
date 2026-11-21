@@ -98,6 +98,7 @@ func Test_advertisedAddresses(t *testing.T) {
 
 func TestNew(t *testing.T) {
 	conf := newTestConfiguration()
+	conf.Mesh.Address = freeAddress(t)
 	conf.Mesh.Advertise = []string{"203.0.113.10:7443", "srv1.example.com:7443"}
 	conf.AdditionalTokens = []string{testOtherToken}
 
@@ -106,6 +107,7 @@ func TestNew(t *testing.T) {
 
 	mesh, err := New(conf, member)
 	require.NoError(t, err)
+	t.Cleanup(mesh.listener.close)
 
 	assert.Equal(t, conf.Mesh.Advertise, mesh.Advertise())
 	assert.Equal(t, "srv1", mesh.Identity().NodeID())
@@ -128,6 +130,22 @@ func TestNew_needsTheMeshOption(t *testing.T) {
 
 	conf.Mesh = nil
 
+	_, err = New(conf, member)
+	require.Error(t, err)
+}
+
+func TestNew_addressInUse(t *testing.T) {
+	conf := newTestConfiguration()
+	conf.Mesh.Address = freeAddress(t)
+
+	member, err := cluster.New(t.Context(), conf)
+	require.NoError(t, err)
+
+	first, err := New(conf, member)
+	require.NoError(t, err)
+	t.Cleanup(first.listener.close)
+
+	// The port is bound at once: a busy one stops the startup instead of leaving an instance that nobody can link to.
 	_, err = New(conf, member)
 	require.Error(t, err)
 }

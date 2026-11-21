@@ -172,9 +172,18 @@ servidor que o tem, sem rede overlay. Implementado até agora:
   com o mesmo token chegam à mesma autoridade e se verificam por TLS 1.3 mútuo, sem o token trafegar. Os
   certificados não vencem e são conferidos numa data fixa, então os relógios não precisam concordar. A
   impressão digital da autoridade sai no log e no anúncio da instância no Valkey (`mesh.authority`, com
-  `mesh.addr`). **Nenhuma ligação é aberta ainda** (etapa 2). Código em `pkg/mesh/` e
-  `pkg/cluster/mesh.go`; gancho no upstream em `cmd/traefik/traefik.go`. Documentação:
+  `mesh.addr`). Código em `pkg/mesh/` e `pkg/cluster/mesh.go`; gancho no upstream em
+  `cmd/traefik/traefik.go`. Documentação:
   `docs/content/reference/install-configuration/cluster-mesh.md`.
+
+- **Ligação** (etapa 2): cada instância escuta em `cluster.mesh.address` (UDP e TCP) e disca para os
+  endereços de `cluster.mesh.peers`. A ligação é HTTP/3 sobre QUIC, com reserva em HTTP/2 sobre TLS/TCP,
+  sob o ALPN próprio `traefix-mesh/1`; quem abre a ligação envia as requisições, então um par tem duas.
+  Apresentação (`/v1/hello`), ping três vezes por `linkTimeout`, rediscagem de 1 s a 30 s, volta ao QUIC
+  a cada 5 min. Os túneis que as próximas etapas usam já existem e estão testados nos dois transportes:
+  stream por `CONNECT` (`session.OpenStream`) e fluxo de pacotes por datagramas QUIC com sobra pelo
+  stream (`session.OpenFlow`). Métricas `traefik_mesh_peers`, `traefik_mesh_link_up` e
+  `traefik_mesh_link_rtt_seconds`. **Nenhuma rota é anunciada nem encaminhada ainda** (etapas 4 e 5).
 
 ## Infopage
 

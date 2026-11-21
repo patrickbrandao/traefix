@@ -100,6 +100,11 @@ func (c *Cluster) NodeID() string {
 	return c.self.ID
 }
 
+// Instance identifies this process: it changes every time the instance starts.
+func (c *Cluster) Instance() string {
+	return c.self.Instance
+}
+
 // Prefix returns the prefix that tells this cluster from the others.
 func (c *Cluster) Prefix() string {
 	return c.conf.Prefix

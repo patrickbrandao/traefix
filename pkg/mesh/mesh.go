@@ -1,13 +1,19 @@
 package mesh
 
 import (
+	"context"
 	"errors"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/traefik/traefik/v3/pkg/cluster"
+	"github.com/traefik/traefik/v3/pkg/version"
 )
 
 const (
@@ -23,9 +29,44 @@ type Mesh struct {
 	member    *cluster.Cluster
 	identity  *Identity
 	advertise []string
+	version   string
+	logger    zerolog.Logger
+
+	linkTimeout       time.Duration
+	quicDialTimeout   time.Duration
+	quicRetryInterval time.Duration
+	redialFirst       time.Duration
+	redialLongest     time.Duration
+
+	listener *listener
+	links    []*link
+
+	mu sync.Mutex
+	// inbound are the instances that opened a link to this one, by identifier.
+	inbound map[string]InboundStatus
 }
 
-// New prepares the mesh of an instance: its identity, and the addresses it tells the other instances.
+// InboundStatus is an instance that opened a link to this one.
+type InboundStatus struct {
+	NodeID    string
+	Version   string
+	Remote    string
+	Advertise []string
+	LastSeen  time.Time
+}
+
+// Status is what an instance knows of its links.
+type Status struct {
+	NodeID    string
+	Advertise []string
+	// Links are the links this instance opens, in the order of their addresses.
+	Links []LinkStatus
+	// Inbound are the instances that opened a link to this one, in the order of their identifiers.
+	Inbound []InboundStatus
+}
+
+// New prepares the mesh of an instance: its identity, the addresses it tells the other instances,
+// and the address it listens on, which is bound at once so that a busy port stops the startup.
 func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 	if conf == nil || conf.Mesh == nil {
 		return nil, errors.New("the mesh needs the cluster mesh option")
@@ -64,7 +105,76 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 	logger.Info().Str("authority", identity.Fingerprint()).Int("additionalTokens", len(additional)).
 		Msg("The mesh identity of this instance is ready")
 
-	return &Mesh{conf: conf.Mesh, member: member, identity: identity, advertise: advertise}, nil
+	linkTimeout := time.Duration(conf.Mesh.LinkTimeout)
+
+	l, err := newListener(conf.Mesh.Address, conf.Mesh.Transport, identity, linkTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	m := &Mesh{
+		conf:              conf.Mesh,
+		member:            member,
+		identity:          identity,
+		advertise:         advertise,
+		version:           version.Version,
+		logger:            logger,
+		linkTimeout:       linkTimeout,
+		quicDialTimeout:   min(defaultQUICDialTimeout, linkTimeout),
+		quicRetryInterval: defaultQUICRetryInterval,
+		redialFirst:       defaultRedialFirst,
+		redialLongest:     defaultRedialLongest,
+		listener:          l,
+		inbound:           map[string]InboundStatus{},
+	}
+
+	var seen []string
+	for _, address := range conf.Mesh.Peers {
+		if !slices.Contains(seen, address) {
+			seen = append(seen, address)
+			m.links = append(m.links, newLink(m, address))
+		}
+	}
+
+	return m, nil
+}
+
+// Run accepts the links of the other instances and keeps the links to them open, until the context is done.
+func (m *Mesh) Run(ctx context.Context) {
+	ctx = m.logger.WithContext(ctx)
+
+	var wg sync.WaitGroup
+
+	wg.Go(func() { m.listener.serve(ctx, m) })
+
+	for _, l := range m.links {
+		wg.Go(func() { l.run(ctx) })
+	}
+
+	wg.Wait()
+
+	for _, l := range m.links {
+		l.close()
+	}
+}
+
+// Status returns the links of this instance.
+func (m *Mesh) Status() Status {
+	status := Status{NodeID: m.member.NodeID(), Advertise: m.advertise}
+
+	for _, l := range m.links {
+		status.Links = append(status.Links, l.snapshot())
+	}
+
+	m.mu.Lock()
+	for _, inbound := range m.inbound {
+		status.Inbound = append(status.Inbound, inbound)
+	}
+	m.mu.Unlock()
+
+	slices.SortFunc(status.Inbound, func(a, b InboundStatus) int { return strings.Compare(a.NodeID, b.NodeID) })
+
+	return status
 }
 
 // Identity returns what this instance shows to the others and checks of them.
@@ -75,6 +185,74 @@ func (m *Mesh) Identity() *Identity {
 // Advertise returns the addresses the other instances reach this instance at.
 func (m *Mesh) Advertise() []string {
 	return m.advertise
+}
+
+// greeted records the instance that introduced itself through a link it opened.
+func (m *Mesh) greeted(theirs hello, remote string) {
+	m.mu.Lock()
+	_, known := m.inbound[theirs.NodeID]
+	m.inbound[theirs.NodeID] = InboundStatus{
+		NodeID:    theirs.NodeID,
+		Version:   theirs.Version,
+		Remote:    remote,
+		Advertise: theirs.Advertise,
+		LastSeen:  time.Now(),
+	}
+	m.mu.Unlock()
+
+	if !known {
+		m.logger.Info().Str("peer", theirs.NodeID).Str("remote", remote).Msg("An instance of the mesh linked to this one")
+	}
+}
+
+// seen records a sign of life of an instance that opened a link to this one.
+func (m *Mesh) seen(nodeID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if inbound, ok := m.inbound[nodeID]; ok {
+		inbound.LastSeen = time.Now()
+		m.inbound[nodeID] = inbound
+	}
+}
+
+// linkChanged follows a link in the metrics.
+func (m *Mesh) linkChanged(previous, current LinkStatus) {
+	// A link has no name in the metrics before the instance behind its address is known:
+	// until then it only counts among the links that are down.
+	if current.NodeID != "" && !current.Self {
+		for _, transport := range []string{TransportQUIC, TransportTCP} {
+			setLinkUp(current.NodeID, transport, current.Up && current.Transport == transport)
+		}
+
+		setLinkRTT(current.NodeID, current.RTT)
+	}
+
+	// Another instance answers at the address by now.
+	if previous.NodeID != "" && previous.NodeID != current.NodeID && !previous.Self {
+		for _, transport := range []string{TransportQUIC, TransportTCP} {
+			setLinkUp(previous.NodeID, transport, false)
+		}
+
+		setLinkRTT(previous.NodeID, 0)
+	}
+
+	up, down := 0, 0
+	for _, l := range m.links {
+		switch status := l.snapshot(); {
+		case status.Self:
+		case status.Up:
+			up++
+		default:
+			down++
+		}
+	}
+
+	setPeers(up, down)
+}
+
+func (m *Mesh) linkMeasured(status LinkStatus) {
+	setLinkRTT(status.NodeID, status.RTT)
 }
 
 // advertisedAddresses returns the addresses to tell the other instances, and whether they had to be guessed.

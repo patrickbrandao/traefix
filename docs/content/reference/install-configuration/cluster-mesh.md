@@ -7,7 +7,7 @@ The `cluster.mesh` option links the Traefix instances of a [cluster](./cluster.m
 
 !!! warning "Work in progress"
 
-    In this version, an instance checks the options of this page, prepares its identity from the cluster token, and tells the cluster its address. The instance opens no link and forwards no request yet.
+    In this version, the instances link to the addresses of `cluster.mesh.peers` and watch their links. They announce no router and forward no request yet. The `dns`, `peersFile`, `peerRetention`, `export` and `balance` options are checked and have no effect yet.
 
 ## Configuration Examples
 
@@ -61,7 +61,28 @@ The mesh doesn't need the `cluster.redis` option. With a Redis server, the insta
 | <a id="opt-cluster-mesh-export" href="#opt-cluster-mesh-export" title="#opt-cluster-mesh-export">`cluster.mesh.export`</a> | Routers that the instance announces to the other instances: `all`, or `labeled` for the routers that opt in. | `all` | No |
 | <a id="opt-cluster-mesh-balance" href="#opt-cluster-mesh-balance" title="#opt-cluster-mesh-balance">`cluster.mesh.balance`</a> | Choice between the instances with the same priority for a router: `clientIP` sends a client to the same instance whichever instance the client reaches, `roundRobin` spreads the requests evenly. | `clientIP` | No |
 
-Traefix doesn't start when the `cluster.mesh` option is set without a token, when the token has less than 32 characters or its file can't be read, or when an address has no port.
+Traefix doesn't start when the `cluster.mesh` option is set without a token, when the token has less than 32 characters or its file can't be read, when an address has no port, or when the port of `cluster.mesh.address` is in use.
+
+## Links
+
+Each instance listens on `cluster.mesh.address` and opens a link to every address of `cluster.mesh.peers`. A link serves one direction: the instance that opens the link is the one that sends requests through it. Two instances that both name each other have two links.
+
+- **A link uses QUIC, or TLS over TCP.** With `transport: auto`, the instance tries QUIC for 3 seconds, then TCP. An instance linked over TCP tries QUIC again every 5 minutes, and moves the link when QUIC gets through.
+- **Open the port in UDP and in TCP.** With `transport: quic` the instance only listens in UDP, and with `transport: tcp` only in TCP.
+- **Both ends verify each other.** A link needs TLS 1.3 and a certificate of the [cluster token](#cluster-token) on both sides. An instance with another token gets a warning in its logs that names the cause.
+- **A link is lost after `linkTimeout` without an answer.** The instance pings the other end three times per `linkTimeout`, and logs the loss. It then dials again after 1 second, and doubles the wait up to 30 seconds while the other instance is away.
+- **The list of peers can name the instance itself.** The instance notices that it reached itself and stops dialing that address, so that every instance can get the same list.
+- **Two instances can't share a `nodeID`.** An instance that reaches another one with its own `nodeID` doesn't link to it, and logs an error.
+
+## Metrics
+
+| Metric | Labels | Contains |
+|:-------|:-------|:---------|
+| <a id="opt-traefik-mesh-peers" href="#opt-traefik-mesh-peers" title="#opt-traefik-mesh-peers">`traefik_mesh_peers`</a> | `state` | Number of instances that this instance opens a link to, with the link `up` or `down`. |
+| <a id="opt-traefik-mesh-link-up" href="#opt-traefik-mesh-link-up" title="#opt-traefik-mesh-link-up">`traefik_mesh_link_up`</a> | `peer`, `transport` | `1` for the transport, `quic` or `tcp`, that the link to the instance is up with, `0` otherwise. |
+| <a id="opt-traefik-mesh-link-rtt-seconds" href="#opt-traefik-mesh-link-rtt-seconds" title="#opt-traefik-mesh-link-rtt-seconds">`traefik_mesh_link_rtt_seconds`</a> | `peer` | Time the other instance took to answer the last ping, `0` while the link is down. |
+
+The `peer` label is the `nodeID` of the other instance. An address that no instance answered at yet has no `nodeID`: it only counts in `traefik_mesh_peers`. Datadog, StatsD and InfluxDB use the same names with dots, for example `traefik.mesh.link.up`.
 
 ## Cluster Token
 

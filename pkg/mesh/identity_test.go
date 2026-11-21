@@ -29,8 +29,8 @@ func newTestIdentity(t *testing.T, nodeID, token string, additional ...string) *
 	return identity
 }
 
-// link opens a TLS connection between two instances, and returns the instance each side found at the other end.
-func link(t *testing.T, server, client *Identity) (string, string, error) {
+// handshake opens a TLS connection between two instances, and returns the instance each side found at the other end.
+func handshake(t *testing.T, server, client *Identity) (string, string, error) {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -138,21 +138,21 @@ func TestDeriveAuthority_productionCost(t *testing.T) {
 	assert.Equal(t, "74994b0d2c79d819", authority.fingerprint())
 }
 
-func TestIdentity_link(t *testing.T) {
+func TestIdentity_handshake(t *testing.T) {
 	first := newTestIdentity(t, "srv1", testToken)
 	second := newTestIdentity(t, "srv-2.example_com", testToken)
 
 	assert.Equal(t, first.Fingerprint(), second.Fingerprint())
 	assert.Equal(t, "srv1", first.NodeID())
 
-	seenByServer, seenByClient, err := link(t, first, second)
+	seenByServer, seenByClient, err := handshake(t, first, second)
 	require.NoError(t, err)
 
 	assert.Equal(t, "srv-2.example_com", seenByServer)
 	assert.Equal(t, "srv1", seenByClient)
 }
 
-func TestIdentity_link_refused(t *testing.T) {
+func TestIdentity_handshake_refused(t *testing.T) {
 	testCases := []struct {
 		desc   string
 		server *Identity
@@ -183,16 +183,16 @@ func TestIdentity_link_refused(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.desc, func(t *testing.T) {
-			_, _, err := link(t, test.server, test.client)
+			_, _, err := handshake(t, test.server, test.client)
 			require.Error(t, err)
 
-			_, _, err = link(t, test.client, test.server)
+			_, _, err = handshake(t, test.client, test.server)
 			require.Error(t, err)
 		})
 	}
 }
 
-func TestIdentity_link_tokenChange(t *testing.T) {
+func TestIdentity_handshake_tokenChange(t *testing.T) {
 	// The steps of a token change, one instance at a time: every pair of instances can link at every step.
 	steps := []struct {
 		desc   string
@@ -228,10 +228,10 @@ func TestIdentity_link_tokenChange(t *testing.T) {
 
 	for _, step := range steps {
 		t.Run(step.desc, func(t *testing.T) {
-			_, _, err := link(t, step.first, step.second)
+			_, _, err := handshake(t, step.first, step.second)
 			require.NoError(t, err)
 
-			_, _, err = link(t, step.second, step.first)
+			_, _, err = handshake(t, step.second, step.first)
 			require.NoError(t, err)
 
 			assert.True(t, step.first.Accepts(step.second.Fingerprint()))
