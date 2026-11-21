@@ -131,6 +131,8 @@ func (h *Handler) createRouter() *mux.Router {
 	apiRouter.Methods(http.MethodGet).Path("/api/certificates").HandlerFunc(h.getCertificates)
 	apiRouter.Methods(http.MethodGet).Path("/api/certificates/{certificateID}").HandlerFunc(h.getCertificate)
 
+	appendTraefixRoutes(apiRouter)
+
 	version.Handler{}.Append(apiRouter)
 
 	return router

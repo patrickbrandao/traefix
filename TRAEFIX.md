@@ -191,8 +191,19 @@ servidor que o tem, sem rede overlay. Implementado até agora:
   endereços de quem disca e os pares com que ele está em contato; `/v1/peers` a cada 30 s) e o
   `mesh.peersFile`. Quem recebe uma ligação liga de volta, então uma instância nova que conhece uma só
   acaba ligada a todas. Um par tem uma ligação só, com vários endereços tentados em ordem. Pares
-  aprendidos saem após `peerRetention` sem contato; os de `mesh.peers` nunca. **Nenhuma rota é anunciada
-  nem encaminhada ainda** (etapas 4 e 5).
+  aprendidos saem após `peerRetention` sem contato; os de `mesh.peers` nunca.
+
+- **Rotas** (etapa 4): campos `mesh.priority` e `mesh.export` nos routers HTTP, TCP e UDP
+  (`pkg/config/dynamic/mesh_traefix.go`; campo `Mesh` no fim de `Router`, `TCPRouter` e `UDPRouter`, e o
+  deepcopy regenerado com `deepcopy-gen`). A malha lê os routers dos providers locais por um
+  transformador do `ConfigurationWatcher`, antes de os middlewares do entrypoint entrarem, e anuncia
+  regra, prioridade, entrypoints e TLS. Cada ligação acompanha a tabela do outro lado por consulta longa
+  (`/v1/routes`, com geração). O provider `mesh` cria um router `<router>-<provider>@mesh` para cada
+  router HTTP anunciado que a instância não tem, nos entrypoints de mesmo nome. `GET /api/mesh` mostra
+  ligações, rotas exportadas e o que foi feito das importadas. **Ainda não há encaminhamento**: o serviço
+  dos routers importados responde 503 (etapa 5). Ganchos no upstream: `cmd/traefik/traefik.go` (duas
+  chamadas; o resto em `traefix_mesh.go`), `pkg/api/handler.go` (`appendTraefixRoutes`) e
+  `pkg/server/service/managerfactory.go` (`traefixBuilders`).
 
 ## Infopage
 

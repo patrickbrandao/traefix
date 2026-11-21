@@ -30,6 +30,8 @@ type ManagerFactory struct {
 	acmeHTTPHandler  http.Handler
 
 	routinesPool *safe.Pool
+
+	traefixBuilders []ServiceBuilder
 }
 
 // NewManagerFactory creates a new ManagerFactory.
@@ -86,5 +88,5 @@ func (f *ManagerFactory) Build(configuration *runtime.Configuration) *Manager {
 	}
 
 	internalHandlers := NewInternalHandlers(apiHandler, f.restHandler, f.metricsHandler, f.pingHandler, f.dashboardHandler, f.acmeHTTPHandler)
-	return NewManager(configuration.Services, f.observabilityMgr, f.routinesPool, f.transportManager, f.proxyBuilder, internalHandlers)
+	return NewManager(configuration.Services, f.observabilityMgr, f.routinesPool, f.transportManager, f.proxyBuilder, append([]ServiceBuilder{internalHandlers}, f.traefixBuilders...)...)
 }

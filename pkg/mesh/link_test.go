@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/cluster"
+	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/observability/metrics"
 )
 
@@ -25,6 +26,9 @@ type testNode struct {
 	address string
 	mesh    *Mesh
 	stop    func()
+
+	// configurations receives what the mesh gives to the routing configuration.
+	configurations chan dynamic.Message
 
 	// What the instance gets each time it starts.
 	registry  metrics.Registry
@@ -109,6 +113,13 @@ func (n *testNode) start() {
 	n.mesh.exchangeInterval = 100 * time.Millisecond
 	n.mesh.now = n.now
 	n.mesh.metrics = n.registry
+	n.mesh.routesPollTimeout = 200 * time.Millisecond
+	n.mesh.publishDelay = 10 * time.Millisecond
+	n.mesh.SetEntryPoints([]string{"traefik", "web", "websecure"}, []string{"dns"}, []string{"web", "websecure"})
+
+	// The routing configuration of the instance, as far as the mesh is concerned.
+	n.configurations = make(chan dynamic.Message, 100)
+	require.NoError(n.t, n.mesh.Provider().Provide(n.configurations, nil))
 
 	if n.lookupSRV != nil {
 		n.mesh.lookupSRV = n.lookupSRV

@@ -57,6 +57,8 @@ func (w *UDPWRRService) SetDefaults() {
 type UDPRouter struct {
 	EntryPoints []string `json:"entryPoints,omitempty" toml:"entryPoints,omitempty" yaml:"entryPoints,omitempty" export:"true"`
 	Service     string   `json:"service,omitempty" toml:"service,omitempty" yaml:"service,omitempty" export:"true"`
+
+	Mesh *RouterMesh `json:"mesh,omitempty" toml:"mesh,omitempty" yaml:"mesh,omitempty" export:"true"`
 }
 
 // +k8s:deepcopy-gen=true

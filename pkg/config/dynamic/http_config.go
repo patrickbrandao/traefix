@@ -101,6 +101,8 @@ type Router struct {
 	RespondingTimeouts          *RouterRespondingTimeouts          `json:"respondingTimeouts,omitempty" toml:"respondingTimeouts,omitempty" yaml:"respondingTimeouts,omitempty" export:"true"`
 	DefaultRule                 bool                               `json:"-" toml:"-" yaml:"-" label:"-" file:"-"`
 	DeniedEncodedPathCharacters *RouterDeniedEncodedPathCharacters `json:"-" toml:"-" yaml:"-" label:"-" file:"-" kv:"-"`
+
+	Mesh *RouterMesh `json:"mesh,omitempty" toml:"mesh,omitempty" yaml:"mesh,omitempty" export:"true"`
 }
 
 // +k8s:deepcopy-gen=true

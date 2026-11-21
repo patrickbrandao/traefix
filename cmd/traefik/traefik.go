@@ -207,6 +207,7 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 	// Cluster (Traefix)
 
 	var clusterMember *cluster.Cluster
+	var meshNode *mesh.Mesh
 	if staticConfiguration.Cluster != nil {
 		clusterMember, err = cluster.New(ctx, staticConfiguration.Cluster)
 		if err != nil {
@@ -216,12 +217,10 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 		routinesPool.GoCtx(clusterMember.Run)
 
 		if staticConfiguration.Cluster.Mesh != nil {
-			meshNode, err := mesh.New(staticConfiguration.Cluster, clusterMember)
+			meshNode, err = mesh.New(staticConfiguration.Cluster, clusterMember)
 			if err != nil {
 				return nil, fmt.Errorf("preparing the mesh: %w", err)
 			}
-
-			routinesPool.GoCtx(meshNode.Run)
 		}
 	}
 
@@ -368,6 +367,10 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 		"internal",
 		staticConfiguration.Core != nil && staticConfiguration.Core.StrictTLSOptions,
 	)
+
+	if err := wireMesh(meshNode, staticConfiguration, providerAggregator, managerFactory, watcher, routinesPool); err != nil {
+		return nil, fmt.Errorf("connecting the mesh to the routing: %w", err)
+	}
 
 	// TLS
 	watcher.AddListener(func(conf dynamic.Configuration) {

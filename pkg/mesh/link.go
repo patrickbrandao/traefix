@@ -106,10 +106,52 @@ func (l *link) run(ctx context.Context) {
 
 		l.setUp(s, address)
 
+		// The routes of the instance are followed for as long as the link is up, and dropped with it.
+		followCtx, stopFollowing := context.WithCancel(ctx)
+		followed := make(chan struct{})
+
+		go func() {
+			defer close(followed)
+			l.followRoutes(followCtx, s.peer)
+		}()
+
 		err = l.watch(ctx, address)
 
+		stopFollowing()
+		<-followed
+
 		l.close()
+		l.mesh.setImported(s.peer, nil)
 		l.setDown(ctx, err)
+	}
+}
+
+// followRoutes keeps the table of the routers of the other instance up to date, until the context is done.
+func (l *link) followRoutes(ctx context.Context, nodeID string) {
+	for ctx.Err() == nil {
+		s := l.current()
+		if s == nil {
+			return
+		}
+
+		table, err := l.mesh.askRoutes(ctx, s, l.mesh.importedFrom(nodeID))
+
+		switch {
+		case ctx.Err() != nil:
+			return
+
+		case err != nil:
+			// The pings are what tells a lost link: this only waits for the session that follows, if any.
+			l.logger.Debug().Err(err).Str("peer", nodeID).Msg("Unable to ask an instance of the mesh for its routes")
+
+			select {
+			case <-time.After(l.mesh.redialFirst):
+			case <-ctx.Done():
+			}
+
+		case table != nil:
+			l.mesh.setImported(nodeID, table)
+		}
 	}
 }
 

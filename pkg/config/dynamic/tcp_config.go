@@ -79,6 +79,8 @@ type TCPRouter struct {
 	RuleSyntax string              `json:"ruleSyntax,omitempty" toml:"ruleSyntax,omitempty" yaml:"ruleSyntax,omitempty" export:"true"`
 	Priority   int                 `json:"priority,omitempty" toml:"priority,omitempty,omitzero" yaml:"priority,omitempty" export:"true"`
 	TLS        *RouterTCPTLSConfig `json:"tls,omitempty" toml:"tls,omitempty" yaml:"tls,omitempty" label:"allowEmpty" file:"allowEmpty" kv:"allowEmpty" export:"true"`
+
+	Mesh *RouterMesh `json:"mesh,omitempty" toml:"mesh,omitempty" yaml:"mesh,omitempty" export:"true"`
 }
 
 // +k8s:deepcopy-gen=true

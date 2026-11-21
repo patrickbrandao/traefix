@@ -52,6 +52,9 @@ func (m *Mesh) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		m.seen(peerFrom(req.Context()))
 		rw.WriteHeader(http.StatusNoContent)
 
+	case req.Method == http.MethodGet && req.URL.Path == pathRoutes:
+		m.serveRoutes(rw, req)
+
 	case req.Method == http.MethodGet && req.URL.Path == pathPeers:
 		m.seen(peerFrom(req.Context()))
 		rw.Header().Set("Content-Type", "application/json")

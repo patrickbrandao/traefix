@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/traefik/traefik/v3/pkg/cluster"
+	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/observability/metrics"
 	"github.com/traefik/traefik/v3/pkg/version"
 )
@@ -68,6 +69,30 @@ type Mesh struct {
 	refused map[string]struct{}
 	// dirty tells that the file of learned instances is out of date.
 	dirty bool
+
+	// The entry points of this instance: the ones a router can listen on (all but the UDP ones), the UDP ones,
+	// and the ones of a router that names none.
+	entryPoints        []string
+	udpEntryPoints     []string
+	defaultEntryPoints []string
+
+	routesPollTimeout time.Duration
+	publishDelay      time.Duration
+
+	// exported are the routers this instance announces. Its generation changes with it, and exportChanged is closed then.
+	exported         []Route
+	exportGeneration uint64
+	exportChanged    chan struct{}
+	// localRouters are the names of all the routers of the local providers.
+	localRouters map[string]struct{}
+	// imported are the tables of the other instances, by identifier.
+	imported map[string]*importedTable
+	// importReport is what became of the routes of the other instances.
+	importReport []ImportedRoute
+	warned       map[string]struct{}
+
+	configurationChan chan<- dynamic.Message
+	publishCh         chan struct{}
 
 	runCtx  context.Context //nolint:containedctx // The links learned while the mesh runs are started under it.
 	stopped bool
@@ -163,6 +188,14 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 		byAddress:         map[string]*peerEntry{},
 		selfAddresses:     map[string]struct{}{},
 		refused:           map[string]struct{}{},
+		routesPollTimeout: routesPollTimeout,
+		publishDelay:      publishDelay,
+		exported:          []Route{},
+		exportChanged:     make(chan struct{}),
+		localRouters:      map[string]struct{}{},
+		imported:          map[string]*importedTable{},
+		warned:            map[string]struct{}{},
+		publishCh:         make(chan struct{}, 1),
 	}
 
 	m.lookupSRV = func(ctx context.Context, name string) ([]*net.SRV, error) {
@@ -197,6 +230,7 @@ func (m *Mesh) Run(ctx context.Context) {
 
 	wg.Go(func() { m.listener.serve(ctx, m) })
 	wg.Go(func() { m.discover(ctx) })
+	wg.Go(func() { m.publishLoop(ctx) })
 
 	wg.Wait()
 
@@ -240,6 +274,14 @@ func (m *Mesh) Status() Status {
 	slices.SortFunc(status.Inbound, func(a, b InboundStatus) int { return strings.Compare(a.NodeID, b.NodeID) })
 
 	return status
+}
+
+// SetEntryPoints tells the mesh the entry points of this instance: the ones a router can listen on, the UDP ones,
+// and the ones of a router that names none. It must be called before Run.
+func (m *Mesh) SetEntryPoints(entryPoints, udpEntryPoints, defaultEntryPoints []string) {
+	m.entryPoints = entryPoints
+	m.udpEntryPoints = udpEntryPoints
+	m.defaultEntryPoints = defaultEntryPoints
 }
 
 // Identity returns what this instance shows to the others and checks of them.
