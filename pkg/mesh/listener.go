@@ -30,9 +30,11 @@ type listener struct {
 	identity    *Identity
 	linkTimeout time.Duration
 
-	udp  *net.UDPConn
-	quic *quic.Listener
-	tcp  net.Listener
+	udp *net.UDPConn
+	// transport listens and dials on the UDP socket: the links this instance opens leave from the port of the mesh.
+	transport *quic.Transport
+	quic      *quic.Listener
+	tcp       net.Listener
 
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}
@@ -53,7 +55,9 @@ func newListener(address, transport string, identity *Identity, linkTimeout time
 			return nil, fmt.Errorf("listening on the mesh address in UDP: %w", err)
 		}
 
-		l.quic, err = quic.Listen(l.udp, identity.ServerTLS(alpnMesh), quicConfig(linkTimeout))
+		l.transport = &quic.Transport{Conn: l.udp}
+
+		l.quic, err = l.transport.Listen(identity.ServerTLS(alpnMesh), quicConfig(linkTimeout))
 		if err != nil {
 			l.close()
 			return nil, fmt.Errorf("listening on the mesh address in QUIC: %w", err)
@@ -201,6 +205,11 @@ func (l *listener) close() {
 
 	if l.quic != nil {
 		_ = l.quic.Close()
+	}
+
+	// The links this instance opened over QUIC end with the socket they share.
+	if l.transport != nil {
+		_ = l.transport.Close()
 	}
 
 	if l.udp != nil {

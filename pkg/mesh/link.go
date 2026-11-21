@@ -240,7 +240,9 @@ func (l *link) open(ctx context.Context, address, transport string, timeout time
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	dial := dialQUIC
+	dial := func(ctx context.Context, identity *Identity, address string, linkTimeout time.Duration) (*session, error) {
+		return dialQUICFrom(ctx, l.mesh.listener.transport, identity, address, linkTimeout)
+	}
 	if transport == TransportTCP {
 		dial = dialTCP
 	}

@@ -40,7 +40,8 @@ type session struct {
 
 	h3    *http3.ClientConn
 	qconn *quic.Conn
-	udp   net.PacketConn
+	// closeUDP closes the socket of the session, when it has one of its own.
+	closeUDP func()
 
 	h2   *http2.ClientConn
 	conn net.Conn
@@ -70,7 +71,7 @@ func (s *session) Close() {
 	s.closeOnce.Do(func() {
 		if s.qconn != nil {
 			_ = s.qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeNoError), "")
-			_ = s.udp.Close()
+			s.closeUDP()
 
 			return
 		}
@@ -91,41 +92,62 @@ func quicConfig(linkTimeout time.Duration) *quic.Config {
 	}
 }
 
-// dialQUIC opens a link over QUIC.
+// dialQUIC opens a link over QUIC, from a socket of its own.
 func dialQUIC(ctx context.Context, identity *Identity, address string, linkTimeout time.Duration) (*session, error) {
+	return dialQUICFrom(ctx, nil, identity, address, linkTimeout)
+}
+
+// dialQUICFrom opens a link over QUIC from the socket of a transport, or from a socket of its own without one.
+// The socket of the listener of the mesh is the one the links leave from: their source port is the port of the mesh,
+// which is what lets an instance reach back a satellite through the mapping its NAT opened.
+func dialQUICFrom(ctx context.Context, transport *quic.Transport, identity *Identity, address string, linkTimeout time.Duration) (*session, error) {
 	remote, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		return nil, err
 	}
 
-	udp, err := net.ListenUDP("udp", nil)
-	if err != nil {
-		return nil, err
+	// A socket of its own closes with the session; a shared one stays with the listener.
+	var own *net.UDPConn
+
+	if transport == nil {
+		own, err = net.ListenUDP("udp", nil)
+		if err != nil {
+			return nil, err
+		}
+
+		transport = &quic.Transport{Conn: own}
 	}
 
-	qconn, err := quic.Dial(ctx, udp, remote, identity.ClientTLS(alpnMesh), quicConfig(linkTimeout))
+	closeOwn := func() {
+		if own != nil {
+			_ = transport.Close()
+			_ = own.Close()
+		}
+	}
+
+	qconn, err := transport.Dial(ctx, remote, identity.ClientTLS(alpnMesh), quicConfig(linkTimeout))
 	if err != nil {
-		_ = udp.Close()
+		closeOwn()
 		return nil, err
 	}
 
 	peer, err := identity.PeerNode(qconn.ConnectionState().TLS)
 	if err != nil {
 		_ = qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeNoError), "")
-		_ = udp.Close()
+		closeOwn()
 
 		return nil, err
 	}
 
-	transport := &http3.Transport{EnableDatagrams: true}
+	h3 := &http3.Transport{EnableDatagrams: true}
 
 	return &session{
 		transport: TransportQUIC,
 		peer:      peer,
 		remote:    remote,
-		h3:        transport.NewClientConn(qconn),
+		h3:        h3.NewClientConn(qconn),
 		qconn:     qconn,
-		udp:       udp,
+		closeUDP:  closeOwn,
 	}, nil
 }
 

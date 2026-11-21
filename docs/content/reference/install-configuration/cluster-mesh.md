@@ -66,6 +66,7 @@ Each instance listens on `cluster.mesh.address` and opens a link to every instan
 
 - **A link uses QUIC, or TLS over TCP.** With `transport: auto`, the instance tries QUIC for 3 seconds, then TCP. An instance linked over TCP tries QUIC again every 5 minutes, and moves the link when QUIC gets through.
 - **Open the port in UDP and in TCP.** With `transport: quic` the instance only listens in UDP, and with `transport: tcp` only in TCP.
+- **A link over QUIC leaves from the port of `cluster.mesh.address`.** The instance dials from the socket it listens on, so a firewall between the instances only needs that port in UDP, in both directions. A link over TCP leaves from a port that the system chooses.
 - **QUIC costs more than TCP.** QUIC runs in the process, and carries less traffic than TCP for the same CPU. Between servers on the same network with heavy traffic, `transport: tcp` can carry more.
 - **Both ends verify each other.** A link needs TLS 1.3 and a certificate of the [cluster token](#cluster-token) on both sides. An instance with another token gets a warning in its logs that names the cause.
 - **A link is lost after `linkTimeout` without an answer.** The instance pings the other end three times per `linkTimeout`, and logs the loss. It then dials again after 1 second, and doubles the wait up to 30 seconds while the other instance is away.

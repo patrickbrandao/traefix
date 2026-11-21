@@ -491,3 +491,37 @@ func TestMesh_metrics(t *testing.T) {
 	assert.InDelta(t, 0, value(registry.linkUp, "peer=srv1=transport=quic;"), 0)
 	assert.InDelta(t, 0, value(registry.linkRTT, "peer=srv1;"), 0)
 }
+
+func TestMesh_link_leavesFromTheMeshPort(t *testing.T) {
+	first := newTestNode(t, "srv1", testToken, nil)
+	second := newTestNode(t, "srv2", testToken, nil, first.address)
+
+	second.waitLinked("srv1")
+
+	// The link over QUIC leaves from the socket the instance listens on: the other end sees the port of the mesh,
+	// which is the one a satellite needs to be reached back through its NAT.
+	require.Eventually(t, func() bool {
+		for _, inbound := range first.mesh.Status().Inbound {
+			if inbound.NodeID == "srv2" {
+				return inbound.Remote == second.address
+			}
+		}
+
+		return false
+	}, 10*time.Second, 10*time.Millisecond)
+
+	// The instance links back from its own port too, and a link that goes away leaves the socket to the others.
+	first.waitLinked("srv2")
+
+	second.stop()
+
+	// The stopped instance is still learned from the others: only the links to the live one count here.
+	third := newTestNode(t, "srv3", testToken, nil, first.address)
+
+	require.Eventually(t, func() bool {
+		to, ok := third.linkTo("srv1")
+		back, okBack := first.linkTo("srv3")
+
+		return ok && to.Up && okBack && back.Up
+	}, 10*time.Second, 10*time.Millisecond)
+}

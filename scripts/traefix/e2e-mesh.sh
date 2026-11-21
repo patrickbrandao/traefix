@@ -416,6 +416,12 @@ scenario_formation() {
 
   eventually "srv3 writes the instances it learned to its file" 10 grep -q srv2 "$WORK/n3/peers.json"
 
+  # A link over QUIC leaves from the port of the mesh, the one a satellite is reached back through.
+  if [ "$TRANSPORT" != tcp ]; then
+    equal "the links of srv2 over QUIC leave from its mesh port" "127.0.0.1:7442" \
+      "$(mesh 1 "' '.join(i['remote'] for i in a['inbound'] if i['nodeID'] == 'srv2')")"
+  fi
+
   # Without the list, the instance finds the others again from its file.
   stop 3
   MK_PEERS="[]" MK_PEERS_FILE=1 mk 3

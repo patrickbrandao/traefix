@@ -268,8 +268,11 @@ os seus routers, não importa nenhum, não usa Valkey e não pede certificado à
   satélite; o satélite não consulta as rotas dos outros; os resolvers ACME do satélite não iniciam, nem o router
   `acme-http@internal`, e os nomes deles continuam valendo nos routers. Código em `pkg/mesh/satellite.go`; gancho no
   upstream em `cmd/traefik/traefik.go` (`satelliteResolvers`, em `traefix_mesh.go`). Documentação:
-  `docs/content/reference/install-configuration/cluster-satellite.md`. **Os centrais ainda não alcançam o satélite de
-  volta** (etapa 3).
+  `docs/content/reference/install-configuration/cluster-satellite.md`.
+- **Socket único** (etapa 2): toda instância escuta e disca por QUIC pelo mesmo `quic.Transport`
+  (`pkg/mesh/listener.go`, `dialQUICFrom` em `transport.go`), então as ligações saem da porta da malha. É a condição
+  para um central voltar ao satélite pelo mapeamento do NAT. **Os centrais ainda não alcançam o satélite de volta**
+  (etapa 3).
 
 ## Infopage
 
