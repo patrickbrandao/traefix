@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"time"
+
+	ptypes "github.com/traefik/paerser/types"
 )
 
 const (
@@ -22,7 +25,30 @@ type CertStore struct {
 	Dir     string        `description:"Directory of the per-domain certificate files, required when dir is the primary store or an export." json:"dir,omitempty" toml:"dir,omitempty" yaml:"dir,omitempty" export:"true"`
 	Export  []string      `description:"Stores the primary store is copied to: dir, file." json:"export,omitempty" toml:"export,omitempty" yaml:"export,omitempty" export:"true"`
 	Tcerts  *TcertsExport `description:"Copy of the certificates in the Redis server, in the format of the traefik-certs project. Used with the redis primary store." json:"tcerts,omitempty" toml:"tcerts,omitempty" yaml:"tcerts,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+
+	Election *Election `description:"How the instances of the cluster decide which one requests a certificate. Used with the redis primary store." json:"election,omitempty" toml:"election,omitempty" yaml:"election,omitempty" export:"true"`
 }
+
+// Election configures how the instances that share a certificate store decide which one asks the ACME server.
+type Election struct {
+	Step    ptypes.Duration `description:"Time an instance waits for each level of priority above its own before it tries to take a certificate request." json:"step,omitempty" toml:"step,omitempty" yaml:"step,omitempty" export:"true"`
+	LockTTL ptypes.Duration `description:"Time after which the request of an instance that stopped is free for another instance." json:"lockTTL,omitempty" toml:"lockTTL,omitempty" yaml:"lockTTL,omitempty" export:"true"`
+}
+
+// SetDefaults sets the default values.
+func (e *Election) SetDefaults() {
+	e.Step = ptypes.Duration(defaultElectionStep)
+	e.LockTTL = ptypes.Duration(defaultElectionLockTTL)
+}
+
+const (
+	defaultElectionStep    = 3 * time.Second
+	defaultElectionLockTTL = time.Minute
+
+	// minElectionLockTTL leaves room for an instance to extend its lock, at a third of its time to live,
+	// through a slow answer of the server.
+	minElectionLockTTL = 10 * time.Second
+)
 
 // TcertsExport configures the copy of the certificates that the tools of the traefik-certs project read.
 type TcertsExport struct {
@@ -57,6 +83,16 @@ func (c *CertStore) Validate() error {
 		return fmt.Errorf("certStore tcerts prefix %q must start with a letter or a digit, followed by letters, digits, dots, underscores or hyphens", c.Tcerts.Prefix)
 	}
 
+	if c.Election != nil {
+		if c.Election.Step <= 0 {
+			return errors.New("certStore election step must be positive")
+		}
+
+		if time.Duration(c.Election.LockTTL) < minElectionLockTTL {
+			return fmt.Errorf("certStore election lockTTL must be at least %s", minElectionLockTTL)
+		}
+	}
+
 	for i, export := range c.Export {
 		if !isLocalStore(export) {
 			return fmt.Errorf("unknown certStore export %q, expected %q or %q", export, StoreFile, StoreDir)
@@ -89,6 +125,15 @@ func (c *CertStore) tcertsPrefix() string {
 	default:
 		return c.Tcerts.Prefix
 	}
+}
+
+// election returns the election settings, the default ones when the option is not set.
+func (c *CertStore) election() (time.Duration, time.Duration) {
+	if c.Election == nil {
+		return defaultElectionStep, defaultElectionLockTTL
+	}
+
+	return time.Duration(c.Election.Step), time.Duration(c.Election.LockTTL)
 }
 
 var tcertsPrefixRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)

@@ -60,6 +60,8 @@ certificatesResolvers:
 | <a id="opt-certStore-export" href="#opt-certStore-export" title="#opt-certStore-export">`certStore.export`</a> | Stores that receive a copy of the primary store: `dir`, `file`. The primary store cannot be an export. | [] | No |
 | <a id="opt-certStore-tcerts-enabled" href="#opt-certStore-tcerts-enabled" title="#opt-certStore-tcerts-enabled">`certStore.tcerts.enabled`</a> | With the `redis` primary store, writes a [copy of each certificate](#copy-for-traefik-certs) for the tools of the traefik-certs project. | true | No |
 | <a id="opt-certStore-tcerts-prefix" href="#opt-certStore-tcerts-prefix" title="#opt-certStore-tcerts-prefix">`certStore.tcerts.prefix`</a> | Prefix of the keys and of the channel of the copy. | `tcerts` | No |
+| <a id="opt-certStore-election-step" href="#opt-certStore-election-step" title="#opt-certStore-election-step">`certStore.election.step`</a> | With the `redis` primary store, time an instance waits for each level of priority above its own before it tries to take a [certificate request](#certificate-requests-in-a-cluster). | 3s | No |
+| <a id="opt-certStore-election-lockTTL" href="#opt-certStore-election-lockTTL" title="#opt-certStore-election-lockTTL">`certStore.election.lockTTL`</a> | With the `redis` primary store, time after which the request of an instance that stopped is free for another instance. At least 10s. | 60s | No |
 
 Traefix doesn't start when a `certStore` option names an unknown store, lists a store twice, or uses `dir` without `certStore.dir`.
 
@@ -160,9 +162,9 @@ certificatesResolvers:
 --certificatesresolvers.myresolver.acme.certstore.export=dir
 ```
 
-!!! warning "The instances don't coordinate their certificate requests yet"
+!!! warning "HTTP-01 challenge with several instances"
 
-    In this version, the instances share the certificates they hold, and each instance still requests a certificate on its own for a router that has none. Several instances that see the same router request or renew the same certificate, and an instance cannot answer the HTTP-01 challenge that another instance started. Until the instances coordinate their requests, don't use the `redis` primary store with several instances in production.
+    In this version, an instance cannot answer the HTTP-01 challenge that another instance started. When the name of a domain points to several instances, the ACME server can send its validation request to an instance that doesn't know the challenge, and the request for the certificate fails. Use `dnsChallenge` with several instances, or send the requests for `/.well-known/acme-challenge/` to the instance with the highest `cluster.priority`.
 
 - **Traefix doesn't start with `primary: redis` and no `cluster` option, or with `tlsChallenge`.** Use `httpChallenge` or `dnsChallenge`.
 - **A certificate that an instance stores reaches the other instances within seconds.** Each instance serves the certificate and writes its exports. An instance also compares itself with the server every 15 seconds, to catch up on what it missed.
@@ -172,6 +174,24 @@ certificatesResolvers:
 - **Each instance offers its local certificates to the server when it starts.** The instance sends the certificates of its exports and of an existing `storage` file. The server takes the certificates it doesn't have and the ones that are more recent than its own, and keeps its own account when it has one. This is how the `storage` file of an instance that joins the cluster reaches the other instances, and how a server that lost its data gets the certificates back.
 
 With the `redis` primary store, the `dir` export also writes the ACME account to `<certStore.dir>/_traefix/<resolver>/account.json`, so that an instance can start from its exports alone.
+
+### Certificate Requests in a Cluster
+
+The instances of a cluster agree on the one that requests each certificate from the ACME server. The other instances receive the certificate from the Redis server.
+
+- **The instance with the highest [`cluster.priority`](../../cluster.md) requests the certificate.** An instance waits `election.step` for each distinct priority above its own, among the running instances that have the resolver, and then tries to take the request. An instance with a lower priority only takes the request when the instances above did not.
+- **The instances with the same priority race for the request.** The first one to take the request in the Redis server requests the certificate.
+- **An instance with `cluster.priority: 0` requests and renews no certificate.** Such an instance still tells the cluster which certificates its routers need, and serves the certificates that the other instances obtain.
+- **Any instance can ask for a certificate.** When an instance finds a router without a certificate, the instance tells the cluster. The elected instance requests the certificate, even when the elected instance doesn't have the router. This covers the hosts where only one instance sees a container.
+- **An instance that just started waits `cluster.heartbeatInterval` before its first request.** The instances that start together use this time to see each other.
+- **When the elected instance stops during a request, another instance takes the request** after `election.lockTTL` at most.
+- **The instances share the failures.** After a failed request, no instance tries again before a delay of 2 minutes, then 15 minutes, 30 minutes, 1 hour, 2 hours, and 6 hours for the following failures. The instance that failed lets the other instances try first at the next attempt. After 14 days of failures, the instances stop requesting the certificate until a change of the routing configuration asks for the certificate again.
+- **Renewals follow the same election.** An instance that finds a certificate to renew tells the instances with a higher priority, which check their own renewals at once. A failed renewal is tried again with the same delays, and is not abandoned.
+- **The instances share one ACME account.** The first instance that needs the account registers it, and the other instances wait for it instead of registering their own.
+
+The instances log a warning when they configure the same resolver with a different `caServer`, `email`, `keyType`, challenge, `profile` or `preferredChain`: the certificate then depends on the instance that requests it.
+
+For `dnsChallenge`, set the credentials of the DNS provider on every instance with a priority above zero.
 
 ### Keys in the Redis Server
 
@@ -183,6 +203,11 @@ The names use the default `traefix` prefix of the `cluster` option and a resolve
 | <a id="opt-traefixacmemyresolvercertid" href="#opt-traefixacmemyresolvercertid" title="#opt-traefixacmemyresolvercertid">`traefix:acme:{myresolver}:cert:<id>`</a> | A certificate, in JSON: domains, TLS store, certificate chain and private key in PEM, and expiration date. The identifier is the SHA-256 hash of the sorted domains. |
 | <a id="opt-traefixacmemyresolvercerts" href="#opt-traefixacmemyresolvercerts" title="#opt-traefixacmemyresolvercerts">`traefix:acme:{myresolver}:certs`</a> | Set of the identifiers of the certificates. |
 | <a id="opt-traefixacmemyresolverversion" href="#opt-traefixacmemyresolverversion" title="#opt-traefixacmemyresolverversion">`traefix:acme:{myresolver}:version`</a> | Counter that changes with each certificate written. |
+| <a id="opt-traefixacmemyresolverwantid" href="#opt-traefixacmemyresolverwantid" title="#opt-traefixacmemyresolverwantid">`traefix:acme:{myresolver}:want:<id>`</a> | A certificate that an instance needs and that no instance stored yet, with its domains. Expires after 24 hours without a new attempt. |
+| <a id="opt-traefixacmemyresolverwants" href="#opt-traefixacmemyresolverwants" title="#opt-traefixacmemyresolverwants">`traefix:acme:{myresolver}:wants`</a> | Set of the identifiers of the needed certificates. |
+| <a id="opt-traefixacmemyresolverfailid" href="#opt-traefixacmemyresolverfailid" title="#opt-traefixacmemyresolverfailid">`traefix:acme:{myresolver}:fail:<id>`</a> | Last failure of a request or of a renewal: error, instance, number of attempts and time of the next attempt. |
+| <a id="opt-traefixlockacmemyresolverid" href="#opt-traefixlockacmemyresolverid" title="#opt-traefixlockacmemyresolverid">`traefix:lock:acme:myresolver:<id>`</a> | Lock of the instance that requests or renews a certificate. Expires after `election.lockTTL` without the instance. |
+| <a id="opt-traefixlockacmemyresolveraccount" href="#opt-traefixlockacmemyresolveraccount" title="#opt-traefixlockacmemyresolveraccount">`traefix:lock:acme:myresolver:account`</a> | Lock of the instance that registers the ACME account. |
 
 !!! warning "Private keys"
 

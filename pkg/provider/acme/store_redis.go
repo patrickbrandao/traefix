@@ -40,6 +40,8 @@ var (
 	_ storeWatcher = (*RedisStore)(nil)
 	_ storeGate    = (*RedisStore)(nil)
 	_ storeOfferer = (*RedisStore)(nil)
+
+	_ storeCoordinated = (*RedisStore)(nil)
 )
 
 // storeWatcher is a store that other instances write to.
@@ -75,6 +77,7 @@ type RedisStore struct {
 type redisResolver struct {
 	// tcertsPrefix is empty when the certificates are not copied for the tools of traefik-certs.
 	tcertsPrefix string
+	coordinator  *coordinator
 
 	// loaded is false until the certificates were read from the server once.
 	loaded  bool
@@ -343,6 +346,21 @@ func (s *RedisStore) setTcertsPrefix(resolverName, prefix string) {
 	defer s.mu.Unlock()
 
 	s.resolver(resolverName).tcertsPrefix = prefix
+}
+
+// setElection makes the instances agree on the one that obtains each certificate of a resolver.
+func (s *RedisStore) setElection(resolverName string, step, lockTTL time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.resolver(resolverName).coordinator = newCoordinator(s.cluster, s, resolverName, step, lockTTL)
+}
+
+func (s *RedisStore) coordinatorFor(resolverName string) *coordinator {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.resolver(resolverName).coordinator
 }
 
 // resolver returns the state of a resolver. The mutex must be held.

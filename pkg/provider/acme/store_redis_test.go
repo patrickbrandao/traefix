@@ -509,23 +509,30 @@ func TestProvider_checkStore(t *testing.T) {
 		Store:         store,
 	}
 
+	checkStore := func(provider *Provider) error {
+		release, err := provider.checkStore(t.Context())
+		release()
+
+		return err
+	}
+
 	// The certificates were not read from the server yet.
-	require.Error(t, provider.checkStore(t.Context()))
+	require.Error(t, checkStore(provider))
 
 	_, err := store.GetCertificates("le")
 	require.NoError(t, err)
 
-	require.NoError(t, provider.checkStore(t.Context()))
+	require.NoError(t, checkStore(provider))
 	assert.Nil(t, provider.account)
 
 	// Another instance registered the account in the meantime: the resolver uses it instead of registering one.
 	account := &Account{Email: "ops@example.com", Registration: &Resource{URI: "https://acme.example.com/acct/1"}}
 	require.NoError(t, other.SaveAccount("le", account))
 
-	require.NoError(t, provider.checkStore(t.Context()))
+	require.NoError(t, checkStore(provider))
 	assert.Equal(t, account, provider.account)
 
 	// A store that is not shared never holds the resolver back.
 	provider = &Provider{Configuration: &Configuration{}, ResolverName: "le", Store: NewDirStore(t.TempDir())}
-	require.NoError(t, provider.checkStore(t.Context()))
+	require.NoError(t, checkStore(provider))
 }

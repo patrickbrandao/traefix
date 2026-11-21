@@ -7,9 +7,7 @@ The `cluster` option joins the Traefix instances that use the same Valkey or Red
 
 The instances of a cluster can share their ACME account and certificates, with the [`redis` certificate store](./tls/certificate-resolvers/acme-certstore.md#redis-as-the-primary-store) of a certificate resolver.
 
-!!! info "Current scope"
-
-    In this version, the `priority` option is read and announced, and no feature uses it yet.
+The `priority` option sets which instance requests the certificates of such a resolver: see [Certificate Requests in a Cluster](./tls/certificate-resolvers/acme-certstore.md#certificate-requests-in-a-cluster).
 
 Without the `cluster` option, the instance connects to no Redis server and behaves as in Traefik.
 
@@ -98,7 +96,7 @@ cluster:
 | Field | Description | Default | Required |
 |:------|:------------|:--------|:---------|
 | <a id="opt-cluster-nodeID" href="#opt-cluster-nodeID" title="#opt-cluster-nodeID">`cluster.nodeID`</a> | Identifier of the instance, unique among the instances of the cluster. Starts with a letter or a digit, followed by letters, digits, dots, underscores or hyphens. | Host name | No |
-| <a id="opt-cluster-priority" href="#opt-cluster-priority" title="#opt-cluster-priority">`cluster.priority`</a> | Priority of the instance, zero or more. | 100 | No |
+| <a id="opt-cluster-priority" href="#opt-cluster-priority" title="#opt-cluster-priority">`cluster.priority`</a> | Priority of the instance to request the ACME certificates of the cluster, zero or more. The instance with the highest priority requests them, and an instance with the priority 0 requests none. | 100 | No |
 | <a id="opt-cluster-prefix" href="#opt-cluster-prefix" title="#opt-cluster-prefix">`cluster.prefix`</a> | Prefix of the keys and channels of the cluster in the Redis server. The instances with the same server and the same prefix form one cluster. Same characters as `cluster.nodeID`. | `traefix` | No |
 | <a id="opt-cluster-heartbeatInterval" href="#opt-cluster-heartbeatInterval" title="#opt-cluster-heartbeatInterval">`cluster.heartbeatInterval`</a> | Interval between two announcements of the instance. | 5s | No |
 | <a id="opt-cluster-nodeTimeout" href="#opt-cluster-nodeTimeout" title="#opt-cluster-nodeTimeout">`cluster.nodeTimeout`</a> | Time without announcement after which the other instances consider the instance gone. At least twice `cluster.heartbeatInterval`. | 15s | No |

@@ -125,9 +125,18 @@ servidores, satélite atrás de NAT). Implementado até agora:
   no servidor do `cluster`, em `traefix:acme:{<resolver>}:*`; cada instância mantém uma cópia em memória,
   recebe os certificados das outras por evento e por comparação a cada 15 s, grava as suas exportações e
   parte delas quando o servidor está fora. A cópia `tcerts:cert:<domínio>` atende o `cert-get` e o
-  `cert-watcher` do `traefik-certs`. **As instâncias ainda não coordenam os pedidos à CA** (eleição e
-  desafio compartilhado são as etapas 4 e 5): até lá, não use com várias réplicas em produção. Código em `pkg/provider/acme/store_redis.go` e `provider_store.go`; ganchos no upstream em
+  `cert-watcher` do `traefik-certs`. Código em `pkg/provider/acme/store_redis.go` e `provider_store.go`; ganchos no upstream em
   `Provide` e `getClient` de `pkg/provider/acme/provider.go`.
+
+- **Eleição dos pedidos à CA** (`certStore.election`, etapa 4): para cada certificado, uma instância pede
+  à CA, a de maior `cluster.priority` entre as vivas com o resolver; empate decide na corrida pela trava,
+  e `priority: 0` nunca pede. Qualquer instância anuncia o que os seus routers precisam
+  (`traefix:acme:{<resolver>}:want:<id>`); as falhas são compartilhadas, com espera crescente (2 min a
+  6 h) e desistência após 14 dias; as renovações e o registro da conta seguem a mesma eleição. **O desafio
+  HTTP-01 ainda só é respondido pela instância que o iniciou** (etapa 5): com várias réplicas atrás do
+  mesmo nome, use `dnsChallenge` por enquanto. Código em `pkg/provider/acme/coordinator.go` e
+  `provider_coordinator.go`; no upstream, `resolveCertificate` e `resolveDefaultCertificate` passaram a se
+  chamar `obtainCertificate` e `obtainDefaultCertificate`, e `renewCertificates` chama `electRenewals`.
 
 ## Infopage
 

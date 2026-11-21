@@ -303,9 +303,11 @@ func (p *Provider) getClient() (*lego.Client, error) {
 
 	ctx := logger.WithContext(context.Background())
 
-	if err := p.checkStore(ctx); err != nil {
+	release, err := p.checkStore(ctx)
+	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	if p.client != nil {
 		return p.client, nil
@@ -688,7 +690,7 @@ func (p *Provider) watchNewDomains(ctx context.Context) {
 	})
 }
 
-func (p *Provider) resolveDefaultCertificate(ctx context.Context, domains []string) (*certificate.Resource, error) {
+func (p *Provider) obtainDefaultCertificate(ctx context.Context, domains []string) (*certificate.Resource, error) {
 	logger := log.Ctx(ctx)
 
 	p.resolvingDomainsMutex.Lock()
@@ -746,7 +748,7 @@ func (p *Provider) resolveDefaultCertificate(ctx context.Context, domains []stri
 	return cert, nil
 }
 
-func (p *Provider) resolveCertificate(ctx context.Context, domain types.Domain, tlsStore string) (types.Domain, *certificate.Resource, error) {
+func (p *Provider) obtainCertificate(ctx context.Context, domain types.Domain, tlsStore string) (types.Domain, *certificate.Resource, error) {
 	domains, err := p.sanitizeDomains(ctx, domain)
 	if err != nil {
 		return types.Domain{}, nil, err
@@ -992,6 +994,9 @@ func (p *Provider) renewCertificates(ctx context.Context, renewPeriod, renewInte
 			nextCheck = min(nextCheck, max(retryAfter, minRenewalInfoRetryAfter))
 		}
 	}
+
+	certificates, renewed := p.electRenewals(ctx, certificates)
+	defer renewed()
 
 	for _, cert := range certificates {
 		client, err := p.getClient()

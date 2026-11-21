@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/safe"
 )
 
@@ -261,6 +262,9 @@ func TestCertStore_Validate(t *testing.T) {
 		{desc: "redis without tcerts", store: &CertStore{Primary: StoreRedis, Tcerts: &TcertsExport{}}},
 		{desc: "tcerts without prefix", store: &CertStore{Primary: StoreRedis, Tcerts: &TcertsExport{Enabled: true}}, expectErr: true},
 		{desc: "tcerts prefix with a colon", store: &CertStore{Primary: StoreRedis, Tcerts: &TcertsExport{Enabled: true, Prefix: "a:b"}}, expectErr: true},
+		{desc: "election", store: &CertStore{Primary: StoreRedis, Election: &Election{Step: ptypes.Duration(time.Second), LockTTL: ptypes.Duration(30 * time.Second)}}},
+		{desc: "election without step", store: &CertStore{Primary: StoreRedis, Election: &Election{LockTTL: ptypes.Duration(30 * time.Second)}}, expectErr: true},
+		{desc: "election with a short lockTTL", store: &CertStore{Primary: StoreRedis, Election: &Election{Step: ptypes.Duration(time.Second), LockTTL: ptypes.Duration(time.Second)}}, expectErr: true},
 		{desc: "redis as an export", store: &CertStore{Primary: StoreFile, Export: []string{StoreRedis}}, expectErr: true},
 		{desc: "unknown primary", store: &CertStore{Primary: "s3"}, expectErr: true},
 		{desc: "unknown export", store: &CertStore{Primary: StoreFile, Export: []string{"s3"}}, expectErr: true},

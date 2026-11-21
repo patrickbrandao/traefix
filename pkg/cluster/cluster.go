@@ -45,6 +45,9 @@ type Cluster struct {
 	announced bool
 	handlers  map[string][]func(Event)
 	onConnect []func()
+
+	// announceNow asks Run for an announcement without waiting for the next interval.
+	announceNow chan struct{}
 }
 
 // New creates the membership of this instance. Nothing is sent to the server before Run.
@@ -75,7 +78,8 @@ func New(ctx context.Context, conf *Configuration) (*Cluster, error) {
 			Instance:  hex.EncodeToString(instance),
 			StartedAt: time.Now().UTC().Truncate(time.Second),
 		},
-		handlers: map[string][]func(Event){},
+		handlers:    map[string][]func(Event){},
+		announceNow: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -107,15 +111,30 @@ func (c *Cluster) Up() bool {
 	return c.up
 }
 
-// SetAttribute publishes a value with the next announcements of this instance.
+// HeartbeatInterval returns the interval between two announcements of an instance.
+func (c *Cluster) HeartbeatInterval() time.Duration {
+	return time.Duration(c.conf.HeartbeatInterval)
+}
+
+// SetAttribute publishes a value with the announcements of this instance.
+// A new value is announced at once: the other instances decide with what they see.
 func (c *Cluster) SetAttribute(key, value string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if c.self.Attributes == nil {
 		c.self.Attributes = map[string]string{}
 	}
+	changed := c.self.Attributes[key] != value
 	c.self.Attributes[key] = value
+	c.mu.Unlock()
+
+	if !changed {
+		return
+	}
+
+	select {
+	case c.announceNow <- struct{}{}:
+	default:
+	}
 }
 
 // Run announces this instance and listens to the events until the context is done.
@@ -131,6 +150,8 @@ func (c *Cluster) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
+			c.heartbeat(ctx)
+		case <-c.announceNow:
 			c.heartbeat(ctx)
 		case <-ctx.Done():
 			wg.Wait()

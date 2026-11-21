@@ -18,6 +18,8 @@ var (
 	_ Store        = (*MultiStore)(nil)
 	_ storeWatcher = (*MultiStore)(nil)
 	_ storeGate    = (*MultiStore)(nil)
+
+	_ storeCoordinated = (*MultiStore)(nil)
 )
 
 // MultiStore reads from a primary store, the source of truth, and copies what it saves to the exports.
@@ -112,6 +114,14 @@ func (s *MultiStore) Watch(resolverName string, onChange func()) {
 func (s *MultiStore) Ready(resolverName string) error {
 	if gate, ok := s.primary.(storeGate); ok {
 		return gate.Ready(resolverName)
+	}
+
+	return nil
+}
+
+func (s *MultiStore) coordinatorFor(resolverName string) *coordinator {
+	if coordinated, ok := s.primary.(storeCoordinated); ok {
+		return coordinated.coordinatorFor(resolverName)
 	}
 
 	return nil
@@ -285,6 +295,8 @@ func (b *StoreBuilder) Build(resolverName string, conf *Configuration) (Store, e
 		}
 
 		b.redis.setTcertsPrefix(resolverName, conf.CertStore.tcertsPrefix())
+		step, lockTTL := conf.CertStore.election()
+		b.redis.setElection(resolverName, step, lockTTL)
 		store.primary = b.redis
 
 		// The storage file of an instance that joins the cluster is offered once, as its exports are at each start.
