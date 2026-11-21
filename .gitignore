@@ -5,6 +5,8 @@
 .DS_Store
 /dist
 /utils
+/tmp
+/tasks
 /webui/.tmp/
 /site/
 /docs/site/
