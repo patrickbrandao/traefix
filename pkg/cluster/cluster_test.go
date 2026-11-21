@@ -82,7 +82,7 @@ func TestConfiguration_Validate(t *testing.T) {
 		{desc: "prefix with a colon", change: func(conf *Configuration) { conf.Prefix = "a:b" }, expectErr: true},
 		{desc: "no heartbeat", change: func(conf *Configuration) { conf.HeartbeatInterval = 0 }, expectErr: true},
 		{desc: "short nodeTimeout", change: func(conf *Configuration) { conf.NodeTimeout = conf.HeartbeatInterval }, expectErr: true},
-		{desc: "no redis", change: func(conf *Configuration) { conf.Redis = nil }, expectErr: true},
+		{desc: "neither redis nor mesh", change: func(conf *Configuration) { conf.Redis = nil }, expectErr: true},
 		{desc: "no endpoints", change: func(conf *Configuration) { conf.Redis.Endpoints = nil }, expectErr: true},
 	}
 

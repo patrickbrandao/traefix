@@ -49,6 +49,10 @@ func (c *Cluster) OnConnect(fn func()) {
 
 // Publish sends an event to all the instances.
 func (c *Cluster) Publish(ctx context.Context, kind string, args ...string) error {
+	if c.client == nil {
+		return ErrNoServer
+	}
+
 	fields := make([]string, 0, len(args)+3)
 	fields = append(fields, eventVersion, c.self.ID, kind)
 	for _, arg := range args {

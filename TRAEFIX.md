@@ -159,6 +159,23 @@ servidores, satélite atrás de NAT). Implementado até agora:
   `scripts/traefix/e2e-cluster.sh` confere os cenários de aceite com o binário real, um `redis-server` e
   o Pebble, sem Docker (`go install github.com/letsencrypt/pebble/v2/cmd/pebble@latest`).
 
+## Malha entre servidores
+
+Especificação: `tmp/report-cluster-mesh.md` (segunda entrega, nove etapas). Cada Traefix anuncia aos outros
+os routers que descobriu, e uma requisição que chega a um servidor sem o container é encaminhada ao
+servidor que o tem, sem rede overlay. Implementado até agora:
+
+- **Configuração e identidade** (`cluster.mesh`, etapa 1): `cluster.token` (ou `tokenFile`, 32 caracteres
+  ou mais) e `additionalTokens` para a troca de token; `cluster.redis` passou a ser opcional (um cluster
+  precisa de `redis`, de `mesh` ou dos dois). Cada instância deriva do token uma autoridade certificadora
+  (PBKDF2-HMAC-SHA256, 600 mil iterações, com o `prefix` no sal) e assina o seu certificado; as instâncias
+  com o mesmo token chegam à mesma autoridade e se verificam por TLS 1.3 mútuo, sem o token trafegar. Os
+  certificados não vencem e são conferidos numa data fixa, então os relógios não precisam concordar. A
+  impressão digital da autoridade sai no log e no anúncio da instância no Valkey (`mesh.authority`, com
+  `mesh.addr`). **Nenhuma ligação é aberta ainda** (etapa 2). Código em `pkg/mesh/` e
+  `pkg/cluster/mesh.go`; gancho no upstream em `cmd/traefik/traefik.go`. Documentação:
+  `docs/content/reference/install-configuration/cluster-mesh.md`.
+
 ## Infopage
 
 `infopage/` (fork do `traefik/whoami`, imagem `tmsoftbrasil/traefix-infopage`, em

@@ -30,6 +30,10 @@ type Lock struct {
 // TryLock takes the lock when no instance holds it, and reports whether it did.
 // The holder must call Keep to hold the lock longer than its time to live, and Release when done.
 func (c *Cluster) TryLock(ctx context.Context, name string, ttl time.Duration) (*Lock, bool, error) {
+	if c.client == nil {
+		return nil, false, ErrNoServer
+	}
+
 	token := make([]byte, 16)
 	if _, err := rand.Read(token); err != nil {
 		return nil, false, err
@@ -56,6 +60,10 @@ func (c *Cluster) TryLock(ctx context.Context, name string, ttl time.Duration) (
 
 // LockHolder returns the identifier of the instance that holds a lock, if any.
 func (c *Cluster) LockHolder(ctx context.Context, name string) (string, bool, error) {
+	if c.client == nil {
+		return "", false, ErrNoServer
+	}
+
 	value, err := c.client.Get(ctx, c.Key("lock", name)).Result()
 	if errors.Is(err, redis.Nil) {
 		return "", false, nil

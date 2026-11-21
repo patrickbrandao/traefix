@@ -31,6 +31,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/config/runtime"
 	"github.com/traefik/traefik/v3/pkg/config/static"
+	"github.com/traefik/traefik/v3/pkg/mesh"
 	"github.com/traefik/traefik/v3/pkg/middlewares/accesslog"
 	"github.com/traefik/traefik/v3/pkg/middlewares/auth"
 	corazamw "github.com/traefik/traefik/v3/pkg/middlewares/coraza"
@@ -213,6 +214,12 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 		}
 
 		routinesPool.GoCtx(clusterMember.Run)
+
+		if staticConfiguration.Cluster.Mesh != nil {
+			if _, err := mesh.New(staticConfiguration.Cluster, clusterMember); err != nil {
+				return nil, fmt.Errorf("preparing the mesh: %w", err)
+			}
+		}
 	}
 
 	// ACME

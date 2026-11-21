@@ -291,8 +291,8 @@ func (b *StoreBuilder) Build(resolverName string, conf *Configuration) (Store, e
 
 	switch conf.CertStore.Primary {
 	case StoreRedis:
-		if b.member == nil {
-			return nil, errors.New("the redis certStore needs the cluster option")
+		if b.member == nil || !b.member.HasServer() {
+			return nil, errors.New("the redis certStore needs the cluster redis option")
 		}
 
 		if b.redis == nil {

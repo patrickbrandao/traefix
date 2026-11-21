@@ -57,9 +57,13 @@ func New(ctx context.Context, conf *Configuration) (*Cluster, error) {
 		return nil, err
 	}
 
-	client, err := conf.Redis.newClient(ctx)
-	if err != nil {
-		return nil, err
+	// Without a Redis server, the instance only knows the instances the mesh links it to.
+	var client redis.UniversalClient
+	if conf.Redis != nil {
+		client, err = conf.Redis.newClient(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	instance := make([]byte, 8)
@@ -83,9 +87,22 @@ func New(ctx context.Context, conf *Configuration) (*Cluster, error) {
 	}, nil
 }
 
+// ErrNoServer is returned by what needs the Redis server of the cluster, when the cluster has none.
+var ErrNoServer = errors.New("the cluster has no Redis server")
+
+// HasServer tells whether the instances of the cluster share a Redis server.
+func (c *Cluster) HasServer() bool {
+	return c.client != nil
+}
+
 // NodeID returns the identifier of this instance.
 func (c *Cluster) NodeID() string {
 	return c.self.ID
+}
+
+// Prefix returns the prefix that tells this cluster from the others.
+func (c *Cluster) Prefix() string {
+	return c.conf.Prefix
 }
 
 // Priority returns the priority of this instance.
@@ -139,6 +156,11 @@ func (c *Cluster) SetAttribute(key, value string) {
 
 // Run announces this instance and listens to the events until the context is done.
 func (c *Cluster) Run(ctx context.Context) {
+	if c.client == nil {
+		<-ctx.Done()
+		return
+	}
+
 	var wg sync.WaitGroup
 	wg.Go(func() { c.listen(ctx) })
 
@@ -164,6 +186,15 @@ func (c *Cluster) Run(ctx context.Context) {
 
 // Nodes returns the instances that announced themselves within the node timeout, this one included.
 func (c *Cluster) Nodes(ctx context.Context) ([]Node, error) {
+	if c.client == nil {
+		c.mu.RLock()
+		self := c.self
+		self.Attributes = maps.Clone(c.self.Attributes)
+		c.mu.RUnlock()
+
+		return []Node{self}, nil
+	}
+
 	ids, err := c.client.SMembers(ctx, c.Key("nodes")).Result()
 	if err != nil {
 		return nil, err

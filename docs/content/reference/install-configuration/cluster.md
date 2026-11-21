@@ -11,6 +11,8 @@ The `priority` option sets which instance requests the certificates of such a re
 
 The instances of a cluster also answer the HTTP-01 challenges that the other instances started: see [HTTP-01 Challenge in a Cluster](./tls/certificate-resolvers/acme-certstore.md#http-01-challenge-in-a-cluster).
 
+The [`cluster.mesh`](./cluster-mesh.md) option links the instances of a cluster to each other. The mesh works with or without a Redis server, and a cluster needs at least one of the two.
+
 Without the `cluster` option, the instance connects to no Redis server and behaves as in Traefik.
 
 ## Configuration Examples
@@ -102,7 +104,7 @@ cluster:
 | <a id="opt-cluster-prefix" href="#opt-cluster-prefix" title="#opt-cluster-prefix">`cluster.prefix`</a> | Prefix of the keys and channels of the cluster in the Redis server. The instances with the same server and the same prefix form one cluster. Same characters as `cluster.nodeID`. | `traefix` | No |
 | <a id="opt-cluster-heartbeatInterval" href="#opt-cluster-heartbeatInterval" title="#opt-cluster-heartbeatInterval">`cluster.heartbeatInterval`</a> | Interval between two announcements of the instance. | 5s | No |
 | <a id="opt-cluster-nodeTimeout" href="#opt-cluster-nodeTimeout" title="#opt-cluster-nodeTimeout">`cluster.nodeTimeout`</a> | Time without announcement after which the other instances consider the instance gone. At least twice `cluster.heartbeatInterval`. | 15s | No |
-| <a id="opt-cluster-redis-endpoints" href="#opt-cluster-redis-endpoints" title="#opt-cluster-redis-endpoints">`cluster.redis.endpoints`</a> | Address of the server, addresses of the nodes of a Redis Cluster, or addresses of the Sentinels when `cluster.redis.masterName` is set. | `localhost:6379` | Yes |
+| <a id="opt-cluster-redis-endpoints" href="#opt-cluster-redis-endpoints" title="#opt-cluster-redis-endpoints">`cluster.redis.endpoints`</a> | Address of the server, addresses of the nodes of a Redis Cluster, or addresses of the Sentinels when `cluster.redis.masterName` is set. | `localhost:6379` | Yes, with `cluster.redis` |
 | <a id="opt-cluster-redis-username" href="#opt-cluster-redis-username" title="#opt-cluster-redis-username">`cluster.redis.username`</a> | Username to connect to the server. | "" | No |
 | <a id="opt-cluster-redis-password" href="#opt-cluster-redis-password" title="#opt-cluster-redis-password">`cluster.redis.password`</a> | Password to connect to the server. | "" | No |
 | <a id="opt-cluster-redis-db" href="#opt-cluster-redis-db" title="#opt-cluster-redis-db">`cluster.redis.db`</a> | Database selected after connecting to the server. A Redis Cluster only has the database 0. | 0 | No |
@@ -114,7 +116,9 @@ cluster:
 | <a id="opt-cluster-redis-readTimeout" href="#opt-cluster-redis-readTimeout" title="#opt-cluster-redis-readTimeout">`cluster.redis.readTimeout`</a> | Timeout of a read on a connection. | 3s | No |
 | <a id="opt-cluster-redis-writeTimeout" href="#opt-cluster-redis-writeTimeout" title="#opt-cluster-redis-writeTimeout">`cluster.redis.writeTimeout`</a> | Timeout of a write on a connection. | 3s | No |
 
-Traefix doesn't start when the `cluster` option has no `redis` endpoints, a negative `priority`, or a `nodeID` or `prefix` with other characters than the ones listed.
+The `cluster.token`, `cluster.tokenFile`, `cluster.additionalTokens` and `cluster.mesh` options are described with the [mesh](./cluster-mesh.md#configuration-options).
+
+Traefix doesn't start when the `cluster` option has neither the `redis` nor the `mesh` option, when `redis` has no endpoints, with a negative `priority`, or with a `nodeID` or `prefix` with other characters than the ones listed.
 
 ## Behavior
 

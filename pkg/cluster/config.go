@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +19,8 @@ import (
 	"github.com/traefik/traefik/v3/pkg/types"
 )
 
-// Configuration joins this instance to the instances that use the same Redis server and prefix (Traefix).
+// Configuration joins this instance to the other instances of a cluster (Traefix):
+// the ones that use the same Redis server and prefix, and the ones it is linked to by the mesh.
 type Configuration struct {
 	NodeID            string          `description:"Identifier of this instance, unique among the instances of the cluster. Defaults to the host name." json:"nodeID,omitempty" toml:"nodeID,omitempty" yaml:"nodeID,omitempty" export:"true"`
 	Priority          int             `description:"Priority of this instance to obtain the ACME certificates: the highest one wins, and 0 never obtains a certificate." json:"priority" toml:"priority" yaml:"priority" export:"true"`
@@ -25,6 +28,11 @@ type Configuration struct {
 	HeartbeatInterval ptypes.Duration `description:"Interval between two announcements of this instance." json:"heartbeatInterval,omitempty" toml:"heartbeatInterval,omitempty" yaml:"heartbeatInterval,omitempty" export:"true"`
 	NodeTimeout       ptypes.Duration `description:"Time without announcement after which the other instances consider this instance gone." json:"nodeTimeout,omitempty" toml:"nodeTimeout,omitempty" yaml:"nodeTimeout,omitempty" export:"true"`
 	Redis             *Redis          `description:"Valkey or Redis server shared by the instances of the cluster." json:"redis,omitempty" toml:"redis,omitempty" yaml:"redis,omitempty" export:"true"`
+
+	Token            string   `description:"Secret shared by the instances of the cluster, which proves to an instance that another one belongs to the cluster." json:"token,omitempty" toml:"token,omitempty" yaml:"token,omitempty" loggable:"false"`
+	TokenFile        string   `description:"File that holds the token of the cluster." json:"tokenFile,omitempty" toml:"tokenFile,omitempty" yaml:"tokenFile,omitempty" export:"true"`
+	AdditionalTokens []string `description:"Tokens accepted from the other instances in addition to the token: the next token before a change, the previous one after it." json:"additionalTokens,omitempty" toml:"additionalTokens,omitempty" yaml:"additionalTokens,omitempty" loggable:"false"`
+	Mesh             *Mesh    `description:"Links this instance to the other instances of the cluster, to reach the services they discovered." json:"mesh,omitempty" toml:"mesh,omitempty" yaml:"mesh,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 }
 
 // SetDefaults sets the default values.
@@ -88,11 +96,81 @@ func (c *Configuration) Validate() error {
 		return errors.New("cluster nodeTimeout must be at least twice the heartbeatInterval")
 	}
 
-	if c.Redis == nil || len(c.Redis.Endpoints) == 0 {
+	if c.Redis == nil && c.Mesh == nil {
+		return errors.New("cluster needs the redis option, the mesh option, or both")
+	}
+
+	if c.Redis != nil && len(c.Redis.Endpoints) == 0 {
 		return errors.New("cluster redis endpoints are required")
 	}
 
+	if _, _, err := c.Tokens(); err != nil {
+		return err
+	}
+
+	if c.Mesh != nil {
+		if c.Token == "" && c.TokenFile == "" {
+			return errors.New("cluster mesh needs the cluster token or tokenFile")
+		}
+
+		if err := c.Mesh.validate(); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// minTokenLength keeps the token out of reach of a search:
+// the instances derive a signing key from it, and anyone who sees a certificate of the cluster can test candidates offline.
+const minTokenLength = 32
+
+// Tokens returns the token of the cluster and the other tokens accepted from the instances.
+// The token is empty when none is configured.
+func (c *Configuration) Tokens() (string, []string, error) {
+	if c.Token != "" && c.TokenFile != "" {
+		return "", nil, errors.New("cluster token and tokenFile cannot be set together")
+	}
+
+	token := c.Token
+
+	if c.TokenFile != "" {
+		data, err := os.ReadFile(c.TokenFile)
+		if err != nil {
+			return "", nil, fmt.Errorf("reading the cluster tokenFile: %w", err)
+		}
+
+		// A file written by hand or by a secret manager often ends with a new line.
+		token = strings.TrimSpace(string(data))
+		if token == "" {
+			return "", nil, fmt.Errorf("the cluster tokenFile %q is empty", c.TokenFile)
+		}
+	}
+
+	if token == "" {
+		if len(c.AdditionalTokens) > 0 {
+			return "", nil, errors.New("cluster additionalTokens needs the cluster token or tokenFile")
+		}
+
+		return "", nil, nil
+	}
+
+	if len(token) < minTokenLength {
+		return "", nil, fmt.Errorf("the cluster token must have at least %d characters", minTokenLength)
+	}
+
+	var additional []string
+	for _, other := range c.AdditionalTokens {
+		if len(other) < minTokenLength {
+			return "", nil, fmt.Errorf("each of the cluster additionalTokens must have at least %d characters", minTokenLength)
+		}
+
+		if other != token && !slices.Contains(additional, other) {
+			additional = append(additional, other)
+		}
+	}
+
+	return token, additional, nil
 }
 
 // resolveNodeID returns the configured identifier of the instance, or one made from the host name.

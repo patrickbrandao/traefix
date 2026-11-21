@@ -57,7 +57,7 @@ type HTTPChallengeSolver interface {
 
 // NewHTTPChallengeSolver returns the HTTP-01 challenge of the instance, shared with the cluster when the instance is in one.
 func NewHTTPChallengeSolver(member *cluster.Cluster) HTTPChallengeSolver {
-	if member == nil {
+	if member == nil || !member.HasServer() {
 		return NewChallengeHTTP()
 	}
 
