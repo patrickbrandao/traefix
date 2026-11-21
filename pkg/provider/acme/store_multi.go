@@ -1,6 +1,7 @@
 package acme
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -8,11 +9,16 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog/log"
+	"github.com/traefik/traefik/v3/pkg/cluster"
 	"github.com/traefik/traefik/v3/pkg/observability/logs"
 	"github.com/traefik/traefik/v3/pkg/safe"
 )
 
-var _ Store = (*MultiStore)(nil)
+var (
+	_ Store        = (*MultiStore)(nil)
+	_ storeWatcher = (*MultiStore)(nil)
+	_ storeGate    = (*MultiStore)(nil)
+)
 
 // MultiStore reads from a primary store, the source of truth, and copies what it saves to the exports.
 type MultiStore struct {
@@ -20,6 +26,9 @@ type MultiStore struct {
 	exports []storeExport
 	// legacy is the storage file read once to fill an empty primary store, when moving away from it.
 	legacy Store
+	// offers are the local stores whose content is offered to a primary store shared by several instances,
+	// which keeps the most recent of each certificate.
+	offers []Store
 
 	mu       sync.Mutex
 	prepared map[string]struct{}
@@ -47,13 +56,13 @@ func (s *MultiStore) SaveAccount(resolverName string, account *Account) error {
 		return err
 	}
 
-	if err := s.primary.SaveAccount(resolverName, account); err != nil {
-		return err
-	}
+	// The exports are written even when the primary store fails:
+	// with a shared primary store that is unreachable, they are what the instance starts from.
+	err := s.primary.SaveAccount(resolverName, account)
 
 	s.exportAccount(resolverName, account)
 
-	return nil
+	return err
 }
 
 // GetCertificates returns the certificates of a resolver.
@@ -71,11 +80,39 @@ func (s *MultiStore) SaveCertificates(resolverName string, certificates []*CertA
 		return err
 	}
 
-	if err := s.primary.SaveCertificates(resolverName, certificates); err != nil {
-		return err
-	}
+	err := s.primary.SaveCertificates(resolverName, certificates)
 
 	s.exportCertificates(resolverName, certificates)
+
+	return err
+}
+
+// Watch registers a function called after the certificates of a resolver changed in the primary store.
+// The exports are brought in line first.
+func (s *MultiStore) Watch(resolverName string, onChange func()) {
+	watcher, ok := s.primary.(storeWatcher)
+	if !ok {
+		return
+	}
+
+	watcher.Watch(resolverName, func() {
+		if account, err := s.primary.GetAccount(resolverName); err == nil && account != nil {
+			s.exportAccount(resolverName, account)
+		}
+
+		if certificates, err := s.primary.GetCertificates(resolverName); err == nil {
+			s.exportCertificates(resolverName, certificates)
+		}
+
+		onChange()
+	})
+}
+
+// Ready returns an error when the primary store cannot take what the resolver would obtain.
+func (s *MultiStore) Ready(resolverName string) error {
+	if gate, ok := s.primary.(storeGate); ok {
+		return gate.Ready(resolverName)
+	}
 
 	return nil
 }
@@ -88,6 +125,10 @@ func (s *MultiStore) prepare(resolverName string) error {
 
 	if _, ok := s.prepared[resolverName]; ok {
 		return nil
+	}
+
+	if offerer, ok := s.primary.(storeOfferer); ok {
+		offerer.Offer(s.readOffers(resolverName))
 	}
 
 	account, err := s.primary.GetAccount(resolverName)
@@ -153,6 +194,31 @@ func (s *MultiStore) importLegacy(resolverName string) (*Account, []*CertAndStor
 	return account, certificates, nil
 }
 
+// readOffers returns what the local stores hold for a resolver.
+// A local store that cannot be read does not stop the resolver: the shared store is the source of truth.
+func (s *MultiStore) readOffers(resolverName string) (string, *Account, []*CertAndStore) {
+	var account *Account
+	var certificates []*CertAndStore
+
+	for _, offer := range s.offers {
+		offered, err := offer.GetAccount(resolverName)
+		if err != nil {
+			log.Warn().Err(err).Str(logs.ProviderName, resolverName+resolverSuffix).Msg("Unable to read the ACME account of a local store")
+		}
+		if account == nil {
+			account = offered
+		}
+
+		certs, err := offer.GetCertificates(resolverName)
+		if err != nil {
+			log.Warn().Err(err).Str(logs.ProviderName, resolverName+resolverSuffix).Msg("Unable to read the certificates of a local store")
+		}
+		certificates = append(certificates, certs...)
+	}
+
+	return resolverName, account, certificates
+}
+
 // exportAccount and exportCertificates never fail the caller: the primary store already holds the data.
 func (s *MultiStore) exportAccount(resolverName string, account *Account) {
 	for _, export := range s.exports {
@@ -180,15 +246,19 @@ func (s *MultiStore) exportCertificates(resolverName string, certificates []*Cer
 // The resolvers that name the same storage file or the same directory share one store.
 type StoreBuilder struct {
 	routinesPool *safe.Pool
+	// member is nil when the instance is not in a cluster.
+	member *cluster.Cluster
 
 	files map[string]*LocalStore
 	dirs  map[string]*DirStore
+	redis *RedisStore
 }
 
-// NewStoreBuilder creates a StoreBuilder.
-func NewStoreBuilder(routinesPool *safe.Pool) *StoreBuilder {
+// NewStoreBuilder creates a StoreBuilder. The cluster is nil when the instance is not in one.
+func NewStoreBuilder(routinesPool *safe.Pool, member *cluster.Cluster) *StoreBuilder {
 	return &StoreBuilder{
 		routinesPool: routinesPool,
+		member:       member,
 		files:        map[string]*LocalStore{},
 		dirs:         map[string]*DirStore{},
 	}
@@ -196,14 +266,31 @@ func NewStoreBuilder(routinesPool *safe.Pool) *StoreBuilder {
 
 // Build returns the store of a certificate resolver.
 // Without the certStore option it is the storage file alone, as in Traefik.
-func (b *StoreBuilder) Build(conf *Configuration) Store {
+func (b *StoreBuilder) Build(resolverName string, conf *Configuration) (Store, error) {
 	if conf.CertStore == nil {
-		return b.file(conf.Storage)
+		return b.file(conf.Storage), nil
 	}
 
 	store := &MultiStore{}
 
 	switch conf.CertStore.Primary {
+	case StoreRedis:
+		if b.member == nil {
+			return nil, errors.New("the redis certStore needs the cluster option")
+		}
+
+		if b.redis == nil {
+			b.redis = NewRedisStore(b.member)
+			b.routinesPool.GoCtx(b.redis.Run)
+		}
+
+		b.redis.setTcertsPrefix(resolverName, conf.CertStore.tcertsPrefix())
+		store.primary = b.redis
+
+		// The storage file of an instance that joins the cluster is offered once, as its exports are at each start.
+		if info, err := os.Stat(conf.Storage); err == nil && info.Size() > 0 && !slices.Contains(conf.CertStore.Export, StoreFile) {
+			store.offers = append(store.offers, b.file(conf.Storage))
+		}
 	case StoreDir:
 		store.primary = b.dir(conf.CertStore.Dir)
 
@@ -215,16 +302,28 @@ func (b *StoreBuilder) Build(conf *Configuration) Store {
 		store.primary = b.file(conf.Storage)
 	}
 
+	shared := conf.CertStore.Primary == StoreRedis
+
 	for _, kind := range conf.CertStore.Export {
+		var export storeExport
+
 		switch kind {
 		case StoreDir:
-			store.exports = append(store.exports, storeExport{kind: kind, store: b.dir(conf.CertStore.Dir)})
+			// With a shared primary store, the directory also keeps the account: an instance starts from its exports alone.
+			export = storeExport{kind: kind, store: b.dir(conf.CertStore.Dir), account: shared}
 		case StoreFile:
-			store.exports = append(store.exports, storeExport{kind: kind, store: b.file(conf.Storage), account: true})
+			export = storeExport{kind: kind, store: b.file(conf.Storage), account: true}
+		default:
+			continue
+		}
+
+		store.exports = append(store.exports, export)
+		if shared {
+			store.offers = append(store.offers, export.store)
 		}
 	}
 
-	return store
+	return store, nil
 }
 
 // ReportUnmanaged logs what the certificate directories hold that no resolver manages.

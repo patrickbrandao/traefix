@@ -205,13 +205,14 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 
 	// Cluster (Traefix)
 
+	var clusterMember *cluster.Cluster
 	if staticConfiguration.Cluster != nil {
-		member, err := cluster.New(ctx, staticConfiguration.Cluster)
+		clusterMember, err = cluster.New(ctx, staticConfiguration.Cluster)
 		if err != nil {
 			return nil, fmt.Errorf("joining the cluster: %w", err)
 		}
 
-		routinesPool.GoCtx(member.Run)
+		routinesPool.GoCtx(clusterMember.Run)
 	}
 
 	// ACME
@@ -227,7 +228,7 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 		return nil, err
 	}
 
-	acmeProviders := initACMEProvider(staticConfiguration, providerAggregator, tlsManager, httpChallengeProvider, tlsChallengeProvider, routinesPool)
+	acmeProviders := initACMEProvider(staticConfiguration, providerAggregator, tlsManager, httpChallengeProvider, tlsChallengeProvider, routinesPool, clusterMember)
 
 	// Tailscale
 
@@ -488,8 +489,8 @@ func switchRouter(routerFactory *server.RouterFactory, serverEntryPointsTCP serv
 }
 
 // initACMEProvider creates and registers acme.Provider instances corresponding to the configured ACME certificate resolvers.
-func initACMEProvider(c *static.Configuration, providerAggregator *aggregator.ProviderAggregator, tlsManager *traefiktls.Manager, httpChallengeProvider, tlsChallengeProvider challenge.Provider, routinesPool *safe.Pool) []*acme.Provider {
-	stores := acme.NewStoreBuilder(routinesPool)
+func initACMEProvider(c *static.Configuration, providerAggregator *aggregator.ProviderAggregator, tlsManager *traefiktls.Manager, httpChallengeProvider, tlsChallengeProvider challenge.Provider, routinesPool *safe.Pool, clusterMember *cluster.Cluster) []*acme.Provider {
+	stores := acme.NewStoreBuilder(routinesPool, clusterMember)
 
 	var names []string
 	var resolvers []*acme.Provider
@@ -500,9 +501,15 @@ func initACMEProvider(c *static.Configuration, providerAggregator *aggregator.Pr
 
 		names = append(names, name)
 
+		store, err := stores.Build(name, resolver.ACME)
+		if err != nil {
+			log.Error().Err(err).Str("resolver", name).Msg("The ACME resolve is skipped from the resolvers list")
+			continue
+		}
+
 		p := &acme.Provider{
 			Configuration:         resolver.ACME,
-			Store:                 stores.Build(resolver.ACME),
+			Store:                 store,
 			ResolverName:          name,
 			HTTPChallengeProvider: httpChallengeProvider,
 			TLSChallengeProvider:  tlsChallengeProvider,

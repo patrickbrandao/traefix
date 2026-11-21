@@ -491,6 +491,17 @@ func (c *Configuration) ValidateConfiguration() error {
 		if err := resolver.ACME.CertStore.Validate(); err != nil {
 			return fmt.Errorf("unable to initialize certificates resolver %q: %w", name, err)
 		}
+
+		if resolver.ACME.CertStore != nil && resolver.ACME.CertStore.Primary == acmeprovider.StoreRedis {
+			if c.Cluster == nil {
+				return fmt.Errorf("unable to initialize certificates resolver %q: the redis certStore needs the cluster option", name)
+			}
+
+			// Each instance would only answer the challenges it started itself: the others cannot serve its temporary certificate.
+			if resolver.ACME.TLSChallenge != nil {
+				return fmt.Errorf("unable to initialize certificates resolver %q: the redis certStore does not support tlsChallenge, use httpChallenge or dnsChallenge", name)
+			}
+		}
 	}
 
 	if c.Core != nil {

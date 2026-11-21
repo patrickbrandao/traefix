@@ -28,7 +28,7 @@ type Event struct {
 	Args   []string
 }
 
-// Subscribe registers a handler for the events of a kind. It must be called before Run.
+// Subscribe registers a handler for the events of a kind.
 // The handlers of an instance run one at a time: a slow one delays the next events.
 func (c *Cluster) Subscribe(kind string, handler func(Event)) {
 	c.mu.Lock()
@@ -38,7 +38,8 @@ func (c *Cluster) Subscribe(kind string, handler func(Event)) {
 }
 
 // OnConnect registers a function called each time the instance starts receiving events,
-// at startup and after a reconnection: the time to catch up on what was missed. It must be called before Run.
+// at startup and after a reconnection: the time to catch up on what was missed.
+// A function registered while the instance receives events is first called at the next reconnection.
 func (c *Cluster) OnConnect(fn func()) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

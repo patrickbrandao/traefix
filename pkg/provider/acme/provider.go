@@ -272,6 +272,8 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 
 	p.configurationChan <- msg
 
+	p.watchStore()
+
 	renewPeriod, renewInterval := getCertificateRenewDurations(p.CertificatesDuration)
 	logger.Debug().Msgf("Attempt to renew certificates %q before expiry and check every %q",
 		renewPeriod, renewInterval)
@@ -300,6 +302,10 @@ func (p *Provider) getClient() (*lego.Client, error) {
 	logger := log.With().Str(logs.ProviderName, p.ResolverName+resolverSuffix).Logger()
 
 	ctx := logger.WithContext(context.Background())
+
+	if err := p.checkStore(ctx); err != nil {
+		return nil, err
+	}
 
 	if p.client != nil {
 		return p.client, nil

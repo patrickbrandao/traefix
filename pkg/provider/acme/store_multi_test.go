@@ -47,16 +47,25 @@ func writeStoreTestFile(t *testing.T, filename string, content map[string]*Store
 	require.NoError(t, os.WriteFile(filename, data, 0o600))
 }
 
-func TestStoreBuilder_Build_default(t *testing.T) {
-	builder := NewStoreBuilder(safe.NewPool(t.Context()))
+func (b *StoreBuilder) mustBuild(t *testing.T, conf *Configuration) Store {
+	t.Helper()
 
-	first := builder.Build(&Configuration{Storage: filepath.Join(t.TempDir(), "acme.json")})
+	store, err := b.Build("le", conf)
+	require.NoError(t, err)
+
+	return store
+}
+
+func TestStoreBuilder_Build_default(t *testing.T) {
+	builder := NewStoreBuilder(safe.NewPool(t.Context()), nil)
+
+	first := builder.mustBuild(t, &Configuration{Storage: filepath.Join(t.TempDir(), "acme.json")})
 	assert.IsType(t, &LocalStore{}, first)
 
 	// The resolvers with the same storage file share the store, as in Traefik.
 	shared := filepath.Join(t.TempDir(), "acme.json")
-	second := builder.Build(&Configuration{Storage: shared})
-	third := builder.Build(&Configuration{Storage: shared})
+	second := builder.mustBuild(t, &Configuration{Storage: shared})
+	third := builder.mustBuild(t, &Configuration{Storage: shared})
 	assert.Same(t, second, third)
 }
 
@@ -71,8 +80,8 @@ func TestStoreBuilder_Build_fileWithDirExport(t *testing.T) {
 		"le": {Account: account, Certificates: []*CertAndStore{existing}},
 	})
 
-	builder := NewStoreBuilder(safe.NewPool(t.Context()))
-	store := builder.Build(&Configuration{
+	builder := NewStoreBuilder(safe.NewPool(t.Context()), nil)
+	store := builder.mustBuild(t, &Configuration{
 		Storage:   storage,
 		CertStore: &CertStore{Primary: StoreFile, Dir: dir, Export: []string{StoreDir}},
 	})
@@ -98,9 +107,9 @@ func TestStoreBuilder_Build_dirOnly(t *testing.T) {
 	storage := filepath.Join(tmp, "acme.json")
 	dir := filepath.Join(tmp, "certs")
 
-	builder := NewStoreBuilder(safe.NewPool(t.Context()))
+	builder := NewStoreBuilder(safe.NewPool(t.Context()), nil)
 	conf := &Configuration{Storage: storage, CertStore: &CertStore{Primary: StoreDir, Dir: dir}}
-	store := builder.Build(conf)
+	store := builder.mustBuild(t, conf)
 
 	account := &Account{Email: "ops@example.com", PrivateKey: []byte("key")}
 	cert := newStoreTestCertificate(t, in90Days(), "example.com")
@@ -111,7 +120,7 @@ func TestStoreBuilder_Build_dirOnly(t *testing.T) {
 	// The storage file is not created when no store uses it.
 	assert.NoFileExists(t, storage)
 
-	store = NewStoreBuilder(safe.NewPool(t.Context())).Build(conf)
+	store = NewStoreBuilder(safe.NewPool(t.Context()), nil).mustBuild(t, conf)
 
 	gotAccount, err := store.GetAccount("le")
 	require.NoError(t, err)
@@ -127,8 +136,8 @@ func TestStoreBuilder_Build_dirWithFileExport(t *testing.T) {
 	storage := filepath.Join(tmp, "acme.json")
 	dir := filepath.Join(tmp, "certs")
 
-	builder := NewStoreBuilder(safe.NewPool(t.Context()))
-	store := builder.Build(&Configuration{
+	builder := NewStoreBuilder(safe.NewPool(t.Context()), nil)
+	store := builder.mustBuild(t, &Configuration{
 		Storage:   storage,
 		CertStore: &CertStore{Primary: StoreDir, Dir: dir, Export: []string{StoreFile}},
 	})
@@ -157,7 +166,7 @@ func TestStoreBuilder_Build_dirImportsStorageFile(t *testing.T) {
 	})
 
 	conf := &Configuration{Storage: storage, CertStore: &CertStore{Primary: StoreDir, Dir: dir}}
-	store := NewStoreBuilder(safe.NewPool(t.Context())).Build(conf)
+	store := NewStoreBuilder(safe.NewPool(t.Context()), nil).mustBuild(t, conf)
 
 	certificates, err := store.GetCertificates("le")
 	require.NoError(t, err)
@@ -174,7 +183,7 @@ func TestStoreBuilder_Build_dirImportsStorageFile(t *testing.T) {
 	renewed := newStoreTestCertificate(t, in90Days().Add(24*time.Hour), "example.com", "www.example.com")
 	require.NoError(t, store.SaveCertificates("le", []*CertAndStore{renewed}))
 
-	store = NewStoreBuilder(safe.NewPool(t.Context())).Build(conf)
+	store = NewStoreBuilder(safe.NewPool(t.Context()), nil).mustBuild(t, conf)
 
 	certificates, err = store.GetCertificates("le")
 	require.NoError(t, err)
@@ -187,7 +196,7 @@ func TestStoreBuilder_Build_dirImportFailsOnUnreadableStorageFile(t *testing.T) 
 
 	require.NoError(t, os.WriteFile(storage, []byte("{not json"), 0o600))
 
-	store := NewStoreBuilder(safe.NewPool(t.Context())).Build(&Configuration{
+	store := NewStoreBuilder(safe.NewPool(t.Context()), nil).mustBuild(t, &Configuration{
 		Storage:   storage,
 		CertStore: &CertStore{Primary: StoreDir, Dir: filepath.Join(tmp, "certs")},
 	})
@@ -246,7 +255,14 @@ func TestCertStore_Validate(t *testing.T) {
 		{desc: "dir", store: &CertStore{Primary: StoreDir, Dir: "/certs"}},
 		{desc: "dir with file export", store: &CertStore{Primary: StoreDir, Dir: "/certs", Export: []string{StoreFile}}},
 		{desc: "no primary", store: &CertStore{}, expectErr: true},
-		{desc: "unknown primary", store: &CertStore{Primary: "redis"}, expectErr: true},
+		{desc: "redis", store: &CertStore{Primary: StoreRedis}},
+		{desc: "redis with exports", store: &CertStore{Primary: StoreRedis, Dir: "/certs", Export: []string{StoreDir, StoreFile}}},
+		{desc: "redis with a tcerts prefix", store: &CertStore{Primary: StoreRedis, Tcerts: &TcertsExport{Enabled: true, Prefix: "certs"}}},
+		{desc: "redis without tcerts", store: &CertStore{Primary: StoreRedis, Tcerts: &TcertsExport{}}},
+		{desc: "tcerts without prefix", store: &CertStore{Primary: StoreRedis, Tcerts: &TcertsExport{Enabled: true}}, expectErr: true},
+		{desc: "tcerts prefix with a colon", store: &CertStore{Primary: StoreRedis, Tcerts: &TcertsExport{Enabled: true, Prefix: "a:b"}}, expectErr: true},
+		{desc: "redis as an export", store: &CertStore{Primary: StoreFile, Export: []string{StoreRedis}}, expectErr: true},
+		{desc: "unknown primary", store: &CertStore{Primary: "s3"}, expectErr: true},
 		{desc: "unknown export", store: &CertStore{Primary: StoreFile, Export: []string{"s3"}}, expectErr: true},
 		{desc: "export of the primary", store: &CertStore{Primary: StoreFile, Export: []string{StoreFile}}, expectErr: true},
 		{desc: "export listed twice", store: &CertStore{Primary: StoreFile, Dir: "/certs", Export: []string{StoreDir, StoreDir}}, expectErr: true},

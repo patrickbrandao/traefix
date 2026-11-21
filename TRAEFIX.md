@@ -117,10 +117,17 @@ servidores, satélite atrás de NAT). Implementado até agora:
 
 - **Base do cluster** (`cluster`, etapa 2): cada instância se anuncia num Valkey ou Redis (único,
   Sentinel ou Cluster) com `nodeID` e `priority`; o pacote `pkg/cluster/` oferece a lista de nós vivos,
-  travas com validade (`TryLock`, `Keep`, `Release`) e um canal de eventos com reassinatura. Nenhum
-  recurso usa o cluster ainda. Ganchos no upstream em `pkg/config/static/static_config.go` (campo
+  travas com validade (`TryLock`, `Keep`, `Release`) e um canal de eventos com reassinatura. Ganchos no upstream em `pkg/config/static/static_config.go` (campo
   `Cluster`) e `cmd/traefik/traefik.go`. Documentação:
   `docs/content/reference/install-configuration/cluster.md`.
+
+- **Certificados no Valkey** (`certStore.primary: redis`, etapa 3): conta e certificados do resolver ficam
+  no servidor do `cluster`, em `traefix:acme:{<resolver>}:*`; cada instância mantém uma cópia em memória,
+  recebe os certificados das outras por evento e por comparação a cada 15 s, grava as suas exportações e
+  parte delas quando o servidor está fora. A cópia `tcerts:cert:<domínio>` atende o `cert-get` e o
+  `cert-watcher` do `traefik-certs`. **As instâncias ainda não coordenam os pedidos à CA** (eleição e
+  desafio compartilhado são as etapas 4 e 5): até lá, não use com várias réplicas em produção. Código em `pkg/provider/acme/store_redis.go` e `provider_store.go`; ganchos no upstream em
+  `Provide` e `getClient` de `pkg/provider/acme/provider.go`.
 
 ## Infopage
 

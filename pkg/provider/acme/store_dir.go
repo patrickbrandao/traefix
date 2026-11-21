@@ -326,7 +326,7 @@ type dirClaim struct {
 func (s *DirStore) sync() error {
 	var errs []error
 
-	layout := s.layout()
+	layout := certLayout(s.certs)
 	for _, name := range slices.Sorted(maps.Keys(layout)) {
 		claim := layout[name]
 
@@ -359,20 +359,20 @@ func (s *DirStore) sync() error {
 	return errors.Join(errs...)
 }
 
-// layout gives each directory its certificate, among the certificates of every resolver.
+// certLayout gives each directory its certificate, among the certificates of every resolver.
 // A domain and its wildcard share a directory, as in traefik-certs.
 // When two certificates want it, the one with the exact name keeps it
 // and the wildcard-only one goes to a directory of its own, so that none is lost.
-func (s *DirStore) layout() map[string]*dirClaim {
+func certLayout(certs map[string][]*CertAndStore) map[string]*dirClaim {
 	exact := map[string]*dirClaim{}
 	wildcard := map[string]*dirClaim{}
 
-	for _, resolverName := range slices.Sorted(maps.Keys(s.certs)) {
-		for _, cert := range s.certs[resolverName] {
+	for _, resolverName := range slices.Sorted(maps.Keys(certs)) {
+		for _, cert := range certs[resolverName] {
 			_, _, leaf, err := decomposePEM(string(cert.Certificate.Certificate))
 			if err != nil {
 				log.Error().Err(err).Str(logs.ProviderName, "acme").Strs("domains", cert.Domain.ToStrArray()).
-					Msg("Unable to read a certificate, it is not written to the certificates directory")
+					Msg("Unable to read a certificate, it is not written to the per-domain certificate files or keys")
 				continue
 			}
 

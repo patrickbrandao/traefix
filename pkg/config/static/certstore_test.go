@@ -16,7 +16,8 @@ func TestValidateConfiguration_certStore(t *testing.T) {
 		{desc: "no certStore"},
 		{desc: "dir with file export", certStore: &acme.CertStore{Primary: acme.StoreDir, Dir: "/certs", Export: []string{acme.StoreFile}}},
 		{desc: "dir without its location", certStore: &acme.CertStore{Primary: acme.StoreDir}, expectErr: true},
-		{desc: "unknown store", certStore: &acme.CertStore{Primary: "redis"}, expectErr: true},
+		{desc: "unknown store", certStore: &acme.CertStore{Primary: "s3"}, expectErr: true},
+		{desc: "redis without the cluster option", certStore: &acme.CertStore{Primary: acme.StoreRedis}, expectErr: true},
 	}
 
 	for _, test := range testCases {

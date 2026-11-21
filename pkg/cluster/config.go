@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 	ptypes "github.com/traefik/paerser/types"
 	"github.com/traefik/traefik/v3/pkg/types"
 )
@@ -111,8 +113,22 @@ func (c *Configuration) resolveNodeID() (string, error) {
 	return hostname, nil
 }
 
+// redisLogger sends the messages of the Redis client to the logs of Traefix.
+// The client writes one line for each failed connection: at the debug level, an unreachable server does not flood the logs,
+// and the instance reports the loss and the return of the server once.
+type redisLogger struct{}
+
+func (redisLogger) Printf(_ context.Context, format string, v ...any) {
+	log.Debug().Str("component", "redis").Msgf(format, v...)
+}
+
+var setRedisLogger sync.Once
+
 // newClient creates the client of the single instance, of the Redis Cluster or of the Sentinel master.
 func (r *Redis) newClient(ctx context.Context) (redis.UniversalClient, error) {
+	// The logger of the client is shared by every client of the process.
+	setRedisLogger.Do(func() { redis.SetLogger(redisLogger{}) })
+
 	options := &redis.UniversalOptions{
 		Addrs:            r.Endpoints,
 		Username:         r.Username,

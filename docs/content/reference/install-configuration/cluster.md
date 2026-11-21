@@ -5,9 +5,11 @@ description: "Join the Traefix instances that share a Valkey or Redis server int
 
 The `cluster` option joins the Traefix instances that use the same Valkey or Redis server and the same `prefix` into a cluster. Each instance announces itself to the other instances with its identifier, its priority and its version. The option is specific to Traefix, the fork of Traefik Proxy.
 
+The instances of a cluster can share their ACME account and certificates, with the [`redis` certificate store](./tls/certificate-resolvers/acme-certstore.md#redis-as-the-primary-store) of a certificate resolver.
+
 !!! info "Current scope"
 
-    In this version, the instances of a cluster only announce themselves. The `priority` option is read and announced, and no feature uses it yet.
+    In this version, the `priority` option is read and announced, and no feature uses it yet.
 
 Without the `cluster` option, the instance connects to no Redis server and behaves as in Traefik.
 
@@ -131,4 +133,6 @@ The names below use the default `traefix` prefix.
 | <a id="opt-traefixlockname" href="#opt-traefixlockname" title="#opt-traefixlockname">`traefix:lock:<name>`</a> | Lock held by one instance at a time. Expires when its holder stops extending it. |
 | <a id="opt-traefixevents" href="#opt-traefixevents" title="#opt-traefixevents">`traefix:events`</a> | Channel of the messages the instances send to each other. |
 
-When the Redis server uses access control lists, give the user of the instances access to the keys and channels that start with the prefix, for example `~traefix:* &traefix:*`.
+The `redis` certificate store adds the [keys of each certificate resolver](./tls/certificate-resolvers/acme-certstore.md#keys-in-the-redis-server).
+
+When the Redis server uses access control lists, give the user of the instances access to the keys and channels that start with the prefix, for example `~traefix:* &traefix:*`. With the `redis` certificate store and its copy for traefik-certs, add `~tcerts:* &tcerts:*`.
