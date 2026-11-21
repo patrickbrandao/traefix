@@ -122,6 +122,15 @@ Traefix doesn't start when the `cluster` option has no `redis` endpoints, a nega
 - **An instance that stops leaves the cluster at once.** An instance that crashes, or loses the Redis server, is gone for the other instances after `nodeTimeout`. The Redis server counts this time, so the clocks of the instances don't have to agree.
 - **An instance that cannot reach the Redis server keeps serving requests.** The instance logs the loss once, tries again at each `heartbeatInterval`, and logs when it joins the cluster again.
 
+## Metrics
+
+| Metric | Contains |
+|:-------|:---------|
+| <a id="opt-traefik-cluster-redis-up" href="#opt-traefik-cluster-redis-up" title="#opt-traefik-cluster-redis-up">`traefik_cluster_redis_up`</a> | `1` when the last announcement of the instance reached the Redis server, `0` otherwise. |
+| <a id="opt-traefik-cluster-nodes" href="#opt-traefik-cluster-nodes" title="#opt-traefik-cluster-nodes">`traefik_cluster_nodes`</a> | Number of running instances, this one included. The value is the last one the instance read while the Redis server was reachable. |
+
+Datadog, StatsD and InfluxDB use the same names with dots, for example `traefik.cluster.redis.up`. The certificate resolvers add [their own metrics](./tls/certificate-resolvers/acme-certstore.md#metrics).
+
 ## Keys in the Redis Server
 
 The names below use the default `traefix` prefix.

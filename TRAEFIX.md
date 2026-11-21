@@ -144,6 +144,21 @@ servidores, satélite atrás de NAT). Implementado até agora:
   `priority: 0`. Código em `pkg/provider/acme/challenge_http_cluster.go`; gancho no upstream em
   `cmd/traefik/traefik.go` (`acme.NewHTTPChallengeSolver`).
 
+- **Renovação e Valkey fora do ar** (etapa 6): as renovações de uma verificação passam pela eleição em
+  lote (uma espera só), e a instância que acha certificados a renovar anuncia a lista no evento `renew`;
+  as de prioridade maior reservam os que têm na mesma versão antes da sua própria verificação. Com o
+  Valkey fora, nenhuma chamada espera por ele: os pedidos ficam pendentes e voltam quando ele volta. Um
+  certificado obtido por outra conta ACME (importado do `acme.json` de outra instância) é renovado sem o
+  vínculo ARI quando a CA recusa a substituição (`pkg/provider/acme/provider_renew.go`; gancho de uma
+  linha em `renewCertificates`).
+
+- **Métricas e teste de ponta a ponta** (etapa 7): `traefik_cluster_redis_up`, `traefik_cluster_nodes`,
+  `traefik_acme_cluster_elections_total`, `traefik_acme_cluster_issuances_total`,
+  `traefik_acme_cluster_challenge_lookups_total`, `traefik_acme_cluster_config_mismatch` e
+  `traefik_acme_store_writes_total`, em `pkg/observability/metrics/traefix_cluster.go`.
+  `scripts/traefix/e2e-cluster.sh` confere os cenários de aceite com o binário real, um `redis-server` e
+  o Pebble, sem Docker (`go install github.com/letsencrypt/pebble/v2/cmd/pebble@latest`).
+
 ## Infopage
 
 `infopage/` (fork do `traefik/whoami`, imagem `tmsoftbrasil/traefix-infopage`, em

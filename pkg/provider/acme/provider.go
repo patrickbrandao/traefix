@@ -1032,7 +1032,7 @@ func (p *Provider) renewCertificates(ctx context.Context, renewPeriod, renewInte
 			UseARICertID:     true,
 		}
 
-		renewedCert, err := client.Certificate.Renew(ctx, res, opts)
+		renewedCert, err := renewCertificate(ctx, client.Certificate.Renew, res, opts)
 		if err != nil {
 			logger.Error().Err(err).Msgf("Error renewing ACME certificate: %v", cert.Domain)
 			continue

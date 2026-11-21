@@ -206,6 +206,14 @@ func (c *Cluster) heartbeat(ctx context.Context) {
 	c.up = err == nil
 	c.mu.Unlock()
 
+	setRedisUp(err == nil)
+
+	if err == nil {
+		if nodes, err := c.Nodes(ctx); err == nil {
+			setNodes(len(nodes))
+		}
+	}
+
 	switch {
 	case err != nil && ctx.Err() != nil && errors.Is(context.Cause(ctx), context.Canceled):
 		// The instance is stopping.

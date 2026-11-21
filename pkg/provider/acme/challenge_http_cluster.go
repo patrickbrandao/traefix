@@ -163,10 +163,14 @@ func (c *ClusterChallengeHTTP) ServeHTTP(rw http.ResponseWriter, req *http.Reque
 		domain = req.Host
 	}
 
+	result := lookupLocal
+
 	value := c.local.getTokenValue(ctx, token, domain)
 	if len(value) == 0 {
-		value = c.lookup(ctx, token, domain)
+		value, result = c.lookup(ctx, token, domain)
 	}
+
+	countChallengeLookup(result)
 
 	if len(value) == 0 {
 		rw.WriteHeader(http.StatusNotFound)
@@ -193,10 +197,14 @@ func (c *ClusterChallengeHTTP) key(token, domain string) (string, bool) {
 }
 
 // lookup asks the server of the cluster for the answer of a challenge presented by another instance.
-func (c *ClusterChallengeHTTP) lookup(ctx context.Context, token, domain string) []byte {
+func (c *ClusterChallengeHTTP) lookup(ctx context.Context, token, domain string) ([]byte, string) {
 	key, ok := c.key(token, domain)
-	if !ok || c.skip(key) {
-		return nil
+	if !ok {
+		return nil, lookupInvalid
+	}
+
+	if c.skip(key) {
+		return nil, lookupMiss
 	}
 
 	lookupCtx, cancel := context.WithTimeout(ctx, clusterChallengeLookupTimeout)
@@ -206,7 +214,7 @@ func (c *ClusterChallengeHTTP) lookup(ctx context.Context, token, domain string)
 	case c.lookups <- struct{}{}:
 		defer func() { <-c.lookups }()
 	case <-lookupCtx.Done():
-		return nil
+		return nil, lookupError
 	}
 
 	value, err := c.member.Client().Get(lookupCtx, key).Bytes()
@@ -214,7 +222,7 @@ func (c *ClusterChallengeHTTP) lookup(ctx context.Context, token, domain string)
 	switch {
 	case errors.Is(err, redis.Nil):
 		c.missed(key)
-		return nil
+		return nil, lookupMiss
 
 	case err != nil:
 		// A client that goes away says nothing about the server.
@@ -224,12 +232,12 @@ func (c *ClusterChallengeHTTP) lookup(ctx context.Context, token, domain string)
 
 		log.Ctx(ctx).Debug().Err(err).Msgf("Unable to ask the cluster for the ACME challenge for %s", domain)
 
-		return nil
+		return nil, lookupError
 	}
 
 	log.Ctx(ctx).Debug().Msgf("Answering the ACME challenge for %s presented by another instance", domain)
 
-	return value
+	return value, lookupRedis
 }
 
 // skip tells whether the server is not asked: it just failed, or it just said that it does not know this challenge.

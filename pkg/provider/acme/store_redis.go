@@ -697,6 +697,9 @@ func (s *RedisStore) exportTcerts(ctx context.Context, written []*redisCert) {
 
 		stored, err := storeTcertsIfNotOlder.Run(ctx, s.cluster.Client(), []string{prefix + ":cert:" + name},
 			data, doc.NotAfterUnix, doc.CertMD5, strings.Join(sans, ",")).Int()
+
+		countStoreWrite(claim.resolverName, "tcerts", err)
+
 		if err != nil {
 			log.Warn().Err(err).Str(logs.ProviderName, claim.resolverName+resolverSuffix).Str("domain", name).
 				Msg("Unable to write the traefik-certs copy of a certificate")

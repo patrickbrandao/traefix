@@ -51,7 +51,11 @@ const (
 var otlpSecondsUnit = "s"
 
 // traefixRegistry is the part of Registry holding the Traefix metrics.
+//
+//nolint:interfacebloat // It gathers the metrics of every Traefix feature behind the single line the upstream Registry embeds.
 type traefixRegistry interface {
+	clusterRegistry
+
 	// FingerprintExportRecordsCounter counts the records queued for export, by entrypoint and type.
 	FingerprintExportRecordsCounter() metrics.Counter
 	// FingerprintExportDroppedCounter counts the records dropped, by entrypoint and reason.
@@ -86,6 +90,8 @@ type traefixMetrics struct {
 	wafRequests                   metrics.Counter
 	wafDuration                   ScalableHistogram
 	wafRuleMatches                metrics.Counter
+
+	cluster clusterMetrics
 }
 
 func (r *standardRegistry) FingerprintExportRecordsCounter() metrics.Counter {
@@ -177,6 +183,7 @@ func newMultiTraefixMetrics(registries []Registry) traefixMetrics {
 		wafRequests:                   multi.NewCounter(wafRequests...),
 		wafDuration:                   MultiHistogram(wafDuration),
 		wafRuleMatches:                multi.NewCounter(wafRuleMatches...),
+		cluster:                       newMultiClusterMetrics(registries),
 	}
 }
 
@@ -237,7 +244,12 @@ func newPrometheusTraefixMetrics(buckets []float64) (traefixMetrics, []vector) {
 	m.fingerprintExportSend, _ = NewHistogramWithScale(send, time.Second)
 	m.wafDuration, _ = NewHistogramWithScale(wafDuration, time.Second)
 
-	return m, []vector{records.cv, dropped.cv, batches.cv, queue.gv, send.hv, truncated.cv, failOpen.cv, wafRequests.cv, wafDuration.hv, wafRuleMatches.cv}
+	vectors := []vector{records.cv, dropped.cv, batches.cv, queue.gv, send.hv, truncated.cv, failOpen.cv, wafRequests.cv, wafDuration.hv, wafRuleMatches.cv}
+
+	var clusterVectors []vector
+	m.cluster, clusterVectors = newPrometheusClusterMetrics()
+
+	return m, append(vectors, clusterVectors...)
 }
 
 func newDatadogTraefixMetrics(client *dogstatsd.Dogstatsd) traefixMetrics {
@@ -253,6 +265,7 @@ func newDatadogTraefixMetrics(client *dogstatsd.Dogstatsd) traefixMetrics {
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(client.NewHistogram(statsdFingerprintExportSendName, 1.0), time.Second)
 	m.wafDuration, _ = NewHistogramWithScale(client.NewHistogram(statsdWAFDurationName, 1.0), time.Second)
+	m.cluster = newDatadogClusterMetrics(client)
 
 	return m
 }
@@ -270,6 +283,7 @@ func newStatsdTraefixMetrics(client *statsd.Statsd) traefixMetrics {
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(client.NewTiming(statsdFingerprintExportSendName, 1.0), time.Millisecond)
 	m.wafDuration, _ = NewHistogramWithScale(client.NewTiming(statsdWAFDurationName, 1.0), time.Millisecond)
+	m.cluster = newStatsdClusterMetrics(client)
 
 	return m
 }
@@ -287,6 +301,7 @@ func newInfluxDB2TraefixMetrics(store *influx.Influx) traefixMetrics {
 	}
 	m.fingerprintExportSend, _ = NewHistogramWithScale(store.NewHistogram(influxDBFingerprintPrefix+statsdFingerprintExportSendName), time.Second)
 	m.wafDuration, _ = NewHistogramWithScale(store.NewHistogram(influxDBFingerprintPrefix+statsdWAFDurationName), time.Second)
+	m.cluster = newInfluxDB2ClusterMetrics(store)
 
 	return m
 }
@@ -314,6 +329,7 @@ func newOTLPTraefixMetrics(meter metric.Meter) traefixMetrics {
 		"How long it took to send a batch of connection fingerprint records, partitioned by entrypoint.", otlpSecondsUnit), time.Second)
 	m.wafDuration, _ = NewHistogramWithScale(newOTLPHistogramFrom(meter, wafDurationName,
 		"How long a Coraza middleware took to process a request, without the next handlers, partitioned by middleware.", otlpSecondsUnit), time.Second)
+	m.cluster = newOTLPClusterMetrics(meter)
 
 	return m
 }

@@ -3,6 +3,8 @@ package acme
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"reflect"
 	"strings"
@@ -57,6 +59,8 @@ func (p *Provider) resolveCertificate(ctx context.Context, domain types.Domain, 
 	dom, cert, err := obtain(obtainCtx, domain, tlsStore)
 	stop()
 
+	countIssuance(p.ResolverName, issuanceObtain, cert != nil, err)
+
 	p.elected(ctx, coord, id, lock, cert != nil, err)
 
 	return dom, cert, err
@@ -81,6 +85,8 @@ func (p *Provider) resolveDefaultCertificate(ctx context.Context, domains []stri
 	cert, err := p.obtainDefaultCertificate(obtainCtx, domains)
 	stop()
 
+	countIssuance(p.ResolverName, issuanceObtain, cert != nil, err)
+
 	p.elected(ctx, coord, id, lock, cert != nil, err)
 
 	return cert, err
@@ -104,6 +110,12 @@ func (p *Provider) electFor(ctx context.Context, coord *coordinator, id string, 
 	// The other instances learn about the certificate: this one may not be allowed to obtain it, or not be the best one to.
 	if ctx.Value(coordinatorAttemptKey{}) == nil {
 		coord.request(ctx, id, domains, tlsStore)
+	}
+
+	// Without the server, no instance can be elected: the request stays pending, without a wait on each call to the server.
+	if err := coord.store.Ready(p.ResolverName); err != nil {
+		logger.Debug().Err(err).Strs("domains", domains).Msg("The certificate is requested once the cluster Redis server is back")
+		return nil, nil
 	}
 
 	lock, err := coord.acquire(ctx, id)
@@ -149,11 +161,12 @@ func (p *Provider) elected(ctx context.Context, coord *coordinator, id string, l
 	}
 }
 
-// electRenewals keeps the certificates that this instance is elected to renew.
+// electRenewals returns the certificates that this instance is elected to renew: the ones it found due and took,
+// and the ones it took from the announcement of an instance with a lower priority.
 // The returned function must be called once the renewals are done.
 func (p *Provider) electRenewals(ctx context.Context, certificates []*CertAndStore) ([]*CertAndStore, func()) {
 	coord := p.coordinator()
-	if coord == nil || len(certificates) == 0 {
+	if coord == nil {
 		return certificates, func() {}
 	}
 
@@ -161,11 +174,14 @@ func (p *Provider) electRenewals(ctx context.Context, certificates []*CertAndSto
 		return nil, func() {}
 	}
 
-	// The instances above this one check their own renewals now, and take them: this one waits for its turn.
-	if above, _, err := coord.levels(ctx); err == nil && above > 0 {
-		if err := coord.member.Publish(ctx, coordinatorEventRenew, p.ResolverName); err != nil {
-			log.Ctx(ctx).Debug().Err(err).Msg("Unable to announce the renewals to the cluster")
+	logger := log.Ctx(ctx)
+
+	if err := coord.store.Ready(p.ResolverName); err != nil {
+		if len(certificates) > 0 {
+			logger.Info().Int("certificates", len(certificates)).Msg("The certificates are renewed once the cluster Redis server is back")
 		}
+
+		return nil, func() {}
 	}
 
 	type renewal struct {
@@ -177,19 +193,41 @@ func (p *Provider) electRenewals(ctx context.Context, certificates []*CertAndSto
 	}
 
 	var renewals []*renewal
-	for _, cert := range certificates {
-		id := certID(cert.Domain.ToStrArray())
 
-		lock, err := coord.acquire(ctx, id)
-		if err != nil {
-			log.Ctx(ctx).Debug().Err(err).Strs("domains", cert.Domain.ToStrArray()).Msg("Unable to take the certificate renewal in the cluster")
-		}
-		if lock == nil {
+	reserved := coord.takeReserved()
+	for id, reservation := range reserved {
+		cert, previous := p.certificateByID(id)
+		if cert == nil {
+			reservation.stop()
+			_ = reservation.lock.Release(ctx)
+
 			continue
 		}
 
-		_, stop := coord.hold(ctx, lock)
-		renewals = append(renewals, &renewal{id: id, cert: cert, previous: cert.Certificate.Certificate, lock: lock, stop: stop})
+		renewals = append(renewals, &renewal{id: id, cert: cert, previous: previous, lock: reservation.lock, stop: reservation.stop})
+	}
+
+	due := map[string]*CertAndStore{}
+	var ids, items []string
+	for _, cert := range certificates {
+		id := certID(cert.Domain.ToStrArray())
+		if _, ok := reserved[id]; ok {
+			continue
+		}
+
+		due[id] = cert
+		ids = append(ids, id)
+		items = append(items, renewItem(id, certificateSum(cert.Certificate.Certificate)))
+	}
+
+	if len(ids) > 0 {
+		// The instances above this one take what they can: this one waits for its turn, and renews the rest.
+		coord.announceRenewals(ctx, items)
+
+		for id, lock := range coord.acquireAll(ctx, ids) {
+			_, stop := coord.hold(ctx, lock)
+			renewals = append(renewals, &renewal{id: id, cert: due[id], previous: due[id].Certificate.Certificate, lock: lock, stop: stop})
+		}
 	}
 
 	if len(renewals) == 0 {
@@ -218,15 +256,51 @@ func (p *Provider) electRenewals(ctx context.Context, certificates []*CertAndSto
 			renewal.stop()
 
 			if p.hasCertificate(renewal.cert.Domain, renewal.previous) {
+				countIssuance(p.ResolverName, issuanceRenew, false, errNotRenewed)
+
 				// A renewal is never abandoned: it is tried again, at most every few hours.
-				coord.failed(ctx, renewal.id, errors.New("the certificate was not renewed"), false)
+				coord.failed(ctx, renewal.id, errNotRenewed, false)
 			} else {
+				countIssuance(p.ResolverName, issuanceRenew, true, nil)
+
 				coord.succeeded(ctx, renewal.id)
 			}
 
 			_ = renewal.lock.Release(ctx)
 		}
 	}
+}
+
+var errNotRenewed = errors.New("the certificate was not renewed")
+
+// certificateByID returns the certificate the resolver holds for a set of domains, and its content at this time.
+func (p *Provider) certificateByID(id string) (*CertAndStore, []byte) {
+	p.certificatesMu.RLock()
+	defer p.certificatesMu.RUnlock()
+
+	for _, cert := range p.certificates {
+		if certID(cert.Domain.ToStrArray()) == id {
+			return cert, cert.Certificate.Certificate
+		}
+	}
+
+	return nil, nil
+}
+
+// certificateSum identifies the certificate the resolver holds for a set of domains, empty when it holds none.
+func (p *Provider) certificateSum(id string) string {
+	_, certificate := p.certificateByID(id)
+	if certificate == nil {
+		return ""
+	}
+
+	return certificateSum(certificate)
+}
+
+func certificateSum(certificate []byte) string {
+	sum := sha256.Sum256(certificate)
+
+	return hex.EncodeToString(sum[:8])
 }
 
 // hasCertificate tells whether the resolver holds this exact certificate for the domain.

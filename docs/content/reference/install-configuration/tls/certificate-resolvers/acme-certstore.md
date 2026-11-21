@@ -169,6 +169,8 @@ certificatesResolvers:
 - **An instance requests and renews no certificate while the server is unreachable.** The instance keeps serving the certificates it holds, and logs the loss and the return of the server.
 - **Each instance offers its local certificates to the server when it starts.** The instance sends the certificates of its exports and of an existing `storage` file. The server takes the certificates it doesn't have and the ones that are more recent than its own, and keeps its own account when it has one. This is how the `storage` file of an instance that joins the cluster reaches the other instances, and how a server that lost its data gets the certificates back.
 
+The instances share the account of the first instance that reaches the Redis server. The certificates that another account obtained are [renewed as new certificates](#renewal-of-imported-certificates).
+
 With the `redis` primary store, the `dir` export also writes the ACME account to `<certStore.dir>/_traefix/<resolver>/account.json`, so that an instance can start from its exports alone.
 
 ### Certificate Requests in a Cluster
@@ -182,7 +184,9 @@ The instances of a cluster agree on the one that requests each certificate from 
 - **An instance that just started waits `cluster.heartbeatInterval` before its first request.** The instances that start together use this time to see each other.
 - **When the elected instance stops during a request, another instance takes the request** after `election.lockTTL` at most.
 - **The instances share the failures.** After a failed request, no instance tries again before a delay of 2 minutes, then 15 minutes, 30 minutes, 1 hour, 2 hours, and 6 hours for the following failures. The instance that failed lets the other instances try first at the next attempt. After 14 days of failures, the instances stop requesting the certificate until a change of the routing configuration asks for the certificate again.
-- **Renewals follow the same election.** An instance that finds a certificate to renew tells the instances with a higher priority, which check their own renewals at once. A failed renewal is tried again with the same delays, and is not abandoned.
+- **Renewals follow the same election.** An instance that finds certificates to renew tells the instances with a higher priority, which take the renewals of the certificates they hold in the same version. The instance renews what the instances above it left. A failed renewal is tried again with the same delays, and is not abandoned.
+- **The instances log a warning when every instance has the priority 0.** A certificate that a router needs then waits until an instance with a priority above zero starts.
+- **No instance takes a request while the Redis server is unreachable.** The certificates that the routers need meanwhile are requested when the Redis server is back.
 - **The instances share one ACME account.** The first instance that needs the account registers it, and the other instances wait for it instead of registering their own.
 
 The instances log a warning when they configure the same resolver with a different `caServer`, `email`, `keyType`, challenge, `profile` or `preferredChain`: the certificate then depends on the instance that requests it.
@@ -235,3 +239,23 @@ Traefix brings each export in line with the primary store when the resolver star
 - The `file` export writes the account and the certificates to the `storage` file, in the format Traefik reads. You can use the file as a backup, or to go back to the `storage` file as the primary store.
 - The `dir` export writes the certificate files. The account stays in the primary store.
 - A failed write to an export is logged and doesn't fail the certificate request: the primary store holds the certificate.
+
+## Renewal of Imported Certificates
+
+A resolver can hold certificates that another ACME account obtained: the certificates of the `storage` file of another instance, or of a directory that `cert-watcher` filled.
+
+When Traefix renews a certificate, it tells the ACME server which certificate the new one replaces. The ACME server only accepts this from the account that obtained the certificate. When the ACME server refuses the request for this reason, Traefix sends the request again as a request for a new certificate, and logs the refusal at the `INFO` level.
+
+Such a renewal doesn't get the rate limit exemption that some ACME servers give to the renewals that name the certificate they replace. The next renewals of the certificate are regular ones, as the account of the resolver obtained it.
+
+## Metrics
+
+| Metric | Labels | Contains |
+|:-------|:-------|:---------|
+| <a id="opt-traefik-acme-store-writes-total" href="#opt-traefik-acme-store-writes-total" title="#opt-traefik-acme-store-writes-total">`traefik_acme_store_writes_total`</a> | `resolver`, `target`, `result` | Writes of the certificates to the primary store and to the exports. The `target` is `file`, `dir`, `redis`, or `tcerts` for the [copy for traefik-certs](#copy-for-traefik-certs). The `result` is `success` or `failure`. |
+| <a id="opt-traefik-acme-cluster-elections-total" href="#opt-traefik-acme-cluster-elections-total" title="#opt-traefik-acme-cluster-elections-total">`traefik_acme_cluster_elections_total`</a> | `resolver`, `result` | Elections of a certificate request the instance took part in: `won`, `lost` (another instance took the request), `skipped` (a request in progress or a recent failure). |
+| <a id="opt-traefik-acme-cluster-issuances-total" href="#opt-traefik-acme-cluster-issuances-total" title="#opt-traefik-acme-cluster-issuances-total">`traefik_acme_cluster_issuances_total`</a> | `resolver`, `kind`, `result` | Certificates the instance requested from the ACME server after an election. The `kind` is `obtain` or `renew`, and the `result` is `success` or `failure`. |
+| <a id="opt-traefik-acme-cluster-challenge-lookups-total" href="#opt-traefik-acme-cluster-challenge-lookups-total" title="#opt-traefik-acme-cluster-challenge-lookups-total">`traefik_acme_cluster_challenge_lookups_total`</a> | `result` | Requests for an HTTP-01 challenge: `local` (the instance started the challenge), `redis` (another instance started it), `miss` (unknown token), `invalid` (no valid token), `error` (the Redis server didn't answer). |
+| <a id="opt-traefik-acme-cluster-config-mismatch" href="#opt-traefik-acme-cluster-config-mismatch" title="#opt-traefik-acme-cluster-config-mismatch">`traefik_acme_cluster_config_mismatch`</a> | `resolver` | `1` when another instance of the cluster configures the resolver differently, `0` otherwise. |
+
+The metrics with `cluster` in their name only have values with the `redis` primary store, or with the [`cluster`](../../cluster.md) option for the challenge requests. Datadog, StatsD and InfluxDB use the same names with dots, for example `traefik.acme.store.writes.total`.

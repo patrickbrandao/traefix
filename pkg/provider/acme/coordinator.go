@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand/v2"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,6 +43,9 @@ const (
 	coordinatorAccountWait = 500 * time.Millisecond
 
 	coordinatorMaxError = 500
+
+	// coordinatorMaxRenewItems bounds the size of a renew event. The renewals that do not fit are raced as before.
+	coordinatorMaxRenewItems = 200
 )
 
 // coordinatorBackoff spaces the attempts after a failure. With the first try, it allows at most four attempts in an hour,
@@ -77,8 +81,12 @@ type coordinator struct {
 	digest      string
 	settleUntil time.Time
 	pending     map[string]*pendingRequest
+	reserved    map[string]*reservation
 	warned      map[string]struct{}
 	lastWants   time.Time
+	// orphan is true once the instance told that no instance may request the certificates.
+	orphan      bool
+	lastOrphans time.Time
 
 	signals  chan coordinatorSignal
 	renewing atomic.Bool
@@ -95,9 +103,18 @@ type pendingRequest struct {
 	wantWritten time.Time
 }
 
+// reservation is a renewal this instance took from the announcement of another instance, before it checked its own renewals.
+type reservation struct {
+	lock *cluster.Lock
+	stop context.CancelFunc
+}
+
 type coordinatorSignal struct {
 	kind string
 	id   string
+	// priority and items come with a renew signal: the priority of the instance that sent it, and the certificates it found due.
+	priority int
+	items    []string
 }
 
 type wantRecord struct {
@@ -127,6 +144,7 @@ func newCoordinator(member *cluster.Cluster, store *RedisStore, resolverName str
 		now:          time.Now,
 		jitter:       func() time.Duration { return rand.N(coordinatorMaxJitter) },
 		pending:      map[string]*pendingRequest{},
+		reserved:     map[string]*reservation{},
 		warned:       map[string]struct{}{},
 		signals:      make(chan coordinatorSignal, 64),
 	}
@@ -162,9 +180,16 @@ func (c *coordinator) start(provider *Provider, pool *safe.Pool) {
 	})
 
 	c.member.Subscribe(coordinatorEventRenew, func(event cluster.Event) {
-		if len(event.Args) == 1 && event.Args[0] == c.resolverName && event.Sender != c.member.NodeID() {
-			c.signal(coordinatorSignal{kind: coordinatorEventRenew})
+		if len(event.Args) < 2 || event.Args[0] != c.resolverName || event.Sender == c.member.NodeID() {
+			return
 		}
+
+		priority, err := strconv.Atoi(event.Args[1])
+		if err != nil {
+			return
+		}
+
+		c.signal(coordinatorSignal{kind: coordinatorEventRenew, priority: priority, items: event.Args[2:]})
 	})
 
 	pool.GoCtx(c.run)
@@ -192,7 +217,7 @@ func (c *coordinator) run(ctx context.Context) {
 				c.learn(ctx, sig.id)
 				c.poll(ctx)
 			case coordinatorEventRenew:
-				c.renew(ctx)
+				c.renew(ctx, sig)
 			}
 		case <-ticker.C:
 			c.poll(ctx)
@@ -212,7 +237,8 @@ func (c *coordinator) poll(ctx context.Context) {
 	}
 	c.mu.Unlock()
 
-	if provider == nil {
+	// Without the server, nothing can be learned, announced or taken: each try would only wait for it.
+	if provider == nil || c.store.isDown() {
 		return
 	}
 
@@ -229,9 +255,19 @@ func (c *coordinator) poll(ctx context.Context) {
 
 	now := c.now()
 
+	if len(pending) > 0 && c.member.Priority() == 0 {
+		c.warnOrphan(ctx)
+	}
+
 	for id, request := range pending {
 		if len(provider.uncoveredDomains(request.domains, request.tlsStore)) == 0 {
+			// A certificate in the store is the same for every instance, whichever asked for it.
+			if !request.local && provider.certificateSum(id) != "" {
+				c.clear(ctx, id)
+			}
+
 			c.forget(ctx, id)
+
 			continue
 		}
 
@@ -318,7 +354,8 @@ func (c *coordinator) request(ctx context.Context, id string, domains []string, 
 	request.local = true
 	c.mu.Unlock()
 
-	if !announce {
+	// Without the server, the request is kept here: the next polls write it once the server is back.
+	if !announce || c.store.isDown() {
 		return
 	}
 
@@ -458,29 +495,13 @@ func (c *coordinator) acquire(ctx context.Context, id string) (*cluster.Lock, er
 		return nil, nil
 	}
 
-	failure, err := c.readFail(ctx, id)
-	if err != nil {
+	failure, free, err := c.available(ctx, id)
+	if err != nil || !free {
+		countElection(c.resolverName, electionSkipped)
 		return nil, err
 	}
 
-	if failure != nil {
-		if next := time.Unix(failure.NextRetryAt, 0); c.now().Before(next) {
-			c.postpone(id, next)
-			return nil, nil
-		}
-	}
-
-	if _, held, err := c.member.LockHolder(ctx, c.lockName(id)); err != nil || held {
-		c.postpone(id, c.now().Add(c.step))
-		return nil, err
-	}
-
-	// The instances are counted once the ones that started together had the time to announce themselves.
-	c.mu.Lock()
-	settling := c.settleUntil.Sub(c.now())
-	c.mu.Unlock()
-
-	if err := sleep(ctx, settling); err != nil {
+	if err := c.settled(ctx); err != nil {
 		return nil, err
 	}
 
@@ -493,9 +514,117 @@ func (c *coordinator) acquire(ctx context.Context, id string) (*cluster.Lock, er
 		return nil, err
 	}
 
+	return c.take(ctx, id)
+}
+
+// acquireAll does what acquire does for several certificates at once, e.g. the renewals of one check:
+// the instance waits for its turn once, not once for each certificate.
+func (c *coordinator) acquireAll(ctx context.Context, ids []string) map[string]*cluster.Lock {
+	if c.member.Priority() == 0 || len(ids) == 0 {
+		return nil
+	}
+
+	// The instance that just failed on a certificate lets every other instance try before it does again.
+	var first, last []string
+	for _, id := range ids {
+		failure, free, err := c.available(ctx, id)
+		if err != nil {
+			c.logger.Debug().Err(err).Msg("Unable to take the certificate renewals in the cluster")
+			return nil
+		}
+
+		switch {
+		case !free:
+			countElection(c.resolverName, electionSkipped)
+		case failure != nil && failure.Node == c.member.NodeID():
+			last = append(last, id)
+		default:
+			first = append(first, id)
+		}
+	}
+
+	if len(first)+len(last) == 0 {
+		return nil
+	}
+
+	if err := c.settled(ctx); err != nil {
+		return nil
+	}
+
+	above, levels, err := c.levels(ctx)
+	if err != nil {
+		c.logger.Debug().Err(err).Msg("Unable to take the certificate renewals in the cluster")
+		return nil
+	}
+
+	locks := map[string]*cluster.Lock{}
+
+	takeAll := func(delay time.Duration, ids []string) {
+		if len(ids) == 0 || sleep(ctx, delay) != nil {
+			return
+		}
+
+		for _, id := range ids {
+			lock, err := c.take(ctx, id)
+			if err != nil {
+				c.logger.Debug().Err(err).Msg("Unable to take a certificate renewal in the cluster")
+				return
+			}
+
+			if lock != nil {
+				locks[id] = lock
+			}
+		}
+	}
+
+	takeAll(time.Duration(above)*c.step+c.jitter(), first)
+	takeAll(time.Duration(levels+1)*c.step, last)
+
+	return locks
+}
+
+// available tells whether a certificate may be requested now: no instance is doing so, and no failure asks to wait.
+// It returns the last failure, which sets the turn of this instance.
+func (c *coordinator) available(ctx context.Context, id string) (*failRecord, bool, error) {
+	failure, err := c.readFail(ctx, id)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if failure != nil {
+		if next := time.Unix(failure.NextRetryAt, 0); c.now().Before(next) {
+			c.postpone(id, next)
+			return failure, false, nil
+		}
+	}
+
+	if _, held, err := c.member.LockHolder(ctx, c.lockName(id)); err != nil || held {
+		c.postpone(id, c.now().Add(c.step))
+		return failure, false, err
+	}
+
+	return failure, true, nil
+}
+
+// settled waits until the instances that started together had the time to announce themselves: they are counted after that.
+func (c *coordinator) settled(ctx context.Context) error {
+	c.mu.Lock()
+	settling := c.settleUntil.Sub(c.now())
+	c.mu.Unlock()
+
+	return sleep(ctx, settling)
+}
+
+// take tries to get the lock of a certificate, after this instance waited for its turn.
+func (c *coordinator) take(ctx context.Context, id string) (*cluster.Lock, error) {
 	lock, ok, err := c.member.TryLock(ctx, c.lockName(id), c.lockTTL)
 	if err != nil || !ok {
 		c.postpone(id, c.now().Add(c.step))
+
+		if err == nil {
+			countElection(c.resolverName, electionLost)
+		}
+
 		return nil, err
 	}
 
@@ -505,9 +634,13 @@ func (c *coordinator) acquire(ctx context.Context, id string) (*cluster.Lock, er
 			c.postpone(id, next)
 			_ = lock.Release(ctx)
 
+			countElection(c.resolverName, electionLost)
+
 			return nil, nil
 		}
 	}
+
+	countElection(c.resolverName, electionWon)
 
 	return lock, nil
 }
@@ -574,6 +707,7 @@ func (c *coordinator) levels(ctx context.Context) (int, int, error) {
 
 	all := map[int]struct{}{c.member.Priority(): {}}
 	above := map[int]struct{}{}
+	mismatch := false
 
 	for _, node := range nodes {
 		nodeDigest, ok := node.Attributes[c.attribute()]
@@ -582,6 +716,7 @@ func (c *coordinator) levels(ctx context.Context) (int, int, error) {
 		}
 
 		if nodeDigest != digest {
+			mismatch = true
 			c.warnMismatch(node.ID)
 		}
 
@@ -590,6 +725,8 @@ func (c *coordinator) levels(ctx context.Context) (int, int, error) {
 			above[node.Priority] = struct{}{}
 		}
 	}
+
+	setConfigMismatch(c.resolverName, mismatch)
 
 	return len(above), len(all), nil
 }
@@ -650,22 +787,123 @@ func (c *coordinator) lockAccount(ctx context.Context, usable func(*Account) boo
 	}
 }
 
-// renew checks the renewals of this instance now, unless it is already doing so.
-func (c *coordinator) renew(ctx context.Context) {
+// renew takes the renewals that an instance with a lower priority found due, unless this instance is already doing so.
+func (c *coordinator) renew(ctx context.Context, sig coordinatorSignal) {
 	c.mu.Lock()
 	provider := c.provider
 	c.mu.Unlock()
 
-	if provider == nil || !c.renewing.CompareAndSwap(false, true) {
+	if provider == nil || c.member.Priority() <= sig.priority || !c.renewing.CompareAndSwap(false, true) {
 		return
 	}
 
 	safe.Go(func() {
 		defer c.renewing.Store(false)
 
+		c.reserve(ctx, provider, sig.items)
+		defer c.release(ctx)
+
 		renewPeriod, renewInterval := getCertificateRenewDurations(provider.CertificatesDuration)
 		provider.renewCertificates(ctx, renewPeriod, renewInterval)
 	})
+}
+
+// announceRenewals tells the instances with a higher priority which certificates this one found due, so that they take them.
+func (c *coordinator) announceRenewals(ctx context.Context, items []string) {
+	above, _, err := c.levels(ctx)
+	if err != nil || above == 0 {
+		return
+	}
+
+	args := []string{c.resolverName, strconv.Itoa(c.member.Priority())}
+	args = append(args, items[:min(len(items), coordinatorMaxRenewItems)]...)
+
+	if err := c.member.Publish(ctx, coordinatorEventRenew, args...); err != nil {
+		c.logger.Debug().Err(err).Msg("Unable to announce the renewals to the cluster")
+	}
+}
+
+// renewItem identifies a certificate to renew in a renew event: the same domains can already have a newer certificate.
+func renewItem(id, sum string) string {
+	return id + ":" + sum
+}
+
+// reserve takes the renewals another instance announced, for the certificates this instance holds as well.
+// The check of what is due asks the ACME server about each certificate, which can take longer than the turn of the other
+// instance: the renewals are taken before it, and the check that follows finds them.
+func (c *coordinator) reserve(ctx context.Context, provider *Provider, items []string) {
+	var ids []string
+	for _, item := range items {
+		id, sum, ok := strings.Cut(item, ":")
+		if ok && sum != "" && provider.certificateSum(id) == sum {
+			ids = append(ids, id)
+		}
+	}
+
+	for id, lock := range c.acquireAll(ctx, ids) {
+		_, stop := c.hold(ctx, lock)
+
+		c.mu.Lock()
+		c.reserved[id] = &reservation{lock: lock, stop: stop}
+		c.mu.Unlock()
+	}
+}
+
+// takeReserved hands over the renewals this instance took from the announcement of another one.
+func (c *coordinator) takeReserved() map[string]*reservation {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	reserved := c.reserved
+	c.reserved = map[string]*reservation{}
+
+	return reserved
+}
+
+// release frees the reserved renewals that no renewal took.
+func (c *coordinator) release(ctx context.Context) {
+	for _, reserved := range c.takeReserved() {
+		reserved.stop()
+		_ = reserved.lock.Release(ctx)
+	}
+}
+
+// warnOrphan tells, once, that the certificates are waiting for an instance that is allowed to request them.
+func (c *coordinator) warnOrphan(ctx context.Context) {
+	// The instances that start together are looked at once they had the time to announce themselves, and then now and again.
+	c.mu.Lock()
+	now := c.now()
+	due := !now.Before(c.settleUntil) && now.Sub(c.lastOrphans) >= coordinatorWantsInterval
+	if due {
+		c.lastOrphans = now
+	}
+	c.mu.Unlock()
+
+	if !due {
+		return
+	}
+
+	nodes, err := c.member.Nodes(ctx)
+	if err != nil {
+		return
+	}
+
+	orphan := true
+	for _, node := range nodes {
+		if _, ok := node.Attributes[c.attribute()]; ok && node.Priority > 0 {
+			orphan = false
+			break
+		}
+	}
+
+	c.mu.Lock()
+	told := c.orphan
+	c.orphan = orphan
+	c.mu.Unlock()
+
+	if orphan && !told {
+		c.logger.Warn().Msg("No instance of the cluster requests the certificates of this resolver: every running instance that has it has the priority 0")
+	}
 }
 
 func (c *coordinator) postpone(id string, until time.Time) {

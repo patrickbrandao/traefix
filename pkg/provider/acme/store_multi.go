@@ -84,6 +84,8 @@ func (s *MultiStore) SaveCertificates(resolverName string, certificates []*CertA
 
 	err := s.primary.SaveCertificates(resolverName, certificates)
 
+	countStoreWrite(resolverName, storeTarget(s.primary), err)
+
 	s.exportCertificates(resolverName, certificates)
 
 	return err
@@ -245,7 +247,11 @@ func (s *MultiStore) exportAccount(resolverName string, account *Account) {
 
 func (s *MultiStore) exportCertificates(resolverName string, certificates []*CertAndStore) {
 	for _, export := range s.exports {
-		if err := export.store.SaveCertificates(resolverName, certificates); err != nil {
+		err := export.store.SaveCertificates(resolverName, certificates)
+
+		countStoreWrite(resolverName, export.kind, err)
+
+		if err != nil {
 			log.Error().Err(err).Str(logs.ProviderName, resolverName+resolverSuffix).Str("export", export.kind).
 				Msg("Unable to export the ACME certificates")
 		}

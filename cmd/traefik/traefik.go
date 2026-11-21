@@ -247,6 +247,8 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 	metricsRegistry := metrics.NewMultiRegistry(metricRegistries)
 	auth.SetMetricsRegistry(metricsRegistry)
 	corazamw.SetMetricsRegistry(metricsRegistry)
+	cluster.SetMetricsRegistry(metricsRegistry)
+	acme.SetMetricsRegistry(metricsRegistry)
 	accessLog := setupAccessLog(ctx, staticConfiguration.AccessLog)
 	tracer, tracerCloser := setupTracing(ctx, staticConfiguration.Tracing)
 	observabilityMgr := middleware.NewObservabilityMgr(*staticConfiguration, metricsRegistry, semConvMetricRegistry, accessLog, tracer, tracerCloser, rotateTraefikLog)
