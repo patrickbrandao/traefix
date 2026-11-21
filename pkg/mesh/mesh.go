@@ -6,10 +6,12 @@ import (
 	"errors"
 	"maps"
 	"net"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -93,6 +95,15 @@ type Mesh struct {
 
 	configurationChan chan<- dynamic.Message
 	publishCh         chan struct{}
+
+	// localHTTP are the HTTP routers this instance announces, as their providers wrote them.
+	localHTTP map[string]*dynamic.Router
+	// handlers serve these routers by name, for the requests the other instances forward.
+	handlers atomic.Pointer[map[string]http.Handler]
+	// targets are where the requests of the routers learned from the mesh go, by service name.
+	targets map[string]*forwardTarget
+	// turn counts the requests, for the round robin.
+	turn atomic.Uint64
 
 	runCtx  context.Context //nolint:containedctx // The links learned while the mesh runs are started under it.
 	stopped bool
@@ -196,6 +207,8 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 		imported:          map[string]*importedTable{},
 		warned:            map[string]struct{}{},
 		publishCh:         make(chan struct{}, 1),
+		localHTTP:         map[string]*dynamic.Router{},
+		targets:           map[string]*forwardTarget{},
 	}
 
 	m.lookupSRV = func(ctx context.Context, name string) ([]*net.SRV, error) {

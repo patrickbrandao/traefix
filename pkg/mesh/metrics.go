@@ -59,3 +59,17 @@ func (m *Mesh) setPeers(up, down int) {
 	registry.MeshPeersGauge().With("state", "up").Set(float64(up))
 	registry.MeshPeersGauge().With("state", "down").Set(float64(down))
 }
+
+// countRequest counts a request this instance forwards, or could not forward, to another one.
+func (m *Mesh) countRequest(peer, kind, result string) {
+	if registry := m.registry(); registry != nil {
+		registry.MeshRequestsCounter().With("peer", peer, "kind", kind, "result", result).Add(1)
+	}
+}
+
+// countReceived counts a request another instance forwarded to this one.
+func (m *Mesh) countReceived(peer, kind, result string) {
+	if registry := m.registry(); registry != nil {
+		registry.MeshReceivedCounter().With("peer", peer, "kind", kind, "result", result).Add(1)
+	}
+}

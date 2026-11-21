@@ -39,6 +39,12 @@ type peersAnswer struct {
 
 // ServeHTTP answers the requests the other instances send through their links.
 func (m *Mesh) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	// A request that another instance forwards carries the header, whatever its host.
+	if req.Header.Get(headerForward) != "" {
+		m.serveForwarded(rw, req)
+		return
+	}
+
 	if req.Host != controlHost {
 		http.Error(rw, "unknown mesh request", http.StatusNotFound)
 		return

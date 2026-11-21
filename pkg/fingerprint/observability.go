@@ -33,14 +33,22 @@ var (
 // It runs in the router chain, where both the access log data and the router span exist.
 func (st *requestState) observe(req *http.Request) {
 	var connID, ja3, ja4, h2, ja4h, ja4t string
-	if c := st.conn; c != nil {
-		connID, ja3, ja4, ja4t = c.id, c.ja3, c.ja4, c.ja4t
-		if req.ProtoMajor == 2 {
-			h2 = c.akamai
+
+	switch {
+	case st.forwarded != nil:
+		f := st.forwarded.Fingerprints
+		connID, ja3, ja4, h2, ja4h, ja4t = st.forwarded.ConnID, f.JA3, f.JA4, f.HTTP2, f.JA4H, f.JA4T
+
+	default:
+		if c := st.conn; c != nil {
+			connID, ja3, ja4, ja4t = c.id, c.ja3, c.ja4, c.ja4t
+			if req.ProtoMajor == 2 {
+				h2 = c.akamai
+			}
 		}
-	}
-	if st.wire != nil {
-		ja4h = st.wire.JA4H()
+		if st.wire != nil {
+			ja4h = st.wire.JA4H()
+		}
 	}
 
 	if data := accesslog.GetLogData(req); data != nil {

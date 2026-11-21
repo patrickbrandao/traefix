@@ -120,9 +120,18 @@ func (m *Mesh) publishLoop(ctx context.Context) {
 
 // routeGroup gathers the instances that announce the same route.
 type routeGroup struct {
-	route     Route
-	signature string
-	peers     []string
+	route      Route
+	signature  string
+	candidates []forwardCandidate
+}
+
+func (g *routeGroup) peers() []string {
+	peers := make([]string, 0, len(g.candidates))
+	for _, candidate := range g.candidates {
+		peers = append(peers, candidate.nodeID)
+	}
+
+	return peers
 }
 
 // buildConfiguration makes the routers of this instance for the routes of the other instances,
@@ -147,10 +156,12 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 				groups[key][signature] = group
 			}
 
-			group.peers = append(group.peers, nodeID)
+			group.candidates = append(group.candidates, forwardCandidate{nodeID: nodeID, priority: route.MeshPriority})
 		}
 	}
 	m.mu.Unlock()
+
+	targets := map[string]*forwardTarget{}
 
 	// The maps are never nil: a configuration without any router still has to replace the previous one.
 	conf := &dynamic.Configuration{
@@ -169,27 +180,27 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 		// one at a time, shows up as two routes for a while.
 		variants := make([]*routeGroup, 0, len(groups[key]))
 		for _, group := range groups[key] {
-			slices.Sort(group.peers)
+			slices.SortFunc(group.candidates, func(a, b forwardCandidate) int { return strings.Compare(a.nodeID, b.nodeID) })
 			variants = append(variants, group)
 		}
 
 		slices.SortFunc(variants, func(a, b *routeGroup) int {
-			if len(a.peers) != len(b.peers) {
-				return len(b.peers) - len(a.peers)
+			if len(a.candidates) != len(b.candidates) {
+				return len(b.candidates) - len(a.candidates)
 			}
 
 			return strings.Compare(a.signature, b.signature)
 		})
 
 		for i, group := range variants {
-			imported := ImportedRoute{Route: group.route, Peers: group.peers}
+			imported := ImportedRoute{Route: group.route, Peers: group.peers()}
 
 			name := routerName(group.route.Name)
 			if i > 0 {
 				name += "-" + group.signature
 
 				m.warnOnce("variant/"+key+"/"+group.signature, func() {
-					m.logger.Warn().Str("router", group.route.Name).Strs("peers", group.peers).
+					m.logger.Warn().Str("router", group.route.Name).Strs("peers", group.peers()).
 						Msg("Instances of the mesh announce a router with the same name and another rule, entry points or TLS: it is served as a route of its own")
 				})
 			}
@@ -229,6 +240,8 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 				// The service has no configuration: the mesh builds its handler.
 				conf.HTTP.Services[name] = &dynamic.Service{}
 
+				targets[name+"@"+ProviderName] = &forwardTarget{router: group.route.Name, candidates: group.candidates}
+
 				imported.Status = ImportImported
 				imported.Router = name + "@" + ProviderName
 			}
@@ -236,6 +249,12 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 			report = append(report, imported)
 		}
 	}
+
+	// The targets change with the routers, and also when an instance joins the ones that own a router that is already there:
+	// the services read them at each request.
+	m.mu.Lock()
+	m.targets = targets
+	m.mu.Unlock()
 
 	return conf, report
 }
@@ -273,7 +292,5 @@ func (b *ServiceBuilder) BuildHTTP(_ context.Context, serviceName string) (http.
 		return nil, nil
 	}
 
-	return http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
-		http.Error(rw, "The mesh does not forward requests yet", http.StatusServiceUnavailable)
-	}), nil
+	return &meshService{mesh: b.mesh, name: serviceName}, nil
 }

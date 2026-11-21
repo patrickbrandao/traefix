@@ -368,7 +368,7 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 		staticConfiguration.Core != nil && staticConfiguration.Core.StrictTLSOptions,
 	)
 
-	if err := wireMesh(meshNode, staticConfiguration, providerAggregator, managerFactory, watcher, routinesPool); err != nil {
+	if err := wireMesh(meshNode, staticConfiguration, providerAggregator, managerFactory, routerFactory, watcher, routinesPool); err != nil {
 		return nil, fmt.Errorf("connecting the mesh to the routing: %w", err)
 	}
 

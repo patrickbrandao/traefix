@@ -17,6 +17,9 @@ type requestState struct {
 	router  string
 	service string
 
+	// forwarded is set instead of conn and wire for a request that another instance received.
+	forwarded *Forwarded
+
 	// headerNames and headerValues are the headers the entry point set on the request.
 	headerNames  []string
 	headerValues []string
@@ -313,6 +316,12 @@ func FingerprintsFromRequest(req *http.Request) (Fingerprints, bool) {
 	st := requestStateFrom(req)
 	if st == nil {
 		return Fingerprints{}, false
+	}
+
+	// The protocol of the request is the one of the link between the instances, not the one of the client:
+	// the instance that received the request already decided what applies.
+	if st.forwarded != nil {
+		return st.forwarded.Fingerprints, true
 	}
 
 	var f Fingerprints

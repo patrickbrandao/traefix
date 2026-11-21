@@ -121,6 +121,23 @@ type importedTable struct {
 func (m *Mesh) Transform(_ context.Context, configurations dynamic.Configurations) dynamic.Configurations {
 	routes, local := m.localRoutes(configurations)
 
+	// The routers that are announced are the ones the other instances may send requests for.
+	served := map[string]*dynamic.Router{}
+
+	for providerName, conf := range configurations {
+		if conf == nil || conf.HTTP == nil {
+			continue
+		}
+
+		for name, router := range conf.HTTP.Routers {
+			qualified := qualifiedName(name, providerName)
+
+			if slices.ContainsFunc(routes, func(r Route) bool { return r.Kind == KindHTTP && r.Name == qualified }) {
+				served[qualified] = router.DeepCopy()
+			}
+		}
+	}
+
 	m.mu.Lock()
 	exportChanged := !reflect.DeepEqual(routes, m.exported)
 	if exportChanged {
@@ -133,6 +150,7 @@ func (m *Mesh) Transform(_ context.Context, configurations dynamic.Configuration
 
 	localChanged := !reflect.DeepEqual(local, m.localRouters)
 	m.localRouters = local
+	m.localHTTP = served
 	m.mu.Unlock()
 
 	// A router that appears or goes locally changes what is taken from the other instances.
@@ -155,8 +173,9 @@ func (m *Mesh) localRoutes(configurations dynamic.Configurations) ([]Route, map[
 
 		if conf.HTTP != nil {
 			for name, router := range conf.HTTP.Routers {
-				// A router with a parent is reached through it.
-				if router == nil || len(router.ParentRefs) > 0 {
+				// A router with a parent is reached through it, and one without a service only routes to its children:
+				// neither can be served by its name alone.
+				if router == nil || len(router.ParentRefs) > 0 || router.Service == "" {
 					continue
 				}
 

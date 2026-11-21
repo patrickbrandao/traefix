@@ -41,6 +41,8 @@ type RouterFactory struct {
 
 	parser              httpmuxer.SyntaxParser
 	providersPrecedence []string
+
+	meshRouters MeshRouters
 }
 
 // NewRouterFactory creates a new RouterFactory.
@@ -119,6 +121,8 @@ func (f *RouterFactory) CreateRouters(rtConf *runtime.Configuration) (map[string
 
 	handlersNonTLS := routerManager.BuildHandlers(ctx, f.entryPointsTCP, false)
 	handlersTLS := routerManager.BuildHandlers(ctx, f.entryPointsTCP, true)
+
+	f.buildMeshHandlers(ctx, routerManager)
 
 	serviceManager.LaunchHealthCheck(ctx)
 

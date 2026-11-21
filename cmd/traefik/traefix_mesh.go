@@ -5,6 +5,7 @@ import (
 
 	"github.com/traefik/traefik/v3/pkg/api"
 	"github.com/traefik/traefik/v3/pkg/config/static"
+	"github.com/traefik/traefik/v3/pkg/fingerprint"
 	"github.com/traefik/traefik/v3/pkg/mesh"
 	"github.com/traefik/traefik/v3/pkg/provider/aggregator"
 	"github.com/traefik/traefik/v3/pkg/safe"
@@ -14,7 +15,7 @@ import (
 
 // wireMesh connects the mesh to the routing, and runs it (Traefix):
 // the mesh reads the routers of the local providers, gives the routers of the other instances, and serves their services.
-func wireMesh(node *mesh.Mesh, conf *static.Configuration, providerAggregator *aggregator.ProviderAggregator, managerFactory *service.ManagerFactory, watcher *server.ConfigurationWatcher, routinesPool *safe.Pool) error {
+func wireMesh(node *mesh.Mesh, conf *static.Configuration, providerAggregator *aggregator.ProviderAggregator, managerFactory *service.ManagerFactory, routerFactory *server.RouterFactory, watcher *server.ConfigurationWatcher, routinesPool *safe.Pool) error {
 	if node == nil {
 		return nil
 	}
@@ -40,6 +41,10 @@ func wireMesh(node *mesh.Mesh, conf *static.Configuration, providerAggregator *a
 	}
 
 	managerFactory.AddServiceBuilder(node.ServiceBuilder())
+	routerFactory.SetMeshRouters(node)
+
+	// The fingerprints of the requests the other instances forward are recorded even without an entry point that measures them here.
+	fingerprint.EnableForwarded()
 	watcher.AddTransformer(node.Transform)
 	api.AddTraefixRoute("/api/mesh", node.APIHandler())
 

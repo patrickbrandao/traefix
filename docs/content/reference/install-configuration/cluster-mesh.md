@@ -7,7 +7,7 @@ The `cluster.mesh` option links the Traefix instances of a [cluster](./cluster.m
 
 !!! warning "Work in progress"
 
-    In this version, the instances link to each other and announce their routers, and an instance creates a router for each HTTP router of the other instances. The instances forward no request yet: such a router answers `503`. The `balance` option and the `mesh.priority` of the routers are read and have no effect yet.
+    In this version, an instance forwards the HTTP requests for the routers that only other instances have. An instance that has a router doesn't send its requests to another instance yet, whatever the `mesh.priority`. The TCP and UDP routers are announced and not forwarded yet.
 
 ## Configuration Examples
 
@@ -150,6 +150,28 @@ http:
 
 The TCP and UDP routers have the same options, and are announced. The instances create no router for them yet.
 
+## Requests Through the Mesh
+
+A request for a router that the instance learned from the mesh goes to an instance that owns the router, through the link to it. The request makes one hop at most.
+
+| Step | Instance that received the request | Instance that owns the router |
+|:-----|:-----------------------------------|:------------------------------|
+| <a id="opt-TLS-and-fingerprint" href="#opt-TLS-and-fingerprint" title="#opt-TLS-and-fingerprint">TLS and fingerprint</a> | Yes | No |
+| <a id="opt-Middlewares-of-the-entry-point" href="#opt-Middlewares-of-the-entry-point" title="#opt-Middlewares-of-the-entry-point">Middlewares of the entry point</a> | Yes | No |
+| <a id="opt-Rule-of-the-router" href="#opt-Rule-of-the-router" title="#opt-Rule-of-the-router">Rule of the router</a> | Yes | No |
+| <a id="opt-Middlewares-of-the-router" href="#opt-Middlewares-of-the-router" title="#opt-Middlewares-of-the-router">Middlewares of the router</a> | No | Yes |
+| <a id="opt-Service-load-balancing-health-check-sticky-session" href="#opt-Service-load-balancing-health-check-sticky-session" title="#opt-Service-load-balancing-health-check-sticky-session">Service: load balancing, health check, sticky session</a> | No | Yes |
+
+- **The instance that owns the router sees the client.** The request has the address and the port of the client, its TLS version, cipher and server name, and the `X-Forwarded-*` and `X-Real-Ip` headers that the entry point set. The `ipAllowList` and `rateLimit` middlewares of the router, and the `X-Forwarded-For` header sent to the server, are the same as for a request received directly.
+- **The fingerprints follow the request.** The `X-Traefix-*` headers reach the server, and the [`fingerprintList`](../routing-configuration/http/middlewares/fingerprintlist.md) middleware, the access log and the traces of the instance that owns the router use the fingerprints that the entry point measured. Enable the `fingerprint` option on the entry points of every instance that receives requests.
+- **The middlewares of the entry points only run where the request arrives.** A request that reaches the instance that owns the router through the mesh doesn't go through its entry points. Declare the same entry point middlewares on every instance.
+- **The highest `mesh.priority` gets the requests.** Among the instances that own the router and that the instance has a link to, the ones with the highest priority are used. With `balance: clientIP`, a client goes to the same instance whichever instance it reaches. With `balance: roundRobin`, the requests are spread evenly.
+- **WebSocket and gRPC work.** A request with an `Upgrade` header travels in a stream of its own, and streaming requests and responses flow in both directions at the same time.
+- **The client certificate stops at the entry point.** The [`passTLSClientCert`](../routing-configuration/http/middlewares/passtlsclientcert.md) middleware of a router has nothing to pass for a request that came through the mesh.
+- **An answer of the mesh carries a `Proxy-Status` header.** The instance answers `503` when it has no link to an instance that owns the router, and `502` when the request could not be delivered. An error of the service itself comes back as the service sent it, without the header.
+
+In the access log, the instance that received the request records the router of the mesh, with `mesh://<nodeID>` as the service URL. The instance that owns the router records the request with the `traefix-mesh` entry point, the address of the client and its own router.
+
 ## API
 
 With the [API](./api-dashboard.md) enabled, `GET /api/mesh` returns the state of the mesh on the instance:
@@ -170,6 +192,8 @@ The rules of the announced routers appear in this answer. Protect the API as you
 | <a id="opt-traefik-mesh-peers" href="#opt-traefik-mesh-peers" title="#opt-traefik-mesh-peers">`traefik_mesh_peers`</a> | `state` | Number of instances that this instance opens a link to, with the link `up` or `down`. An address that no instance answers at counts as `down`. |
 | <a id="opt-traefik-mesh-link-up" href="#opt-traefik-mesh-link-up" title="#opt-traefik-mesh-link-up">`traefik_mesh_link_up`</a> | `peer`, `transport` | `1` for the transport, `quic` or `tcp`, that the link to the instance is up with, `0` otherwise. |
 | <a id="opt-traefik-mesh-link-rtt-seconds" href="#opt-traefik-mesh-link-rtt-seconds" title="#opt-traefik-mesh-link-rtt-seconds">`traefik_mesh_link_rtt_seconds`</a> | `peer` | Time the other instance took to answer the last ping, `0` while the link is down. |
+| <a id="opt-traefik-mesh-requests-total" href="#opt-traefik-mesh-requests-total" title="#opt-traefik-mesh-requests-total">`traefik_mesh_requests_total`</a> | `peer`, `kind`, `result` | Requests that the instance sent to another instance. The `kind` is `http` or `upgrade`. The `result` is `forwarded`, `error` when the request could not be delivered, or `unavailable`, with an empty `peer`, when no instance could take it. |
+| <a id="opt-traefik-mesh-received-total" href="#opt-traefik-mesh-received-total" title="#opt-traefik-mesh-received-total">`traefik_mesh_received_total`</a> | `peer`, `kind`, `result` | Requests that the instance received from another instance: `served`, or `unknown` when it no longer has the router. |
 
 The `peer` label is the `nodeID` of the other instance. An address of the list or of the DNS that no instance answered at yet has no `nodeID`: it only counts in `traefik_mesh_peers`. Datadog, StatsD and InfluxDB use the same names with dots, for example `traefik.mesh.link.up`.
 

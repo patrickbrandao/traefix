@@ -200,10 +200,23 @@ servidor que o tem, sem rede overlay. Implementado até agora:
   regra, prioridade, entrypoints e TLS. Cada ligação acompanha a tabela do outro lado por consulta longa
   (`/v1/routes`, com geração). O provider `mesh` cria um router `<router>-<provider>@mesh` para cada
   router HTTP anunciado que a instância não tem, nos entrypoints de mesmo nome. `GET /api/mesh` mostra
-  ligações, rotas exportadas e o que foi feito das importadas. **Ainda não há encaminhamento**: o serviço
-  dos routers importados responde 503 (etapa 5). Ganchos no upstream: `cmd/traefik/traefik.go` (duas
-  chamadas; o resto em `traefix_mesh.go`), `pkg/api/handler.go` (`appendTraefixRoutes`) e
-  `pkg/server/service/managerfactory.go` (`traefixBuilders`).
+  ligações, rotas exportadas e o que foi feito das importadas. Ganchos no upstream:
+  `cmd/traefik/traefik.go` (duas chamadas; o resto em `traefix_mesh.go`), `pkg/api/handler.go`
+  (`appendTraefixRoutes`) e `pkg/server/service/managerfactory.go` (`traefixBuilders`).
+
+- **Encaminhamento HTTP** (etapa 5): o serviço de um router `@mesh` envia a requisição pela ligação a
+  uma instância dona do router (maior `mesh.priority`; no empate, `balance`). A requisição leva o
+  cabeçalho `Traefix-Mesh` (base64 de JSON: router, endereço do visitante, TLS e fingerprint). O dono a
+  entrega ao router pelo nome, com os middlewares próprios do router e o serviço, sem casar a regra nem
+  rodar os middlewares dos seus entrypoints (`Manager.BuildNamedHandlers`, em
+  `pkg/server/router/router_traefix_mesh.go`; entrypoint `traefix-mesh` no access log). O dono enxerga o
+  endereço do visitante, um estado TLS sintético e o fingerprint medido na entrada
+  (`fingerprint.ContextWithForwarded`). `Upgrade` (WebSocket) vai por um stream `CONNECT` servido como
+  conexão HTTP/1.1; gRPC e fluxos nos dois sentidos passam pela ligação. Respostas da malha levam
+  `Proxy-Status`. Métricas `traefik_mesh_requests_total` e `traefik_mesh_received_total`. Código em
+  `pkg/mesh/forward.go`; gancho no upstream em `pkg/server/routerfactory.go` (`buildMeshHandlers`).
+  **Uma rota que a instância também tem ainda é servida só localmente** (etapa 6), e TCP e UDP ainda não
+  são encaminhados (etapas 7 e 8).
 
 ## Infopage
 
