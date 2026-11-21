@@ -130,15 +130,15 @@ func TestMesh_plan(t *testing.T) {
 	})
 
 	t.Run("the local router is down: this instance comes last", func(t *testing.T) {
-		down := map[string]struct{}{"app@docker": {}}
+		down := map[string]struct{}{routeKey(KindHTTP, "app@docker"): {}}
 		m.localDown.Store(&down)
 		t.Cleanup(func() { m.localDown.Store(&map[string]struct{}{}) })
 
-		target := &forwardTarget{router: "app@docker", local: true, localPriority: 10, candidates: []forwardCandidate{{nodeID: "srv2"}}}
+		target := &forwardTarget{kind: KindHTTP, router: "app@docker", local: true, localPriority: 10, candidates: []forwardCandidate{{nodeID: "srv2"}}}
 		assert.Equal(t, []string{"srv2", "local"}, places(m.plan(target, client)))
 
 		// Alone, it still answers, as it would without the mesh.
-		alone := &forwardTarget{router: "app@docker", local: true}
+		alone := &forwardTarget{kind: KindHTTP, router: "app@docker", local: true}
 		assert.Equal(t, []string{"local"}, places(m.plan(alone, client)))
 	})
 
@@ -146,12 +146,12 @@ func TestMesh_plan(t *testing.T) {
 		target := &forwardTarget{router: "quarantined@docker", local: true, candidates: []forwardCandidate{{nodeID: "srv2", priority: 10}}}
 
 		for range quarantineAfter - 1 {
-			m.failed(target.router, "srv2")
+			m.failed(target.key(), "srv2")
 		}
 
 		assert.Equal(t, []string{"srv2", "local"}, places(m.plan(target, client)))
 
-		m.failed(target.router, "srv2")
+		m.failed(target.key(), "srv2")
 		assert.Equal(t, []string{"local"}, places(m.plan(target, client)))
 
 		// The other routes of the instance are not concerned.
@@ -163,7 +163,7 @@ func TestMesh_plan(t *testing.T) {
 
 		// It fails again right away: it stays away twice as long.
 		for range quarantineAfter {
-			m.failed(target.router, "srv2")
+			m.failed(target.key(), "srv2")
 		}
 
 		first.advance(quarantineFirst + time.Second)
@@ -173,11 +173,11 @@ func TestMesh_plan(t *testing.T) {
 		assert.Equal(t, []string{"srv2", "local"}, places(m.plan(target, client)))
 
 		// A request that gets through clears the count.
-		m.failed(target.router, "srv2")
-		m.succeeded(target.router, "srv2")
+		m.failed(target.key(), "srv2")
+		m.succeeded(target.key(), "srv2")
 
 		for range quarantineAfter - 1 {
-			m.failed(target.router, "srv2")
+			m.failed(target.key(), "srv2")
 		}
 
 		assert.Equal(t, []string{"srv2", "local"}, places(m.plan(target, client)))
@@ -254,7 +254,7 @@ func TestMesh_sharedRoute_anotherRule(t *testing.T) {
 	first.owns(named("srv1"), 10)
 
 	second := newTestNode(t, "srv2", testToken, nil, first.address)
-	second.mesh.SwitchHTTPHandlers(map[string]http.Handler{"app@docker": named("srv2")}, nil)
+	second.mesh.SwitchHandlers(map[string]http.Handler{"app@docker": named("srv2")}, nil, nil)
 	second.mesh.Transform(t.Context(), dynamic.Configurations{
 		"docker": {HTTP: &dynamic.HTTPConfiguration{Routers: map[string]*dynamic.Router{
 			"app": {Rule: "Host(`other.example.com`)", EntryPoints: []string{"web"}, Service: "app"},
@@ -295,7 +295,7 @@ func TestMesh_retry(t *testing.T) {
 	require.Equal(t, "srv1", ask(t, handler, "198.51.100.7:1000"))
 
 	// The preferred instance lost the router, and the others have not heard of it yet.
-	primary.mesh.handlers.Store(&map[string]http.Handler{})
+	primary.mesh.routing.Store(&routing{})
 
 	// It says so without doing anything with the request: the next instance serves it.
 	assert.Equal(t, "srv2", ask(t, handler, "198.51.100.7:1000"))
@@ -312,7 +312,7 @@ func TestMesh_retry(t *testing.T) {
 
 	// After a few failures the instance is left alone for the route: the requests go straight to the other one.
 	require.Equal(t, "srv2", ask(t, handler, "198.51.100.7:1000"))
-	require.True(t, ingress.mesh.quarantined("app@docker", "srv1"))
+	require.True(t, ingress.mesh.quarantined(routeKey(KindHTTP, "app@docker"), "srv1"))
 
 	before := served.Load()
 
@@ -373,7 +373,7 @@ func TestMesh_health(t *testing.T) {
 
 	conf := &runtime.Configuration{Services: map[string]*runtime.ServiceInfo{"app@docker": service}}
 
-	owner.mesh.SwitchHTTPHandlers(map[string]http.Handler{"app@docker": named("srv1")}, conf)
+	owner.mesh.SwitchHandlers(map[string]http.Handler{"app@docker": named("srv1")}, nil, conf)
 
 	require.Equal(t, "srv1", ask(t, handler, "198.51.100.7:1000"))
 
@@ -388,7 +388,7 @@ func TestMesh_health(t *testing.T) {
 	service.UpdateServerStatus("http://10.0.0.1", runtime.StatusDown)
 	owner.mesh.checkHealth()
 
-	assert.True(t, owner.mesh.isLocalDown("app@docker"))
+	assert.True(t, owner.mesh.isLocalDown(routeKey(KindHTTP, "app@docker")))
 
 	require.Eventually(t, func() bool { return answer() == http.StatusServiceUnavailable }, 10*time.Second, 10*time.Millisecond)
 

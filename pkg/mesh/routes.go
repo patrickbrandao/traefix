@@ -45,6 +45,9 @@ const (
 	// maxRoutesBody bounds what an instance reads of the table of another one.
 	maxRoutesBody = 64 << 20
 
+	// defaultTLSOptions are the TLS options every instance has, under the same name.
+	defaultTLSOptions = "default"
+
 	// maxMeshPriority is the highest priority of a router in the mesh.
 	maxMeshPriority = 1000
 )
@@ -124,18 +127,36 @@ func (m *Mesh) Transform(_ context.Context, configurations dynamic.Configuration
 	routes, local := m.localRoutes(configurations)
 
 	// The routers that are announced are the ones the other instances may send requests for.
-	served := map[string]*dynamic.Router{}
+	announced := map[string]struct{}{}
+	for _, route := range routes {
+		announced[routeKey(route.Kind, route.Name)] = struct{}{}
+	}
+
+	servedHTTP := map[string]*dynamic.Router{}
+	servedTCP := map[string]*dynamic.TCPRouter{}
 
 	for providerName, conf := range configurations {
-		if conf == nil || conf.HTTP == nil {
+		if conf == nil {
 			continue
 		}
 
-		for name, router := range conf.HTTP.Routers {
-			qualified := qualifiedName(name, providerName)
+		if conf.HTTP != nil {
+			for name, router := range conf.HTTP.Routers {
+				qualified := qualifiedName(name, providerName)
 
-			if slices.ContainsFunc(routes, func(r Route) bool { return r.Kind == KindHTTP && r.Name == qualified }) {
-				served[qualified] = router.DeepCopy()
+				if _, ok := announced[routeKey(KindHTTP, qualified)]; ok {
+					servedHTTP[qualified] = router.DeepCopy()
+				}
+			}
+		}
+
+		if conf.TCP != nil {
+			for name, router := range conf.TCP.Routers {
+				qualified := qualifiedName(name, providerName)
+
+				if _, ok := announced[routeKey(KindTCP, qualified)]; ok {
+					servedTCP[qualified] = router.DeepCopy()
+				}
 			}
 		}
 	}
@@ -146,7 +167,8 @@ func (m *Mesh) Transform(_ context.Context, configurations dynamic.Configuration
 
 	localChanged := !reflect.DeepEqual(local, m.localRouters)
 	m.localRouters = local
-	m.localHTTP = served
+	m.localHTTP = servedHTTP
+	m.localTCP = servedTCP
 	m.mu.Unlock()
 
 	// A router that appears, goes or changes locally changes what is made of the routes of the other instances.
@@ -185,7 +207,11 @@ func (m *Mesh) localRoutes(configurations dynamic.Configurations) ([]Route, map[
 				}
 
 				if router.TLS != nil {
-					route.TLS = &RouteTLS{Options: router.TLS.Options, CertResolver: router.TLS.CertResolver, Domains: router.TLS.Domains}
+					route.TLS = &RouteTLS{
+						Options:      qualifyTLSOptions(router.TLS.Options, route.Name),
+						CertResolver: router.TLS.CertResolver,
+						Domains:      router.TLS.Domains,
+					}
 				}
 
 				routes = m.addLocalRoute(routes, local, route, router.Mesh)
@@ -210,7 +236,7 @@ func (m *Mesh) localRoutes(configurations dynamic.Configurations) ([]Route, map[
 				if router.TLS != nil {
 					route.TLS = &RouteTLS{
 						Passthrough:  router.TLS.Passthrough,
-						Options:      router.TLS.Options,
+						Options:      qualifyTLSOptions(router.TLS.Options, route.Name),
 						CertResolver: router.TLS.CertResolver,
 						Domains:      router.TLS.Domains,
 					}
@@ -281,6 +307,16 @@ func (m *Mesh) entryPointsOf(entryPoints, defaults []string) []string {
 	slices.Sort(sorted)
 
 	return slices.Compact(sorted)
+}
+
+// qualifyTLSOptions names the TLS options of a router as the other instances must look for them: in the provider
+// of the router. Left as written, the name would be looked for in the provider of the mesh, where there is none.
+func qualifyTLSOptions(options, routerName string) string {
+	if options == "" || options == defaultTLSOptions {
+		return options
+	}
+
+	return qualify(options, routerName)
 }
 
 func qualifiedName(name, providerName string) string {

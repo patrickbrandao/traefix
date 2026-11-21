@@ -35,6 +35,8 @@ type Manager struct {
 	tlsManager          *traefiktls.Manager
 	conf                *runtime.Configuration
 	providersPrecedence []string
+
+	mesh meshState
 }
 
 // NewManager Creates a new Manager.
@@ -216,7 +218,7 @@ func (m *Manager) buildEntryPointHandler(ctx context.Context, configs map[string
 func (m *Manager) addTCPHandlers(ctx context.Context, configs map[string]*runtime.TCPRouterInfo, router *Router) {
 	for routerName, routerConfig := range configs {
 		logger := log.Ctx(ctx).With().Str(logs.RouterName, routerName).Logger()
-		ctxRouter := logger.WithContext(provider.AddInContext(ctx, routerName))
+		ctxRouter := withMeshRouter(logger.WithContext(provider.AddInContext(ctx, routerName)), routerName)
 
 		if routerConfig.Priority == 0 {
 			routerConfig.Priority = tcpmuxer.GetRulePriority(routerConfig.Rule)
@@ -378,7 +380,7 @@ func (m *Manager) buildTCPHandler(ctx context.Context, router *runtime.TCPRouter
 
 	mHandler := m.middlewaresBuilder.BuildChain(ctx, router.Middlewares)
 
-	return tcp.NewChain().Extend(*mHandler).Then(sHandler)
+	return m.buildMiddlewaresAndService(ctx, mHandler, sHandler)
 }
 
 func providerName(routerName string) string {

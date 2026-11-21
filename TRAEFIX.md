@@ -225,7 +225,18 @@ servidor que o tem, sem rede overlay. Implementado até agora:
   estado dos servidores do `runtime.Configuration`). Três falhas seguidas põem um par em quarentena para a
   rota (5 s, dobrando até 60 s). Uma requisição que não saiu da instância (sinal `WroteHeaders` do
   `httptrace`), ou que o dono disse não ter atendido e não tem corpo, vai ao candidato seguinte.
-  **TCP e UDP ainda não são encaminhados** (etapas 7 e 8).
+
+- **TCP** (etapa 7): os routers TCP anunciados viram routers `<router>-<provider>@mesh` com a regra, a
+  prioridade e o TLS (`passthrough` ou TLS terminado na entrada); cada conexão vai num stream `CONNECT` da
+  ligação, com meio-fechamento nos dois sentidos, e o dono a entrega ao router pelo nome, com os seus
+  middlewares TCP e o serviço, vendo o endereço do visitante e o de destino (PROXY protocol ao container com o
+  IP certo). Prioridade, saúde (health check TCP), quarentena e nova tentativa seguem as regras do HTTP; uma
+  conexão sobrevive às recargas da configuração. As opções TLS sem provider são anunciadas com o provider do
+  router (`modern` vira `modern@file`). Código em `pkg/mesh/tcp.go`; ganchos no upstream em
+  `pkg/server/router/tcp/manager.go` (`buildMiddlewaresAndService` e o nome do router no contexto, com o resto
+  em `manager_traefix_mesh.go`), `pkg/server/service/tcp/service.go` (`buildTraefix`, em
+  `service_traefix.go`) e `pkg/server/routerfactory.go` (`setMeshTCP`, `switchMeshHandlers`).
+  **UDP ainda não é encaminhado** (etapa 8).
 
 ## Infopage
 

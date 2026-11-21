@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -22,6 +23,17 @@ type Stream interface {
 	// CloseWrite tells the other end that nothing more is written, and keeps reading.
 	// The accepting end of a link over TCP cannot do it: its stream ends when it is closed.
 	CloseWrite() error
+
+	// Done is closed once nothing more can be written to the stream: the other end gave it up, the link was lost,
+	// or this end closed its writing side.
+	Done() <-chan struct{}
+}
+
+// deadliner is a stream whose pending reads and writes can be bounded, as the ones of a connection.
+// The accepting end of a link has it, over both transports.
+type deadliner interface {
+	SetReadDeadline(t time.Time) error
+	SetWriteDeadline(t time.Time) error
 }
 
 // streamCanceled is the HTTP/3 code of a stream given up by its user.
@@ -117,7 +129,7 @@ func (s *session) openTunnelTCP(ctx context.Context, header http.Header) (Stream
 		return nil, fmt.Errorf("the other instance refused the stream: %s", resp.Status)
 	}
 
-	stream := &tcpClientStream{body: resp.Body, writer: writer}
+	stream := &tcpClientStream{body: resp.Body, writer: writer, done: make(chan struct{})}
 
 	// The HTTP/2 client does not look at the context while it waits for the next bytes to send:
 	// the stream is made to end with it.
@@ -165,7 +177,7 @@ func acceptTunnel(rw http.ResponseWriter, req *http.Request) (Stream, datagramme
 		return nil, nil, err
 	}
 
-	return &tcpServerStream{body: req.Body, rw: rw, controller: controller}, nil, nil
+	return &tcpServerStream{body: req.Body, rw: rw, controller: controller, done: req.Context().Done()}, nil, nil
 }
 
 type quicClientStream struct {
@@ -176,6 +188,7 @@ type quicClientStream struct {
 func (s *quicClientStream) Read(p []byte) (int, error)  { return s.str.Read(p) }
 func (s *quicClientStream) Write(p []byte) (int, error) { return s.str.Write(p) }
 func (s *quicClientStream) CloseWrite() error           { return s.str.Close() }
+func (s *quicClientStream) Done() <-chan struct{}       { return s.str.Context().Done() }
 
 func (s *quicClientStream) Close() error {
 	if s.stop != nil {
@@ -194,6 +207,10 @@ type quicServerStream struct {
 func (s *quicServerStream) Read(p []byte) (int, error)  { return s.str.Read(p) }
 func (s *quicServerStream) Write(p []byte) (int, error) { return s.str.Write(p) }
 func (s *quicServerStream) CloseWrite() error           { return s.str.Close() }
+func (s *quicServerStream) Done() <-chan struct{}       { return s.str.Context().Done() }
+
+func (s *quicServerStream) SetReadDeadline(t time.Time) error  { return s.str.SetReadDeadline(t) }
+func (s *quicServerStream) SetWriteDeadline(t time.Time) error { return s.str.SetWriteDeadline(t) }
 
 func (s *quicServerStream) Close() error {
 	s.str.CancelRead(streamCanceled)
@@ -205,16 +222,31 @@ type tcpClientStream struct {
 	body   io.ReadCloser
 	writer *io.PipeWriter
 	stop   func() bool
+
+	// The other end cannot stop sending and keep receiving: the stream is over when nothing more comes from it.
+	done chan struct{}
+	once sync.Once
 }
 
-func (s *tcpClientStream) Read(p []byte) (int, error)  { return s.body.Read(p) }
+func (s *tcpClientStream) Read(p []byte) (int, error) {
+	n, err := s.body.Read(p)
+	if err != nil {
+		s.once.Do(func() { close(s.done) })
+	}
+
+	return n, err
+}
+
 func (s *tcpClientStream) Write(p []byte) (int, error) { return s.writer.Write(p) }
 func (s *tcpClientStream) CloseWrite() error           { return s.writer.Close() }
+func (s *tcpClientStream) Done() <-chan struct{}       { return s.done }
 
 func (s *tcpClientStream) Close() error {
 	if s.stop != nil {
 		s.stop()
 	}
+
+	s.once.Do(func() { close(s.done) })
 
 	_ = s.writer.Close()
 
@@ -225,6 +257,7 @@ type tcpServerStream struct {
 	body       io.ReadCloser
 	rw         http.ResponseWriter
 	controller *http.ResponseController
+	done       <-chan struct{}
 }
 
 func (s *tcpServerStream) Read(p []byte) (int, error) { return s.body.Read(p) }
@@ -243,6 +276,14 @@ func (s *tcpServerStream) Write(p []byte) (int, error) {
 func (s *tcpServerStream) CloseWrite() error { return nil }
 
 func (s *tcpServerStream) Close() error { return s.body.Close() }
+
+func (s *tcpServerStream) Done() <-chan struct{} { return s.done }
+
+func (s *tcpServerStream) SetReadDeadline(t time.Time) error { return s.controller.SetReadDeadline(t) }
+
+func (s *tcpServerStream) SetWriteDeadline(t time.Time) error {
+	return s.controller.SetWriteDeadline(t)
+}
 
 // datagrammer sends packets without retransmission nor order, as UDP does: the QUIC datagrams of a stream.
 type datagrammer interface {

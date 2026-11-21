@@ -188,6 +188,12 @@ func TestMesh_buildConfiguration(t *testing.T) {
 			{Kind: KindHTTP, Name: "blog@docker", Rule: "Host(`blog.example.com`)", EntryPoints: []string{"web"}},
 			{Kind: KindHTTP, Name: "ops@file", Rule: "Host(`ops.example.com`)", EntryPoints: []string{"admin"}},
 			{Kind: KindTCP, Name: "pg@docker", Rule: "HostSNI(`*`)", EntryPoints: []string{"web"}},
+			{
+				Kind: KindTCP, Name: "mqtt@docker", Rule: "HostSNI(`mqtt.example.com`)", RuleSyntax: "v3", Priority: 3, EntryPoints: []string{"websecure"},
+				TLS: &RouteTLS{Passthrough: true, Options: "modern@file", CertResolver: "le", Domains: []types.Domain{{Main: "mqtt.example.com"}}},
+			},
+			{Kind: KindTCP, Name: "ldap@docker", Rule: "HostSNI(`*`)", EntryPoints: []string{"admin"}},
+			{Kind: KindUDP, Name: "dns@docker", EntryPoints: []string{"dns"}},
 		}},
 		"srv3": {routes: []Route{app}},
 		"srv4": {routes: []Route{changed}},
@@ -221,7 +227,24 @@ func TestMesh_buildConfiguration(t *testing.T) {
 		byName[imported.Kind+"/"+imported.Name+"/"+imported.Rule] = imported
 	}
 
-	require.Len(t, byName, 5)
+	// A TCP router keeps its rule and its TLS configuration, passthrough included.
+	assert.Equal(t, map[string]*dynamic.TCPRouter{
+		"pg-docker": {EntryPoints: []string{"web"}, Rule: "HostSNI(`*`)", Service: "pg-docker"},
+		"mqtt-docker": {
+			EntryPoints: []string{"websecure"},
+			Rule:        "HostSNI(`mqtt.example.com`)",
+			RuleSyntax:  "v3",
+			Priority:    3,
+			Service:     "mqtt-docker",
+			TLS: &dynamic.RouterTCPTLSConfig{
+				Passthrough: true, Options: "modern@file", CertResolver: "le", Domains: []types.Domain{{Main: "mqtt.example.com"}},
+			},
+		},
+	}, conf.TCP.Routers)
+
+	assert.Equal(t, map[string]*dynamic.TCPService{"pg-docker": {}, "mqtt-docker": {}}, conf.TCP.Services)
+
+	require.Len(t, byName, 8)
 
 	imported := byName["http/app@docker/Host(`app.example.com`)"]
 	assert.Equal(t, ImportImported, imported.Status)
@@ -234,7 +257,20 @@ func TestMesh_buildConfiguration(t *testing.T) {
 	assert.Equal(t, ImportLocal, byName["http/blog@docker/Host(`blog.example.com`)"].Status)
 	assert.Equal(t, ImportSkipped, byName["http/ops@file/Host(`ops.example.com`)"].Status)
 	assert.Contains(t, byName["http/ops@file/Host(`ops.example.com`)"].Reason, "entry points")
-	assert.Equal(t, ImportSkipped, byName["tcp/pg@docker/HostSNI(`*`)"].Status)
+	assert.Equal(t, ImportImported, byName["tcp/pg@docker/HostSNI(`*`)"].Status)
+	assert.Equal(t, "pg-docker@mesh", byName["tcp/pg@docker/HostSNI(`*`)"].Router)
+	assert.Equal(t, ImportImported, byName["tcp/mqtt@docker/HostSNI(`mqtt.example.com`)"].Status)
+	assert.Equal(t, ImportSkipped, byName["tcp/ldap@docker/HostSNI(`*`)"].Status)
+	assert.Contains(t, byName["tcp/ldap@docker/HostSNI(`*`)"].Reason, "entry points")
+	assert.Equal(t, ImportSkipped, byName["udp/dns@docker/"].Status)
+	assert.Contains(t, byName["udp/dns@docker/"].Reason, "UDP")
+
+	// The requests and the connections find their routes apart: a TCP router may have the name of an HTTP one.
+	tables := node.mesh.tables.Load()
+
+	assert.Contains(t, tables.targets, "app-docker@mesh")
+	assert.NotContains(t, tables.targets, "pg-docker@mesh")
+	assert.Equal(t, &forwardTarget{kind: KindTCP, router: "pg@docker", candidates: []forwardCandidate{{nodeID: "srv2"}}}, tables.tcpTargets["pg-docker@mesh"])
 }
 
 func TestMesh_buildConfiguration_empty(t *testing.T) {
@@ -247,6 +283,9 @@ func TestMesh_buildConfiguration_empty(t *testing.T) {
 	assert.NotNil(t, conf.HTTP.Routers)
 	assert.Empty(t, conf.HTTP.Routers)
 	assert.NotNil(t, conf.HTTP.Services)
+	require.NotNil(t, conf.TCP)
+	assert.NotNil(t, conf.TCP.Routers)
+	assert.NotNil(t, conf.TCP.Services)
 	assert.Empty(t, report)
 }
 

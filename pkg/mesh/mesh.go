@@ -6,7 +6,6 @@ import (
 	"errors"
 	"maps"
 	"net"
-	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/traefik/traefik/v3/pkg/cluster"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
-	"github.com/traefik/traefik/v3/pkg/config/runtime"
 	"github.com/traefik/traefik/v3/pkg/observability/metrics"
 	"github.com/traefik/traefik/v3/pkg/version"
 )
@@ -97,12 +95,11 @@ type Mesh struct {
 	configurationChan chan<- dynamic.Message
 	publishCh         chan struct{}
 
-	// localHTTP are the HTTP routers this instance announces, as their providers wrote them.
+	// localHTTP and localTCP are the routers this instance announces, as their providers wrote them.
 	localHTTP map[string]*dynamic.Router
-	// handlers serve these routers by name, for the requests the other instances forward.
-	handlers atomic.Pointer[map[string]http.Handler]
-	// runtime is the routing configuration the handlers were built from.
-	runtime atomic.Pointer[runtime.Configuration]
+	localTCP  map[string]*dynamic.TCPRouter
+	// routing serves these routers by name, for what the other instances forward.
+	routing atomic.Pointer[routing]
 	// tables are the routes as the requests need them.
 	tables atomic.Pointer[forwardTables]
 	// turn counts the requests, for the round robin.
@@ -219,11 +216,12 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 		warned:            map[string]struct{}{},
 		publishCh:         make(chan struct{}, 1),
 		localHTTP:         map[string]*dynamic.Router{},
+		localTCP:          map[string]*dynamic.TCPRouter{},
 		quarantines:       map[string]*quarantine{},
 		healthInterval:    defaultHealthInterval,
 	}
 
-	m.tables.Store(&forwardTables{})
+	m.tables.Store(newForwardTables())
 
 	m.lookupSRV = func(ctx context.Context, name string) ([]*net.SRV, error) {
 		// Without a service and a protocol, the name is looked up as it is written.

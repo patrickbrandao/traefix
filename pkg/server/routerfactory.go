@@ -124,7 +124,7 @@ func (f *RouterFactory) CreateRouters(rtConf *runtime.Configuration) (map[string
 	handlersNonTLS := routerManager.BuildHandlers(ctx, f.entryPointsTCP, false)
 	handlersTLS := routerManager.BuildHandlers(ctx, f.entryPointsTCP, true)
 
-	f.buildMeshHandlers(ctx, routerManager, rtConf)
+	meshHandlers := f.buildMeshHandlers(ctx, routerManager)
 
 	serviceManager.LaunchHealthCheck(ctx)
 
@@ -134,7 +134,11 @@ func (f *RouterFactory) CreateRouters(rtConf *runtime.Configuration) (map[string
 	middlewaresTCPBuilder := tcpmiddleware.NewBuilder(rtConf.TCPMiddlewares)
 
 	rtTCPManager := tcprouter.NewManager(rtConf, svcTCPManager, middlewaresTCPBuilder, handlersNonTLS, handlersTLS, f.tlsManager, f.providersPrecedence)
+	f.setMeshTCP(rtTCPManager, svcTCPManager)
+
 	routersTCP := rtTCPManager.BuildHandlers(ctx, f.entryPointsTCP)
+
+	f.switchMeshHandlers(ctx, meshHandlers, rtTCPManager, rtConf)
 
 	for ep, r := range routersTCP {
 		if allowACMEByPass, ok := f.allowACMEByPass[ep]; ok && allowACMEByPass {

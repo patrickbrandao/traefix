@@ -25,6 +25,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/fingerprint"
 	"github.com/traefik/traefik/v3/pkg/middlewares/accesslog"
+	"github.com/traefik/traefik/v3/pkg/tcp"
 	"golang.org/x/net/http/httpguts"
 )
 
@@ -58,8 +59,10 @@ type forwardInfo struct {
 	// Router is the name of the router on the instance that owns it.
 	Router string `json:"router"`
 	// Remote is the address of the client, as the entry point saw it.
-	Remote string      `json:"remote,omitempty"`
-	TLS    *forwardTLS `json:"tls,omitempty"`
+	Remote string `json:"remote,omitempty"`
+	// Local is the address the client connected to, for the TCP routers.
+	Local string      `json:"local,omitempty"`
+	TLS   *forwardTLS `json:"tls,omitempty"`
 	// Fingerprint is what the entry point measured of the connection and of the request.
 	Fingerprint *forwardFingerprint `json:"fingerprint,omitempty"`
 }
@@ -137,6 +140,7 @@ func newForwardInfo(req *http.Request, kind, router string) forwardInfo {
 
 // forwardTarget is where the requests of a route go: the instances that own its router, this one included when it does.
 type forwardTarget struct {
+	kind string
 	// router is the name of the router on the instances that own it.
 	router string
 	// candidates are the other instances that own the router.
@@ -153,12 +157,45 @@ type forwardCandidate struct {
 	down bool
 }
 
+// key names the route among the ones of every kind: a TCP router may have the name of an HTTP one.
+func (t *forwardTarget) key() string {
+	return routeKey(t.kind, t.router)
+}
+
 // forwardTables are the routes of the mesh as the requests need them. They are replaced as a whole when a route changes.
 type forwardTables struct {
-	// targets are the routes this instance does not have, by the name of their service.
+	// targets are the HTTP routes this instance does not have, by the name of their service.
 	targets map[string]*forwardTarget
-	// shared are the routes this instance has and other instances have too, by the name of the router.
+	// shared are the HTTP routes this instance has and other instances have too, by the name of the router.
 	shared map[string]*forwardTarget
+	// tcpTargets and tcpShared are the same for the TCP routes.
+	tcpTargets map[string]*forwardTarget
+	tcpShared  map[string]*forwardTarget
+}
+
+func newForwardTables() *forwardTables {
+	return &forwardTables{
+		targets:    map[string]*forwardTarget{},
+		shared:     map[string]*forwardTarget{},
+		tcpTargets: map[string]*forwardTarget{},
+		tcpShared:  map[string]*forwardTarget{},
+	}
+}
+
+func (t *forwardTables) targetsOf(kind string) map[string]*forwardTarget {
+	if kind == KindTCP {
+		return t.tcpTargets
+	}
+
+	return t.targets
+}
+
+func (t *forwardTables) sharedOf(kind string) map[string]*forwardTarget {
+	if kind == KindTCP {
+		return t.tcpShared
+	}
+
+	return t.shared
 }
 
 // choice is a place to serve a request: this instance, or another one.
@@ -247,7 +284,7 @@ func (m *Mesh) try(rw http.ResponseWriter, req *http.Request, target *forwardTar
 	}
 
 	if isUpgrade(req) {
-		if retry := m.forwardUpgrade(rw, req, session, nodeID, target.router); retry {
+		if retry := m.forwardUpgrade(rw, req, session, nodeID, target); retry {
 			m.try(rw, req, target, local, rest)
 		}
 
@@ -287,13 +324,13 @@ func (m *Mesh) try(rw http.ResponseWriter, req *http.Request, target *forwardTar
 				return fmt.Errorf("%w (%s): %s", errNotServed, nodeID, cause)
 			}
 
-			m.succeeded(target.router, nodeID)
+			m.succeeded(target.key(), nodeID)
 			m.countRequest(nodeID, forwardHTTP, resultForwarded)
 
 			return nil
 		},
 		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
-			m.failed(target.router, nodeID)
+			m.failed(target.key(), nodeID)
 			m.countRequest(nodeID, forwardHTTP, resultError)
 
 			// Nothing of the request left this instance, e.g. the connection was just closed. Or the other instance told
@@ -341,12 +378,12 @@ func (m *Mesh) refuse(rw http.ResponseWriter, req *http.Request, nodeID string, 
 // as an HTTP/1.1 connection.
 //
 // It returns true when the stream could not be opened: nothing of the request was sent, and another place can serve it.
-func (m *Mesh) forwardUpgrade(rw http.ResponseWriter, req *http.Request, s *session, nodeID, router string) bool {
-	info := newForwardInfo(req, forwardUpgrade, router)
+func (m *Mesh) forwardUpgrade(rw http.ResponseWriter, req *http.Request, s *session, nodeID string, target *forwardTarget) bool {
+	info := newForwardInfo(req, forwardUpgrade, target.router)
 
 	stream, err := s.OpenStream(req.Context(), http.Header{headerForward: {info.encode()}})
 	if err != nil {
-		m.failed(router, nodeID)
+		m.failed(target.key(), nodeID)
 		m.countRequest(nodeID, forwardUpgrade, resultError)
 		m.logger.Debug().Err(err).Str("peer", nodeID).Msg("Unable to open a stream for a request through the mesh")
 
@@ -354,18 +391,19 @@ func (m *Mesh) forwardUpgrade(rw http.ResponseWriter, req *http.Request, s *sess
 	}
 	defer func() { _ = stream.Close() }()
 
-	m.forwardUpgraded(rw, req, stream, nodeID, router)
+	m.forwardUpgraded(rw, req, stream, nodeID, target.key())
 
 	return false
 }
 
 // forwardUpgraded carries a request that asks to switch protocols, and what follows it, over an open stream.
-func (m *Mesh) forwardUpgraded(rw http.ResponseWriter, req *http.Request, stream Stream, nodeID, router string) {
+// The route is named by its key.
+func (m *Mesh) forwardUpgraded(rw http.ResponseWriter, req *http.Request, stream Stream, nodeID, route string) {
 	out := req.Clone(req.Context())
 	out.RequestURI = ""
 
 	if err := out.Write(stream); err != nil {
-		m.failed(router, nodeID)
+		m.failed(route, nodeID)
 		m.countRequest(nodeID, forwardUpgrade, resultError)
 		m.refuse(rw, req, nodeID, http.StatusBadGateway, err.Error())
 
@@ -376,7 +414,7 @@ func (m *Mesh) forwardUpgraded(rw http.ResponseWriter, req *http.Request, stream
 
 	resp, err := http.ReadResponse(reader, out)
 	if err != nil {
-		m.failed(router, nodeID)
+		m.failed(route, nodeID)
 		m.countRequest(nodeID, forwardUpgrade, resultError)
 		m.refuse(rw, req, nodeID, http.StatusBadGateway, err.Error())
 
@@ -384,7 +422,7 @@ func (m *Mesh) forwardUpgraded(rw http.ResponseWriter, req *http.Request, stream
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	m.succeeded(router, nodeID)
+	m.succeeded(route, nodeID)
 	m.countRequest(nodeID, forwardUpgrade, resultForwarded)
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
@@ -481,13 +519,15 @@ func (m *Mesh) sessionTo(nodeID string) *session {
 func (m *Mesh) plan(target *forwardTarget, client string) []choice {
 	var choices []choice
 
-	localUp := target.local && !m.isLocalDown(target.router)
+	route := target.key()
+
+	localUp := target.local && !m.isLocalDown(route)
 	if localUp {
 		choices = append(choices, choice{local: true, nodeID: m.member.NodeID(), priority: target.localPriority})
 	}
 
 	for _, candidate := range target.candidates {
-		if candidate.down || m.quarantined(target.router, candidate.nodeID) || m.sessionTo(candidate.nodeID) == nil {
+		if candidate.down || m.quarantined(route, candidate.nodeID) || m.sessionTo(candidate.nodeID) == nil {
 			continue
 		}
 
@@ -552,21 +592,21 @@ type quarantine struct {
 	until    time.Time
 }
 
-func quarantineKey(router, nodeID string) string {
-	return router + "\x00" + nodeID
+func quarantineKey(route, nodeID string) string {
+	return route + "\x00" + nodeID
 }
 
-// failed records that a request for a route could not be delivered to an instance.
-func (m *Mesh) failed(router, nodeID string) {
+// failed records that a request for a route, named by its key, could not be delivered to an instance.
+func (m *Mesh) failed(route, nodeID string) {
 	now := m.now()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	q := m.quarantines[quarantineKey(router, nodeID)]
+	q := m.quarantines[quarantineKey(route, nodeID)]
 	if q == nil {
 		q = &quarantine{}
-		m.quarantines[quarantineKey(router, nodeID)] = q
+		m.quarantines[quarantineKey(route, nodeID)] = q
 	}
 
 	q.failures++
@@ -581,20 +621,20 @@ func (m *Mesh) failed(router, nodeID string) {
 }
 
 // succeeded records that an instance served a request for a route.
-func (m *Mesh) succeeded(router, nodeID string) {
+func (m *Mesh) succeeded(route, nodeID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.quarantines, quarantineKey(router, nodeID))
+	delete(m.quarantines, quarantineKey(route, nodeID))
 }
 
-func (m *Mesh) quarantined(router, nodeID string) bool {
+func (m *Mesh) quarantined(route, nodeID string) bool {
 	now := m.now()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	q := m.quarantines[quarantineKey(router, nodeID)]
+	q := m.quarantines[quarantineKey(route, nodeID)]
 
 	return q != nil && now.Before(q.until)
 }
@@ -637,8 +677,26 @@ func (m *Mesh) serveForwarded(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	handler := m.handlerOf(info.Router)
-	if handler == nil {
+	var (
+		handler    http.Handler
+		tcpHandler tcp.Handler
+	)
+
+	if current := m.routing.Load(); current != nil {
+		handler, tcpHandler = current.http[info.Router], current.tcp[info.Router]
+	}
+
+	switch info.Kind {
+	case forwardHTTP, forwardUpgrade:
+		tcpHandler = nil
+	case forwardTCP:
+		handler = nil
+	default:
+		http.Error(rw, "unknown kind of mesh request", http.StatusBadRequest)
+		return
+	}
+
+	if handler == nil && tcpHandler == nil {
 		// The router went away between the announcement and the request, e.g. its container stopped.
 		m.countReceived(peer, info.Kind, resultUnknown)
 
@@ -649,28 +707,16 @@ func (m *Mesh) serveForwarded(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	m.seen(peer)
+	m.countReceived(peer, info.Kind, resultServed)
 
 	switch info.Kind {
 	case forwardHTTP:
-		m.countReceived(peer, info.Kind, resultServed)
 		handler.ServeHTTP(rw, m.asReceived(req, info))
-
 	case forwardUpgrade:
-		m.countReceived(peer, info.Kind, resultServed)
 		m.serveUpgrade(rw, req, info, handler)
-
-	default:
-		http.Error(rw, "unknown kind of mesh request", http.StatusBadRequest)
+	case forwardTCP:
+		m.serveTCP(rw, req, info, tcpHandler)
 	}
-}
-
-func (m *Mesh) handlerOf(router string) http.Handler {
-	handlers := m.handlers.Load()
-	if handlers == nil {
-		return nil
-	}
-
-	return (*handlers)[router]
 }
 
 // asReceived gives a forwarded request what it would have if the client had connected to this instance:

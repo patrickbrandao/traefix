@@ -10,6 +10,7 @@ import (
 
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/safe"
+	"github.com/traefik/traefik/v3/pkg/tcp"
 )
 
 const (
@@ -168,7 +169,7 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 	}
 	m.mu.Unlock()
 
-	tables := &forwardTables{targets: map[string]*forwardTarget{}, shared: map[string]*forwardTarget{}}
+	tables := newForwardTables()
 
 	// The maps are never nil: a configuration without any router still has to replace the previous one.
 	conf := &dynamic.Configuration{
@@ -176,7 +177,10 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 			Routers:  map[string]*dynamic.Router{},
 			Services: map[string]*dynamic.Service{},
 		},
-		TCP: &dynamic.TCPConfiguration{},
+		TCP: &dynamic.TCPConfiguration{
+			Routers:  map[string]*dynamic.TCPRouter{},
+			Services: map[string]*dynamic.TCPService{},
+		},
 		UDP: &dynamic.UDPConfiguration{},
 	}
 
@@ -218,8 +222,9 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 				imported.Reason = "this instance has a router with the same name"
 
 				// With the same rule, entry points and TLS, it is the same route: the priorities choose where a request goes.
-				if own, ok := announced[key]; ok && group.route.Kind == KindHTTP && own.signature() == group.signature {
-					tables.shared[own.Name] = &forwardTarget{
+				if own, ok := announced[key]; ok && group.route.Kind != KindUDP && own.signature() == group.signature {
+					tables.sharedOf(own.Kind)[own.Name] = &forwardTarget{
+						kind:          own.Kind,
 						router:        own.Name,
 						candidates:    group.candidates,
 						local:         true,
@@ -229,9 +234,9 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 					imported.Reason = "this instance has the router too: the priorities choose where a request is served"
 				}
 
-			case group.route.Kind != KindHTTP:
+			case group.route.Kind == KindUDP:
 				imported.Status = ImportSkipped
-				imported.Reason = "the mesh does not forward " + strings.ToUpper(group.route.Kind) + " routers yet"
+				imported.Reason = "the mesh does not forward UDP routers yet"
 
 			default:
 				entryPoints := intersect(group.route.EntryPoints, m.entryPoints)
@@ -243,23 +248,50 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 					break
 				}
 
-				router := &dynamic.Router{
-					EntryPoints: entryPoints,
-					Rule:        group.route.Rule,
-					RuleSyntax:  group.route.RuleSyntax,
-					Priority:    group.route.Priority,
-					Service:     name,
+				if group.route.Kind == KindTCP {
+					router := &dynamic.TCPRouter{
+						EntryPoints: entryPoints,
+						Rule:        group.route.Rule,
+						RuleSyntax:  group.route.RuleSyntax,
+						Priority:    group.route.Priority,
+						Service:     name,
+					}
+
+					if tls := group.route.TLS; tls != nil {
+						router.TLS = &dynamic.RouterTCPTLSConfig{
+							Passthrough:  tls.Passthrough,
+							Options:      tls.Options,
+							CertResolver: tls.CertResolver,
+							Domains:      tls.Domains,
+						}
+					}
+
+					conf.TCP.Routers[name] = router
+					// The service has no configuration: the mesh builds its handler.
+					conf.TCP.Services[name] = &dynamic.TCPService{}
+				} else {
+					router := &dynamic.Router{
+						EntryPoints: entryPoints,
+						Rule:        group.route.Rule,
+						RuleSyntax:  group.route.RuleSyntax,
+						Priority:    group.route.Priority,
+						Service:     name,
+					}
+
+					if tls := group.route.TLS; tls != nil {
+						router.TLS = &dynamic.RouterTLSConfig{Options: tls.Options, CertResolver: tls.CertResolver, Domains: tls.Domains}
+					}
+
+					conf.HTTP.Routers[name] = router
+					// The service has no configuration: the mesh builds its handler.
+					conf.HTTP.Services[name] = &dynamic.Service{}
 				}
 
-				if tls := group.route.TLS; tls != nil {
-					router.TLS = &dynamic.RouterTLSConfig{Options: tls.Options, CertResolver: tls.CertResolver, Domains: tls.Domains}
+				tables.targetsOf(group.route.Kind)[name+"@"+ProviderName] = &forwardTarget{
+					kind:       group.route.Kind,
+					router:     group.route.Name,
+					candidates: group.candidates,
 				}
-
-				conf.HTTP.Routers[name] = router
-				// The service has no configuration: the mesh builds its handler.
-				conf.HTTP.Services[name] = &dynamic.Service{}
-
-				tables.targets[name+"@"+ProviderName] = &forwardTarget{router: group.route.Name, candidates: group.candidates}
 
 				imported.Status = ImportImported
 				imported.Router = name + "@" + ProviderName
@@ -310,4 +342,13 @@ func (b *ServiceBuilder) BuildHTTP(_ context.Context, serviceName string) (http.
 	}
 
 	return &meshService{mesh: b.mesh, name: serviceName}, nil
+}
+
+// BuildTCP returns the handler of a TCP service of the mesh, and nothing for the other services.
+func (m *Mesh) BuildTCP(_ context.Context, serviceName string) (tcp.Handler, error) {
+	if !strings.HasSuffix(serviceName, "@"+ProviderName) {
+		return nil, nil
+	}
+
+	return &meshTCPService{mesh: m, name: serviceName}, nil
 }

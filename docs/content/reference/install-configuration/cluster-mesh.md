@@ -7,7 +7,7 @@ The `cluster.mesh` option links the Traefix instances of a [cluster](./cluster.m
 
 !!! warning "Work in progress"
 
-    In this version, the mesh forwards the HTTP requests. The TCP and UDP routers are announced and not forwarded yet.
+    In this version, the mesh forwards the HTTP requests and the TCP connections. The UDP routers are announced and not forwarded yet.
 
 ## Configuration Examples
 
@@ -69,6 +69,7 @@ Each instance listens on `cluster.mesh.address` and opens a link to every instan
 
 - **A link uses QUIC, or TLS over TCP.** With `transport: auto`, the instance tries QUIC for 3 seconds, then TCP. An instance linked over TCP tries QUIC again every 5 minutes, and moves the link when QUIC gets through.
 - **Open the port in UDP and in TCP.** With `transport: quic` the instance only listens in UDP, and with `transport: tcp` only in TCP.
+- **QUIC costs more than TCP.** QUIC runs in the process, and carries less traffic than TCP for the same CPU. Between servers on the same network with heavy traffic, `transport: tcp` can carry more.
 - **Both ends verify each other.** A link needs TLS 1.3 and a certificate of the [cluster token](#cluster-token) on both sides. An instance with another token gets a warning in its logs that names the cause.
 - **A link is lost after `linkTimeout` without an answer.** The instance pings the other end three times per `linkTimeout`, and logs the loss. It then dials again after 1 second, and doubles the wait up to 30 seconds while the other instance is away.
 - **The list of peers can name the instance itself.** The instance notices that it reached itself and stops dialing that address, so that every instance can get the same list.
@@ -112,7 +113,7 @@ Each instance announces its routers to the instances that link to it, and create
 - **An announcement carries what matches a request.** That is the rule, the priority, the entry points and the TLS options, certificate resolver and domains of the router. The middlewares, the service and the servers stay with the instance that owns the router.
 - **The router that an instance creates is named after the announced router and its provider.** The `app@docker` router of another instance becomes `app-docker@mesh`.
 - **The router uses the entry points that the instance has with the same names.** Use the same entry point names on every instance. A router with no entry point in common is not created.
-- **The TLS options and the certificate resolver of the router must exist on the instance, with the same names.** The instance requests the certificate of the router as it does for its own routers.
+- **The TLS options and the certificate resolver of the router must exist on the instance, with the same names.** The instance requests the certificate of the router as it does for its own routers. TLS options named without a provider are looked up in the provider of the router: the `modern` options of a router of the file provider are `modern@file` on the other instances.
 - **The middlewares of the entry point apply to the router.** Declare them with their provider, such as `waf@file`: a name without a provider is looked up among the middlewares of the mesh, which has none.
 - **An instance keeps its own router.** When the instance has a router with the name of an announced router, it creates no router for the announcement. With the same rule, entry points and TLS, the two routers are one route, and the [priorities](#where-a-request-is-served) choose the instance that serves each request.
 - **A change reaches the other instances at once.** They follow the routers of an instance for as long as their link to it is up, and remove them when the link is lost.
@@ -148,7 +149,7 @@ http:
         export: false
 ```
 
-The TCP and UDP routers have the same options, and are announced. The instances create no router for them yet.
+The TCP and UDP routers have the same options. The instances create a router for the TCP routers, see [TCP Connections Through the Mesh](#tcp-connections-through-the-mesh). The UDP routers are announced, and the instances create no router for them yet.
 
 ## Requests Through the Mesh
 
@@ -181,11 +182,11 @@ The instances that own a router are the candidates for its requests: the instanc
 
 | Instance that received the request | Other instances | Where the request goes |
 |:-----------------------------------|:----------------|:-----------------------|
-| Default | `srv2`: default | The instance itself. `srv2` only when the instance can't serve it. |
-| No router | `srv2` and `srv3`: default | `srv2` or `srv3`. |
-| Default | `srv2`: 10 | `srv2`. The instance itself when `srv2` can't serve it. |
-| 10 | `srv2`: 10, `srv3`: default | The instance itself or `srv2`. `srv3` when neither can. |
-| 5 | `srv2`: 10 | `srv2`. The instance itself when `srv2` can't serve it. |
+| <a id="opt-Default" href="#opt-Default" title="#opt-Default">Default</a> | `srv2`: default | The instance itself. `srv2` only when the instance can't serve it. |
+| <a id="opt-No-router" href="#opt-No-router" title="#opt-No-router">No router</a> | `srv2` and `srv3`: default | `srv2` or `srv3`. |
+| <a id="opt-Default-2" href="#opt-Default-2" title="#opt-Default-2">Default</a> | `srv2`: 10 | `srv2`. The instance itself when `srv2` can't serve it. |
+| <a id="opt-10" href="#opt-10" title="#opt-10">10</a> | `srv2`: 10, `srv3`: default | The instance itself or `srv2`. `srv3` when neither can. |
+| <a id="opt-5" href="#opt-5" title="#opt-5">5</a> | `srv2`: 10 | `srv2`. The instance itself when `srv2` can't serve it. |
 
 Different priorities make a primary and its backups. The same priority, above 0, shares the requests.
 
@@ -195,6 +196,25 @@ Different priorities make a primary and its backups. The same priority, above 0,
 - **An instance that fails three requests in a row is left alone for the router.** The instance comes back after 5 seconds, and after twice as long each time it fails again, up to 1 minute.
 - **A request that didn't leave the instance goes to the next candidate.** That is the case when the link was just lost, or when the other instance answers that it no longer has the router. A request that was sent is not sent a second time: the server may have received it.
 - **A request in transit to an instance that dies is lost.** It fails after `linkTimeout` at most, when the link is considered lost. The requests that follow go to the other candidates.
+
+## TCP Connections Through the Mesh
+
+A connection for a TCP router that the instance learned from the mesh goes to an instance that owns the router, in a stream of the link to it. The router of the instance has the rule, the priority and the TLS configuration of the announced router.
+
+| Step | Instance that received the connection | Instance that owns the router |
+|:-----|:--------------------------------------|:------------------------------|
+| <a id="opt-Rule-of-the-router-HostSNI-ClientIP" href="#opt-Rule-of-the-router-HostSNI-ClientIP" title="#opt-Rule-of-the-router-HostSNI-ClientIP">Rule of the router (`HostSNI`, `ClientIP`)</a> | Yes | No |
+| <a id="opt-TLS-terminated-by-Traefix" href="#opt-TLS-terminated-by-Traefix" title="#opt-TLS-terminated-by-Traefix">TLS terminated by Traefix</a> | Yes | No |
+| <a id="opt-Middlewares-of-the-router-ipAllowList-inFlightConn" href="#opt-Middlewares-of-the-router-ipAllowList-inFlightConn" title="#opt-Middlewares-of-the-router-ipAllowList-inFlightConn">Middlewares of the router (`ipAllowList`, `inFlightConn`)</a> | No | Yes |
+| <a id="opt-Service-load-balancing-health-check-PROXY-protocol" href="#opt-Service-load-balancing-health-check-PROXY-protocol" title="#opt-Service-load-balancing-health-check-PROXY-protocol">Service: load balancing, health check, PROXY protocol</a> | No | Yes |
+
+- **With `tls.passthrough`, TLS ends at the server.** The instance that received the connection reads the server name and passes the encrypted bytes on.
+- **With TLS terminated by Traefix, TLS ends at the instance that received the connection.** The content travels in the link, which is encrypted, and reaches the server as it does without the mesh. That instance presents the certificate, so the certificate resolver or the certificates of the router must be there too.
+- **The instance that owns the router sees the client.** The connection has the address and the port of the client, and the address it connected to. The `ipAllowList` middleware of the router and the [PROXY protocol](../routing-configuration/tcp/serverstransport.md) sent to the server carry the address of the client.
+- **A side that stops sending can still receive.** The end of the data of the client reaches the server, and the server can still answer, as it does without the mesh. The `terminationDelay` of the servers transport applies on the instance that owns the router.
+- **The priorities choose the instance, as for HTTP.** The rules of [Where a Request Is Served](#where-a-request-is-served) apply to each connection. A connection that the other instance refuses, because it no longer has the router, goes to the next candidate.
+- **A connection that no instance can take is closed.** TCP has no other way to say so.
+- **A connection outlives the changes of the routing.** A connection keeps going when the routing configuration changes on either instance. It ends when the link is lost, after `linkTimeout` at most.
 
 ## API
 
@@ -216,8 +236,8 @@ The rules of the announced routers appear in this answer. Protect the API as you
 | <a id="opt-traefik-mesh-peers" href="#opt-traefik-mesh-peers" title="#opt-traefik-mesh-peers">`traefik_mesh_peers`</a> | `state` | Number of instances that this instance opens a link to, with the link `up` or `down`. An address that no instance answers at counts as `down`. |
 | <a id="opt-traefik-mesh-link-up" href="#opt-traefik-mesh-link-up" title="#opt-traefik-mesh-link-up">`traefik_mesh_link_up`</a> | `peer`, `transport` | `1` for the transport, `quic` or `tcp`, that the link to the instance is up with, `0` otherwise. |
 | <a id="opt-traefik-mesh-link-rtt-seconds" href="#opt-traefik-mesh-link-rtt-seconds" title="#opt-traefik-mesh-link-rtt-seconds">`traefik_mesh_link_rtt_seconds`</a> | `peer` | Time the other instance took to answer the last ping, `0` while the link is down. |
-| <a id="opt-traefik-mesh-requests-total" href="#opt-traefik-mesh-requests-total" title="#opt-traefik-mesh-requests-total">`traefik_mesh_requests_total`</a> | `peer`, `kind`, `result` | Requests that the instance sent to another instance. The `kind` is `http` or `upgrade`. The `result` is `forwarded`, `error` when the request could not be delivered, or `unavailable`, with an empty `peer`, when no instance could take it. |
-| <a id="opt-traefik-mesh-received-total" href="#opt-traefik-mesh-received-total" title="#opt-traefik-mesh-received-total">`traefik_mesh_received_total`</a> | `peer`, `kind`, `result` | Requests that the instance received from another instance: `served`, or `unknown` when it no longer has the router. |
+| <a id="opt-traefik-mesh-requests-total" href="#opt-traefik-mesh-requests-total" title="#opt-traefik-mesh-requests-total">`traefik_mesh_requests_total`</a> | `peer`, `kind`, `result` | Requests that the instance sent to another instance. The `kind` is `http`, `upgrade`, or `tcp` for a connection of a TCP router. The `result` is `forwarded`, `error` when the request could not be delivered, or `unavailable`, with an empty `peer`, when no instance could take it. |
+| <a id="opt-traefik-mesh-received-total" href="#opt-traefik-mesh-received-total" title="#opt-traefik-mesh-received-total">`traefik_mesh_received_total`</a> | `peer`, `kind`, `result` | Requests and connections that the instance received from another instance: `served`, or `unknown` when it no longer has the router. |
 
 The `peer` label is the `nodeID` of the other instance. An address of the list or of the DNS that no instance answered at yet has no `nodeID`: it only counts in `traefik_mesh_peers`. Datadog, StatsD and InfluxDB use the same names with dots, for example `traefik.mesh.link.up`.
 
