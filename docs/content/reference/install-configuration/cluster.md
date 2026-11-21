@@ -9,6 +9,8 @@ The instances of a cluster can share their ACME account and certificates, with t
 
 The `priority` option sets which instance requests the certificates of such a resolver: see [Certificate Requests in a Cluster](./tls/certificate-resolvers/acme-certstore.md#certificate-requests-in-a-cluster).
 
+The instances of a cluster also answer the HTTP-01 challenges that the other instances started: see [HTTP-01 Challenge in a Cluster](./tls/certificate-resolvers/acme-certstore.md#http-01-challenge-in-a-cluster).
+
 Without the `cluster` option, the instance connects to no Redis server and behaves as in Traefik.
 
 ## Configuration Examples
@@ -130,6 +132,7 @@ The names below use the default `traefix` prefix.
 | <a id="opt-traefixnodes" href="#opt-traefixnodes" title="#opt-traefixnodes">`traefix:nodes`</a> | Set of the identifiers of the instances. |
 | <a id="opt-traefixlockname" href="#opt-traefixlockname" title="#opt-traefixlockname">`traefix:lock:<name>`</a> | Lock held by one instance at a time. Expires when its holder stops extending it. |
 | <a id="opt-traefixevents" href="#opt-traefixevents" title="#opt-traefixevents">`traefix:events`</a> | Channel of the messages the instances send to each other. |
+| <a id="opt-traefixacmehttptokendomain" href="#opt-traefixacmehttptokendomain" title="#opt-traefixacmehttptokendomain">`traefix:acme:http:<token>:<domain>`</a> | Answer of an HTTP-01 challenge in progress. Expires after 10 minutes. |
 
 The `redis` certificate store adds the [keys of each certificate resolver](./tls/certificate-resolvers/acme-certstore.md#keys-in-the-redis-server).
 

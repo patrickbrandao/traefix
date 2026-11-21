@@ -220,7 +220,7 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 	tlsManager := traefiktls.NewManager(staticConfiguration.OCSP)
 	routinesPool.GoCtx(tlsManager.Run)
 
-	httpChallengeProvider := acme.NewChallengeHTTP()
+	httpChallengeProvider := acme.NewHTTPChallengeSolver(clusterMember)
 
 	tlsChallengeProvider := acme.NewChallengeTLSALPN()
 	err = providerAggregator.AddProvider(tlsChallengeProvider)

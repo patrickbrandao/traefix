@@ -132,11 +132,17 @@ servidores, satélite atrás de NAT). Implementado até agora:
   à CA, a de maior `cluster.priority` entre as vivas com o resolver; empate decide na corrida pela trava,
   e `priority: 0` nunca pede. Qualquer instância anuncia o que os seus routers precisam
   (`traefix:acme:{<resolver>}:want:<id>`); as falhas são compartilhadas, com espera crescente (2 min a
-  6 h) e desistência após 14 dias; as renovações e o registro da conta seguem a mesma eleição. **O desafio
-  HTTP-01 ainda só é respondido pela instância que o iniciou** (etapa 5): com várias réplicas atrás do
-  mesmo nome, use `dnsChallenge` por enquanto. Código em `pkg/provider/acme/coordinator.go` e
-  `provider_coordinator.go`; no upstream, `resolveCertificate` e `resolveDefaultCertificate` passaram a se
+  6 h) e desistência após 14 dias; as renovações e o registro da conta seguem a mesma eleição. Código em
+  `pkg/provider/acme/coordinator.go` e `provider_coordinator.go`; no upstream, `resolveCertificate` e `resolveDefaultCertificate` passaram a se
   chamar `obtainCertificate` e `obtainDefaultCertificate`, e `renewCertificates` chama `electRenewals`.
+
+- **Desafio HTTP-01 compartilhado** (etapa 5): com `cluster`, a instância que pede o certificado grava a
+  resposta do desafio em `traefix:acme:http:<token>:<domínio>` (10 min) e qualquer instância atrás do nome
+  responde à validação da CA, consultando o Valkey só para tokens com formato de ACME (500 ms de limite,
+  5 s de memória para o que não existe, 32 consultas simultâneas). Vale para todos os resolvers da
+  instância, e toda réplica que recebe o tráfego precisa do `httpChallenge`, inclusive as de
+  `priority: 0`. Código em `pkg/provider/acme/challenge_http_cluster.go`; gancho no upstream em
+  `cmd/traefik/traefik.go` (`acme.NewHTTPChallengeSolver`).
 
 ## Infopage
 

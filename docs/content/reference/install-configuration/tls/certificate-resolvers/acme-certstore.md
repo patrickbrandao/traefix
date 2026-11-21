@@ -162,10 +162,6 @@ certificatesResolvers:
 --certificatesresolvers.myresolver.acme.certstore.export=dir
 ```
 
-!!! warning "HTTP-01 challenge with several instances"
-
-    In this version, an instance cannot answer the HTTP-01 challenge that another instance started. When the name of a domain points to several instances, the ACME server can send its validation request to an instance that doesn't know the challenge, and the request for the certificate fails. Use `dnsChallenge` with several instances, or send the requests for `/.well-known/acme-challenge/` to the instance with the highest `cluster.priority`.
-
 - **Traefix doesn't start with `primary: redis` and no `cluster` option, or with `tlsChallenge`.** Use `httpChallenge` or `dnsChallenge`.
 - **A certificate that an instance stores reaches the other instances within seconds.** Each instance serves the certificate and writes its exports. An instance also compares itself with the server every 15 seconds, to catch up on what it missed.
 - **The server keeps the most recent certificate for a set of domains.** A certificate with an earlier expiration date doesn't replace the certificate of the server.
@@ -192,6 +188,17 @@ The instances of a cluster agree on the one that requests each certificate from 
 The instances log a warning when they configure the same resolver with a different `caServer`, `email`, `keyType`, challenge, `profile` or `preferredChain`: the certificate then depends on the instance that requests it.
 
 For `dnsChallenge`, set the credentials of the DNS provider on every instance with a priority above zero.
+
+### HTTP-01 Challenge in a Cluster
+
+The ACME server sends its validation request to any of the instances behind the name of a domain. The instance that requests the certificate writes the answer of the challenge to the Redis server, and the instance that receives the validation request reads the answer from there.
+
+- **Configure `httpChallenge` on every instance that receives the requests for the domain.** This includes the instances with `cluster.priority: 0`. An instance without `httpChallenge` doesn't answer the requests for `/.well-known/acme-challenge/`.
+- **The instances share the challenges of all their resolvers.** The sharing starts with the [`cluster`](../../cluster.md) option, whatever the `primary` store of a resolver.
+- **The answer stays in the Redis server during the validation.** The instance removes the answer when the validation ends. An answer that is not removed expires after 10 minutes.
+- **An instance asks the Redis server for the challenges it didn't start.** The instance waits 500 milliseconds at most for the Redis server, and remembers for 5 seconds that the Redis server doesn't know a token.
+- **A request without a valid token gets a `404` response without a request to the Redis server.** An ACME token has 22 to 128 letters, digits, hyphens or underscores.
+- **Without the Redis server, an instance only answers the challenges it started.** The validation then succeeds when the ACME server reaches this instance.
 
 ### Keys in the Redis Server
 
