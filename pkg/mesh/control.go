@@ -14,6 +14,7 @@ import (
 const (
 	pathHello = "/v1/hello"
 	pathPing  = "/v1/ping"
+	pathPeers = "/v1/peers"
 
 	// maxControlBody bounds what an instance reads of a control message of another one.
 	maxControlBody = 1 << 20
@@ -27,6 +28,13 @@ type hello struct {
 	Version  string `json:"version"`
 	// Advertise are the addresses the instance is reached at.
 	Advertise []string `json:"advertise,omitempty"`
+	// Peers are the other instances the instance is in contact with: a new instance that knows one finds them all.
+	Peers []peerInfo `json:"peers,omitempty"`
+}
+
+// peersAnswer is the answer to a request for the instances an instance is in contact with.
+type peersAnswer struct {
+	Peers []peerInfo `json:"peers"`
 }
 
 // ServeHTTP answers the requests the other instances send through their links.
@@ -43,6 +51,14 @@ func (m *Mesh) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	case req.Method == http.MethodGet && req.URL.Path == pathPing:
 		m.seen(peerFrom(req.Context()))
 		rw.WriteHeader(http.StatusNoContent)
+
+	case req.Method == http.MethodGet && req.URL.Path == pathPeers:
+		m.seen(peerFrom(req.Context()))
+		rw.Header().Set("Content-Type", "application/json")
+
+		if err := json.NewEncoder(rw).Encode(peersAnswer{Peers: m.knownPeers()}); err != nil {
+			m.logger.Debug().Err(err).Msg("Unable to answer a request for the instances of the mesh")
+		}
 
 	default:
 		http.Error(rw, "unknown mesh request", http.StatusNotFound)
@@ -66,6 +82,12 @@ func (m *Mesh) serveHello(rw http.ResponseWriter, req *http.Request) {
 	// and is not counted among the instances linked to this one.
 	if theirs.NodeID != m.member.NodeID() {
 		m.greeted(theirs, req.RemoteAddr)
+
+		// The instance that opened the link is linked back, at the addresses it says it is reached at,
+		// and so are the instances it is in contact with.
+		m.learn(sourceExchange, theirs.NodeID, theirs.Advertise)
+		m.contact(theirs.NodeID)
+		m.learnPeers(theirs.Peers)
 	}
 
 	rw.Header().Set("Content-Type", "application/json")
@@ -81,7 +103,36 @@ func (m *Mesh) hello() hello {
 		Instance:  m.member.Instance(),
 		Version:   m.version,
 		Advertise: m.advertise,
+		Peers:     m.knownPeers(),
 	}
+}
+
+// askPeers asks the other end of a session for the instances it is in contact with.
+func (m *Mesh) askPeers(ctx context.Context, s *session) ([]peerInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, m.linkTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+controlHost+pathPeers, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := s.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected answer to a request for the instances of the mesh: %s", resp.Status)
+	}
+
+	var answer peersAnswer
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxControlBody)).Decode(&answer); err != nil {
+		return nil, err
+	}
+
+	return answer.Peers, nil
 }
 
 // sayHello introduces this instance to the one at the other end of a session, and returns what it answers.

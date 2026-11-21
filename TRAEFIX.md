@@ -183,7 +183,16 @@ servidor que o tem, sem rede overlay. Implementado até agora:
   a cada 5 min. Os túneis que as próximas etapas usam já existem e estão testados nos dois transportes:
   stream por `CONNECT` (`session.OpenStream`) e fluxo de pacotes por datagramas QUIC com sobra pelo
   stream (`session.OpenFlow`). Métricas `traefik_mesh_peers`, `traefik_mesh_link_up` e
-  `traefik_mesh_link_rtt_seconds`. **Nenhuma rota é anunciada nem encaminhada ainda** (etapas 4 e 5).
+  `traefik_mesh_link_rtt_seconds`.
+
+- **Descoberta** (etapa 3): um registro de pares (`pkg/mesh/peers.go`) com cinco fontes: `mesh.peers`,
+  o anúncio das instâncias no Valkey (`mesh.addr`, recusando quem tem outro `mesh.authority`), DNS
+  (`mesh.dns`: SRV e TXT `traefix-mesh=`, a cada minuto), a troca entre pares (o `hello` leva os
+  endereços de quem disca e os pares com que ele está em contato; `/v1/peers` a cada 30 s) e o
+  `mesh.peersFile`. Quem recebe uma ligação liga de volta, então uma instância nova que conhece uma só
+  acaba ligada a todas. Um par tem uma ligação só, com vários endereços tentados em ordem. Pares
+  aprendidos saem após `peerRetention` sem contato; os de `mesh.peers` nunca. **Nenhuma rota é anunciada
+  nem encaminhada ainda** (etapas 4 e 5).
 
 ## Infopage
 

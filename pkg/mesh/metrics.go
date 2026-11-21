@@ -17,8 +17,21 @@ func SetMetricsRegistry(registry metrics.Registry) {
 	}
 }
 
-func setLinkUp(peer, transport string, up bool) {
-	registry := metricsRegistry.Load()
+// registry returns the registry of this instance: the one of the process, unless a test gave the instance its own.
+func (m *Mesh) registry() metrics.Registry {
+	if m.metrics != nil {
+		return m.metrics
+	}
+
+	if registry := metricsRegistry.Load(); registry != nil {
+		return *registry
+	}
+
+	return nil
+}
+
+func (m *Mesh) setLinkUp(peer, transport string, up bool) {
+	registry := m.registry()
 	if registry == nil {
 		return
 	}
@@ -28,21 +41,21 @@ func setLinkUp(peer, transport string, up bool) {
 		value = 1
 	}
 
-	(*registry).MeshLinkUpGauge().With("peer", peer, "transport", transport).Set(value)
+	registry.MeshLinkUpGauge().With("peer", peer, "transport", transport).Set(value)
 }
 
-func setLinkRTT(peer string, rtt time.Duration) {
-	if registry := metricsRegistry.Load(); registry != nil {
-		(*registry).MeshLinkRTTGauge().With("peer", peer).Set(rtt.Seconds())
+func (m *Mesh) setLinkRTT(peer string, rtt time.Duration) {
+	if registry := m.registry(); registry != nil {
+		registry.MeshLinkRTTGauge().With("peer", peer).Set(rtt.Seconds())
 	}
 }
 
-func setPeers(up, down int) {
-	registry := metricsRegistry.Load()
+func (m *Mesh) setPeers(up, down int) {
+	registry := m.registry()
 	if registry == nil {
 		return
 	}
 
-	(*registry).MeshPeersGauge().With("state", "up").Set(float64(up))
-	(*registry).MeshPeersGauge().With("state", "down").Set(float64(down))
+	registry.MeshPeersGauge().With("state", "up").Set(float64(up))
+	registry.MeshPeersGauge().With("state", "down").Set(float64(down))
 }

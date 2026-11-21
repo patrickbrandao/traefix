@@ -3,6 +3,7 @@ package mesh
 import (
 	"context"
 	"maps"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -24,6 +25,29 @@ type testNode struct {
 	address string
 	mesh    *Mesh
 	stop    func()
+
+	// What the instance gets each time it starts.
+	registry  metrics.Registry
+	lookupSRV func(ctx context.Context, name string) ([]*net.SRV, error)
+	lookupTXT func(ctx context.Context, name string) ([]string, error)
+
+	mu     sync.Mutex
+	offset time.Duration
+}
+
+// advance moves the clock of the instance forward.
+func (n *testNode) advance(d time.Duration) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	n.offset += d
+}
+
+func (n *testNode) now() time.Time {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	return time.Now().Add(n.offset)
 }
 
 // newTestNode prepares an instance that listens on a free loopback address, and links to the given addresses.
@@ -48,6 +72,25 @@ func newTestNode(t *testing.T, nodeID, token string, change func(conf *cluster.C
 	return node
 }
 
+// newIdleTestNode prepares an instance like newTestNode, and leaves it to the test to start it.
+func newIdleTestNode(t *testing.T, nodeID, token string, change func(conf *cluster.Configuration), peers ...string) *testNode {
+	t.Helper()
+
+	conf := newTestConfiguration()
+	conf.NodeID = nodeID
+	conf.Token = token
+	conf.Mesh.Address = freeAddress(t)
+	conf.Mesh.Advertise = []string{conf.Mesh.Address}
+	conf.Mesh.Peers = peers
+	conf.Mesh.LinkTimeout = ptypes.Duration(1500 * time.Millisecond)
+
+	if change != nil {
+		change(conf)
+	}
+
+	return &testNode{t: t, conf: conf, address: conf.Mesh.Address}
+}
+
 func (n *testNode) start() {
 	n.t.Helper()
 
@@ -61,13 +104,35 @@ func (n *testNode) start() {
 	n.mesh.redialFirst = 50 * time.Millisecond
 	n.mesh.redialLongest = 200 * time.Millisecond
 	n.mesh.quicDialTimeout = 500 * time.Millisecond
+	n.mesh.discoverInterval = 50 * time.Millisecond
+	n.mesh.dnsInterval = 100 * time.Millisecond
+	n.mesh.exchangeInterval = 100 * time.Millisecond
+	n.mesh.now = n.now
+	n.mesh.metrics = n.registry
+
+	if n.lookupSRV != nil {
+		n.mesh.lookupSRV = n.lookupSRV
+	}
+
+	if n.lookupTXT != nil {
+		n.mesh.lookupTXT = n.lookupTXT
+	}
 
 	ctx, cancel := context.WithCancel(n.t.Context())
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
+
+		var wg sync.WaitGroup
+
+		// With a Redis server, the instance announces itself there.
+		if member.HasServer() {
+			wg.Go(func() { member.Run(ctx) })
+		}
+
 		n.mesh.Run(ctx)
+		wg.Wait()
 	}()
 
 	stopped := false
@@ -97,9 +162,43 @@ func (n *testNode) link() LinkStatus {
 func (n *testNode) waitLink(up bool) LinkStatus {
 	n.t.Helper()
 
-	require.Eventually(n.t, func() bool { return n.link().Up == up }, 10*time.Second, 10*time.Millisecond)
+	require.Eventually(n.t, func() bool {
+		links := n.mesh.Status().Links
+		return len(links) == 1 && links[0].Up == up
+	}, 10*time.Second, 10*time.Millisecond)
 
 	return n.link()
+}
+
+// linkTo returns the state of the link to an instance, and whether there is one.
+func (n *testNode) linkTo(nodeID string) (LinkStatus, bool) {
+	for _, link := range n.mesh.Status().Links {
+		if link.NodeID == nodeID {
+			return link, true
+		}
+	}
+
+	return LinkStatus{}, false
+}
+
+// waitLinked waits for a link up to each of the instances, and to no other.
+func (n *testNode) waitLinked(nodeIDs ...string) {
+	n.t.Helper()
+
+	require.Eventually(n.t, func() bool {
+		links := n.mesh.Status().Links
+		if len(links) != len(nodeIDs) {
+			return false
+		}
+
+		for _, nodeID := range nodeIDs {
+			if link, ok := n.linkTo(nodeID); !ok || !link.Up {
+				return false
+			}
+		}
+
+		return true
+	}, 15*time.Second, 10*time.Millisecond, "%s: %+v", n.conf.NodeID, n.mesh.Status().Links)
 }
 
 func TestMesh_link(t *testing.T) {
@@ -132,6 +231,9 @@ func TestMesh_link(t *testing.T) {
 			inbound := first.mesh.Status().Inbound[0]
 			assert.Equal(t, "srv2", inbound.NodeID)
 			assert.Equal(t, []string{second.address}, inbound.Advertise)
+
+			// And it does reach it back, without having been told about it.
+			first.waitLinked("srv2")
 
 			// The pings measure the link.
 			require.Eventually(t, func() bool { return second.link().RTT > 0 }, 5*time.Second, 10*time.Millisecond)
@@ -219,11 +321,12 @@ func TestMesh_link_toItself(t *testing.T) {
 		conf.Mesh.Peers = []string{address, address}
 	})
 
-	require.Eventually(t, func() bool { return node.link().Self }, 10*time.Second, 10*time.Millisecond)
+	// The address is given up, and is not taken again from the list.
+	require.Eventually(t, func() bool { return len(node.mesh.Status().Links) == 0 }, 10*time.Second, 10*time.Millisecond)
 
-	status := node.link()
-	assert.False(t, status.Up)
-	assert.Empty(t, status.Error)
+	node.mesh.learn(sourcePeers, "", []string{address})
+
+	assert.Empty(t, node.mesh.Status().Links)
 	assert.Empty(t, node.mesh.Status().Inbound)
 }
 
@@ -297,11 +400,12 @@ func TestMesh_metrics(t *testing.T) {
 		linkRTT:  newRecordingGauge(),
 	}
 
-	SetMetricsRegistry(registry)
-	t.Cleanup(func() { metricsRegistry.Store(nil) })
-
 	first := newTestNode(t, "srv1", testToken, nil)
-	newTestNode(t, "srv2", testToken, nil, first.address, "127.0.0.1:1")
+
+	// The registry of the process is shared by the instances of a test: this one gets its own.
+	second := newIdleTestNode(t, "srv2", testToken, nil, first.address, "127.0.0.1:1")
+	second.registry = registry
+	second.start()
 
 	value := func(gauge *recordingGauge, labels string) float64 {
 		t.Helper()

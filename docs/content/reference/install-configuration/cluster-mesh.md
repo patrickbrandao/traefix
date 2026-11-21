@@ -7,7 +7,7 @@ The `cluster.mesh` option links the Traefix instances of a [cluster](./cluster.m
 
 !!! warning "Work in progress"
 
-    In this version, the instances link to the addresses of `cluster.mesh.peers` and watch their links. They announce no router and forward no request yet. The `dns`, `peersFile`, `peerRetention`, `export` and `balance` options are checked and have no effect yet.
+    In this version, the instances find each other, link to each other and watch their links. They announce no router and forward no request yet. The `export` and `balance` options are checked and have no effect yet.
 
 ## Configuration Examples
 
@@ -41,7 +41,7 @@ cluster:
 --cluster.mesh.peers=srv2.example.com:7443
 ```
 
-The mesh doesn't need the `cluster.redis` option. With a Redis server, the instances also find each other through it.
+The mesh doesn't need the `cluster.redis` option. With a Redis server, the instances also [find each other](#find-the-other-instances) through it.
 
 ## Configuration Options
 
@@ -65,7 +65,7 @@ Traefix doesn't start when the `cluster.mesh` option is set without a token, whe
 
 ## Links
 
-Each instance listens on `cluster.mesh.address` and opens a link to every address of `cluster.mesh.peers`. A link serves one direction: the instance that opens the link is the one that sends requests through it. Two instances that both name each other have two links.
+Each instance listens on `cluster.mesh.address` and opens a link to every instance it [finds](#find-the-other-instances). A link serves one direction: the instance that opens the link is the one that sends requests through it. Two instances that reach each other have two links.
 
 - **A link uses QUIC, or TLS over TCP.** With `transport: auto`, the instance tries QUIC for 3 seconds, then TCP. An instance linked over TCP tries QUIC again every 5 minutes, and moves the link when QUIC gets through.
 - **Open the port in UDP and in TCP.** With `transport: quic` the instance only listens in UDP, and with `transport: tcp` only in TCP.
@@ -73,16 +73,46 @@ Each instance listens on `cluster.mesh.address` and opens a link to every addres
 - **A link is lost after `linkTimeout` without an answer.** The instance pings the other end three times per `linkTimeout`, and logs the loss. It then dials again after 1 second, and doubles the wait up to 30 seconds while the other instance is away.
 - **The list of peers can name the instance itself.** The instance notices that it reached itself and stops dialing that address, so that every instance can get the same list.
 - **Two instances can't share a `nodeID`.** An instance that reaches another one with its own `nodeID` doesn't link to it, and logs an error.
+- **An instance has one link to another instance, whatever the number of its addresses.** The instance tries the addresses in order, the one that worked last first, then the ones the other instance advertises.
+
+## Find the Other Instances
+
+An instance links to every instance it learns about, from five sources:
+
+| Source | Option | Learns |
+|:-------|:-------|:-------|
+| List | `cluster.mesh.peers` | The addresses of the list. |
+| Redis server | `cluster.redis` | The instances that announce themselves in the Redis server, with the addresses they advertise. |
+| DNS | `cluster.mesh.dns` | The addresses of the SRV records of each name, and of its TXT records that start with `traefix-mesh=`. The instance looks the names up every minute. |
+| Other instances | | An instance that opens a link tells its addresses and the instances it is in contact with. Each instance asks the same of the instances it links to, every 30 seconds. |
+| File | `cluster.mesh.peersFile` | The instances that the instance was in contact with before it stopped. |
+
+- **A new instance only needs to know one instance.** The instance it links to links back to it, and tells it about the others. Every instance ends up with a link to every other instance.
+- **The instances don't relay.** An instance only reaches the instances it has a link to. Open the port of the mesh between every pair of instances.
+- **An instance of the cluster with another token is left alone.** The instance logs a warning once, and doesn't dial it.
+- **The file speeds the startup up.** The instance writes the file when the instances it knows change, every 5 minutes, and when it stops. At startup, it links to the instances of the file before the other sources answer. The instance still starts when the file is missing or can't be read.
+- **A learned instance is forgotten after `peerRetention` without contact.** The time goes on counting across the restarts. The addresses of `cluster.mesh.peers` are never forgotten.
+
+DNS records for two instances, as SRV records or as one TXT record:
+
+```text
+_traefix-mesh._udp.example.com. 300 IN SRV 0 0 7443 srv1.example.com.
+_traefix-mesh._udp.example.com. 300 IN SRV 0 0 7443 srv2.example.com.
+
+mesh.example.com. 300 IN TXT "traefix-mesh=srv1.example.com:7443,srv2.example.com:7443"
+```
+
+The priority and the weight of the SRV records are not used.
 
 ## Metrics
 
 | Metric | Labels | Contains |
 |:-------|:-------|:---------|
-| <a id="opt-traefik-mesh-peers" href="#opt-traefik-mesh-peers" title="#opt-traefik-mesh-peers">`traefik_mesh_peers`</a> | `state` | Number of instances that this instance opens a link to, with the link `up` or `down`. |
+| <a id="opt-traefik-mesh-peers" href="#opt-traefik-mesh-peers" title="#opt-traefik-mesh-peers">`traefik_mesh_peers`</a> | `state` | Number of instances that this instance opens a link to, with the link `up` or `down`. An address that no instance answers at counts as `down`. |
 | <a id="opt-traefik-mesh-link-up" href="#opt-traefik-mesh-link-up" title="#opt-traefik-mesh-link-up">`traefik_mesh_link_up`</a> | `peer`, `transport` | `1` for the transport, `quic` or `tcp`, that the link to the instance is up with, `0` otherwise. |
 | <a id="opt-traefik-mesh-link-rtt-seconds" href="#opt-traefik-mesh-link-rtt-seconds" title="#opt-traefik-mesh-link-rtt-seconds">`traefik_mesh_link_rtt_seconds`</a> | `peer` | Time the other instance took to answer the last ping, `0` while the link is down. |
 
-The `peer` label is the `nodeID` of the other instance. An address that no instance answered at yet has no `nodeID`: it only counts in `traefik_mesh_peers`. Datadog, StatsD and InfluxDB use the same names with dots, for example `traefik.mesh.link.up`.
+The `peer` label is the `nodeID` of the other instance. An address of the list or of the DNS that no instance answered at yet has no `nodeID`: it only counts in `traefik_mesh_peers`. Datadog, StatsD and InfluxDB use the same names with dots, for example `traefik.mesh.link.up`.
 
 ## Cluster Token
 

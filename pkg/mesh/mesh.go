@@ -1,8 +1,10 @@
 package mesh
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"maps"
 	"net"
 	"slices"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/traefik/traefik/v3/pkg/cluster"
+	"github.com/traefik/traefik/v3/pkg/observability/metrics"
 	"github.com/traefik/traefik/v3/pkg/version"
 )
 
@@ -38,12 +41,37 @@ type Mesh struct {
 	redialFirst       time.Duration
 	redialLongest     time.Duration
 
+	discoverInterval time.Duration
+	dnsInterval      time.Duration
+	exchangeInterval time.Duration
+
+	// metrics replaces the registry of the process, in the tests with several instances.
+	metrics metrics.Registry
+
+	now       func() time.Time
+	lookupSRV func(ctx context.Context, name string) ([]*net.SRV, error)
+	lookupTXT func(ctx context.Context, name string) ([]string, error)
+
 	listener *listener
-	links    []*link
 
 	mu sync.Mutex
 	// inbound are the instances that opened a link to this one, by identifier.
 	inbound map[string]InboundStatus
+
+	// The instances this one links to: all of them, the ones whose identifier is known, and the ones only known by an address.
+	entries   map[*peerEntry]struct{}
+	byNode    map[string]*peerEntry
+	byAddress map[string]*peerEntry
+	// selfAddresses are the addresses that turned out to be this instance.
+	selfAddresses map[string]struct{}
+	// refused are the instances of the cluster with another token, which were warned about.
+	refused map[string]struct{}
+	// dirty tells that the file of learned instances is out of date.
+	dirty bool
+
+	runCtx  context.Context //nolint:containedctx // The links learned while the mesh runs are started under it.
+	stopped bool
+	linksWG sync.WaitGroup
 }
 
 // InboundStatus is an instance that opened a link to this one.
@@ -59,7 +87,7 @@ type InboundStatus struct {
 type Status struct {
 	NodeID    string
 	Advertise []string
-	// Links are the links this instance opens, in the order of their addresses.
+	// Links are the links this instance opens, in the order of the identifiers of the instances, then of their addresses.
 	Links []LinkStatus
 	// Inbound are the instances that opened a link to this one, in the order of their identifiers.
 	Inbound []InboundStatus
@@ -124,54 +152,91 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 		quicRetryInterval: defaultQUICRetryInterval,
 		redialFirst:       defaultRedialFirst,
 		redialLongest:     defaultRedialLongest,
+		discoverInterval:  defaultDiscoverInterval,
+		dnsInterval:       defaultDNSInterval,
+		exchangeInterval:  defaultExchangeInterval,
+		now:               time.Now,
 		listener:          l,
 		inbound:           map[string]InboundStatus{},
+		entries:           map[*peerEntry]struct{}{},
+		byNode:            map[string]*peerEntry{},
+		byAddress:         map[string]*peerEntry{},
+		selfAddresses:     map[string]struct{}{},
+		refused:           map[string]struct{}{},
 	}
 
-	var seen []string
-	for _, address := range conf.Mesh.Peers {
-		if !slices.Contains(seen, address) {
-			seen = append(seen, address)
-			m.links = append(m.links, newLink(m, address))
-		}
+	m.lookupSRV = func(ctx context.Context, name string) ([]*net.SRV, error) {
+		// Without a service and a protocol, the name is looked up as it is written.
+		_, records, err := net.DefaultResolver.LookupSRV(ctx, "", "", name)
+		return records, err
 	}
+	m.lookupTXT = net.DefaultResolver.LookupTXT
+
+	// The links only start with Run.
+	m.loadPeers()
+	m.learn(sourcePeers, "", conf.Mesh.Peers)
 
 	return m, nil
 }
 
-// Run accepts the links of the other instances and keeps the links to them open, until the context is done.
+// Run accepts the links of the other instances, finds them and keeps the links to them open, until the context is done.
 func (m *Mesh) Run(ctx context.Context) {
 	ctx = m.logger.WithContext(ctx)
+
+	m.mu.Lock()
+	m.runCtx = ctx
+	for entry := range m.entries {
+		m.startLocked(entry)
+	}
+	m.mu.Unlock()
+
+	// The counts exist from the start, at zero for an instance that knows nobody yet.
+	m.countPeers()
 
 	var wg sync.WaitGroup
 
 	wg.Go(func() { m.listener.serve(ctx, m) })
-
-	for _, l := range m.links {
-		wg.Go(func() { l.run(ctx) })
-	}
+	wg.Go(func() { m.discover(ctx) })
 
 	wg.Wait()
 
-	for _, l := range m.links {
-		l.close()
-	}
+	// No link starts from here on, so that the wait below sees them all.
+	m.mu.Lock()
+	m.stopped = true
+	m.mu.Unlock()
+
+	m.linksWG.Wait()
+
+	m.savePeers(true)
 }
 
 // Status returns the links of this instance.
 func (m *Mesh) Status() Status {
 	status := Status{NodeID: m.member.NodeID(), Advertise: m.advertise}
 
-	for _, l := range m.links {
-		status.Links = append(status.Links, l.snapshot())
+	m.mu.Lock()
+	for entry := range m.entries {
+		link := entry.link.snapshot()
+		link.NodeID = entry.nodeID
+		link.Addresses = slices.Clone(entry.addresses)
+		link.Sources = slices.Sorted(maps.Keys(entry.sources))
+		link.LastContact = entry.lastContact
+
+		if link.Address == "" && len(entry.addresses) > 0 {
+			link.Address = entry.addresses[0]
+		}
+
+		status.Links = append(status.Links, link)
 	}
 
-	m.mu.Lock()
 	for _, inbound := range m.inbound {
 		status.Inbound = append(status.Inbound, inbound)
 	}
 	m.mu.Unlock()
 
+	slices.SortFunc(status.Links, func(a, b LinkStatus) int {
+		return cmp.Or(strings.Compare(a.NodeID, b.NodeID), strings.Compare(a.Address, b.Address))
+	})
 	slices.SortFunc(status.Inbound, func(a, b InboundStatus) int { return strings.Compare(a.NodeID, b.NodeID) })
 
 	return status
@@ -196,7 +261,7 @@ func (m *Mesh) greeted(theirs hello, remote string) {
 		Version:   theirs.Version,
 		Remote:    remote,
 		Advertise: theirs.Advertise,
-		LastSeen:  time.Now(),
+		LastSeen:  m.now(),
 	}
 	m.mu.Unlock()
 
@@ -208,51 +273,54 @@ func (m *Mesh) greeted(theirs hello, remote string) {
 // seen records a sign of life of an instance that opened a link to this one.
 func (m *Mesh) seen(nodeID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if inbound, ok := m.inbound[nodeID]; ok {
-		inbound.LastSeen = time.Now()
+		inbound.LastSeen = m.now()
 		m.inbound[nodeID] = inbound
 	}
+	m.mu.Unlock()
+
+	m.contact(nodeID)
 }
 
 // linkChanged follows a link in the metrics.
 func (m *Mesh) linkChanged(previous, current LinkStatus) {
 	// A link has no name in the metrics before the instance behind its address is known:
 	// until then it only counts among the links that are down.
-	if current.NodeID != "" && !current.Self {
+	if current.NodeID != "" {
 		for _, transport := range []string{TransportQUIC, TransportTCP} {
-			setLinkUp(current.NodeID, transport, current.Up && current.Transport == transport)
+			m.setLinkUp(current.NodeID, transport, current.Up && current.Transport == transport)
 		}
 
-		setLinkRTT(current.NodeID, current.RTT)
+		m.setLinkRTT(current.NodeID, current.RTT)
 	}
 
 	// Another instance answers at the address by now.
-	if previous.NodeID != "" && previous.NodeID != current.NodeID && !previous.Self {
+	if previous.NodeID != "" && previous.NodeID != current.NodeID {
 		for _, transport := range []string{TransportQUIC, TransportTCP} {
-			setLinkUp(previous.NodeID, transport, false)
+			m.setLinkUp(previous.NodeID, transport, false)
 		}
 
-		setLinkRTT(previous.NodeID, 0)
+		m.setLinkRTT(previous.NodeID, 0)
 	}
 
+	m.countPeers()
+}
+
+// countPeers follows the count of links in the metrics.
+func (m *Mesh) countPeers() {
 	up, down := 0, 0
-	for _, l := range m.links {
-		switch status := l.snapshot(); {
-		case status.Self:
-		case status.Up:
+
+	m.mu.Lock()
+	for entry := range m.entries {
+		if entry.link.snapshot().Up {
 			up++
-		default:
+		} else {
 			down++
 		}
 	}
+	m.mu.Unlock()
 
-	setPeers(up, down)
-}
-
-func (m *Mesh) linkMeasured(status LinkStatus) {
-	setLinkRTT(status.NodeID, status.RTT)
+	m.setPeers(up, down)
 }
 
 // advertisedAddresses returns the addresses to tell the other instances, and whether they had to be guessed.

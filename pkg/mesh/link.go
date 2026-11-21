@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,42 +22,55 @@ const (
 	defaultRedialLongest = 30 * time.Second
 )
 
-// LinkStatus is the state of the link this instance opens to an address.
+// LinkStatus is the state of the link this instance opens to another one.
 type LinkStatus struct {
+	// NodeID is empty until the instance was reached once.
+	NodeID string
+	// Address is the address the link is open at, or the last one that was tried.
 	Address string
-	// NodeID is empty until the instance at the address was reached once.
-	NodeID    string
+	// Addresses are the addresses known for the instance, in the order they are tried.
+	Addresses []string
+	// Sources are where the instance was learned from.
+	Sources   []string
 	Up        bool
 	Transport string
 	// Since is when the link went up or down.
 	Since time.Time
 	RTT   time.Duration
 	// Error is why the link is down.
-	Error string
-	// Self is true for an address that turned out to be this instance, which is not dialed again.
-	Self bool
+	Error       string
+	LastContact time.Time
 }
 
-// errSelf stops the link to an address that is this instance: a list of peers shared by all the instances names each of them.
-var errSelf = errors.New("the address is the one of this instance")
-
-// link keeps a session open to an address: it dials, introduces itself, watches the session and dials again when it is lost.
+// link keeps a session open to an instance: it dials its addresses, introduces itself, watches the session
+// and dials again when it is lost.
 type link struct {
-	mesh    *Mesh
-	address string
-	logger  zerolog.Logger
+	mesh   *Mesh
+	entry  *peerEntry
+	logger zerolog.Logger
+
+	// wakeCh ends the wait before the next dial, when there is something new to try.
+	wakeCh chan struct{}
 
 	mu      sync.Mutex
 	status  LinkStatus
 	session *session
 }
 
-func newLink(m *Mesh, address string) *link {
+func newLink(m *Mesh, entry *peerEntry) *link {
 	return &link{
-		mesh:    m,
-		address: address,
-		logger:  m.logger.With().Str("address", address).Logger(),
-		status:  LinkStatus{Address: address, Since: time.Now()},
+		mesh:   m,
+		entry:  entry,
+		logger: m.logger,
+		wakeCh: make(chan struct{}, 1),
+		status: LinkStatus{NodeID: entry.nodeID, Since: m.now()},
+	}
+}
+
+func (l *link) wake() {
+	select {
+	case l.wakeCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -64,11 +78,14 @@ func (l *link) run(ctx context.Context) {
 	wait := l.mesh.redialFirst
 
 	for ctx.Err() == nil {
-		s, err := l.connect(ctx)
+		s, address, err := l.connect(ctx)
 
 		switch {
-		case errors.Is(err, errSelf):
-			l.setSelf()
+		case errors.Is(err, errSelf), errors.Is(err, errMerged):
+			// The entry is gone: there is nothing left to link to under it.
+			l.logger.Debug().Err(err).Msg("The address is not linked to")
+			l.mesh.countPeers()
+
 			return
 
 		case err != nil:
@@ -77,6 +94,8 @@ func (l *link) run(ctx context.Context) {
 			select {
 			case <-time.After(wait):
 				wait = min(wait*2, l.mesh.redialLongest)
+			case <-l.wakeCh:
+				wait = l.mesh.redialFirst
 			case <-ctx.Done():
 			}
 
@@ -85,42 +104,76 @@ func (l *link) run(ctx context.Context) {
 
 		wait = l.mesh.redialFirst
 
-		l.setUp(s, 0)
+		l.setUp(s, address)
 
-		err = l.watch(ctx)
+		err = l.watch(ctx, address)
 
 		l.close()
 		l.setDown(ctx, err)
 	}
 }
 
-// connect opens a session with the transport the configuration asks for, and introduces this instance.
-func (l *link) connect(ctx context.Context) (*session, error) {
+// connect opens a session at the first address of the instance that answers, and introduces this instance.
+func (l *link) connect(ctx context.Context) (*session, string, error) {
+	addresses := l.mesh.addressesOf(l.entry)
+	if len(addresses) == 0 {
+		return nil, "", errors.New("no address is known for the instance")
+	}
+
+	var failures []string
+
+	for _, address := range addresses {
+		l.tried(address)
+
+		s, theirs, err := l.dial(ctx, address)
+		if err == nil {
+			if err = l.mesh.connected(l.entry, address, theirs); err != nil {
+				s.Close()
+			}
+		}
+
+		if err == nil {
+			l.mesh.learnPeers(theirs.Peers)
+			return s, address, nil
+		}
+
+		if errors.Is(err, errSelf) || errors.Is(err, errMerged) || ctx.Err() != nil {
+			return nil, "", err
+		}
+
+		failures = append(failures, address+": "+err.Error())
+	}
+
+	return nil, "", errors.New(strings.Join(failures, "; "))
+}
+
+// dial opens a session at an address with the transport the configuration asks for.
+func (l *link) dial(ctx context.Context, address string) (*session, hello, error) {
 	switch l.mesh.conf.Transport {
 	case cluster.MeshTransportQUIC:
-		return l.open(ctx, TransportQUIC, l.mesh.linkTimeout)
+		return l.open(ctx, address, TransportQUIC, l.mesh.linkTimeout)
 
 	case cluster.MeshTransportTCP:
-		return l.open(ctx, TransportTCP, l.mesh.linkTimeout)
+		return l.open(ctx, address, TransportTCP, l.mesh.linkTimeout)
 
 	default:
-		s, err := l.open(ctx, TransportQUIC, l.mesh.quicDialTimeout)
-		if err == nil || errors.Is(err, errSelf) || ctx.Err() != nil {
-			return s, err
+		s, theirs, err := l.open(ctx, address, TransportQUIC, l.mesh.quicDialTimeout)
+		if err == nil || ctx.Err() != nil {
+			return s, theirs, err
 		}
 
 		// QUIC does not get through, e.g. a network that drops UDP: TCP is slower under loss, but it gets there.
 		// An instance that refuses the token over QUIC refuses it over TCP too, and that error is the one reported.
-		s, tcpErr := l.open(ctx, TransportTCP, l.mesh.linkTimeout)
+		s, theirs, tcpErr := l.open(ctx, address, TransportTCP, l.mesh.linkTimeout)
 		if tcpErr != nil {
-			return nil, errors.Join(tcpErr, err)
+			return nil, hello{}, fmt.Errorf("%w (QUIC: %w)", tcpErr, err)
 		}
 
-		return s, nil
+		return s, theirs, nil
 	}
 }
 
-func (l *link) open(ctx context.Context, transport string, timeout time.Duration) (*session, error) {
+func (l *link) open(ctx context.Context, address, transport string, timeout time.Duration) (*session, hello, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -129,35 +182,28 @@ func (l *link) open(ctx context.Context, transport string, timeout time.Duration
 		dial = dialTCP
 	}
 
-	s, err := dial(ctx, l.mesh.identity, l.address, l.mesh.linkTimeout)
+	s, err := dial(ctx, l.mesh.identity, address, l.mesh.linkTimeout)
 	if err != nil {
-		return nil, err
+		return nil, hello{}, err
 	}
 
 	theirs, err := l.mesh.sayHello(ctx, s)
 	if err != nil {
 		s.Close()
-		return nil, err
+		return nil, hello{}, err
 	}
 
-	if theirs.NodeID == l.mesh.member.NodeID() {
-		s.Close()
-
-		if theirs.Instance == l.mesh.member.Instance() {
-			return nil, errSelf
-		}
-
-		return nil, errors.New("another instance uses the nodeID of this one: give each instance its own cluster nodeID")
-	}
-
-	return s, nil
+	return s, theirs, nil
 }
 
-// watch pings the other end until the session is lost or the context is done.
-// On a link over TCP that QUIC could serve, it also tries QUIC again now and then.
-func (l *link) watch(ctx context.Context) error {
+// watch pings the other end until the session is lost or the context is done, and asks it now and then for the instances
+// it reaches. On a link over TCP that QUIC could serve, it also tries QUIC again now and then.
+func (l *link) watch(ctx context.Context, address string) error {
 	pings := time.NewTicker(l.mesh.linkTimeout / 3)
 	defer pings.Stop()
+
+	exchange := time.NewTicker(l.mesh.exchangeInterval)
+	defer exchange.Stop()
 
 	var upgrade <-chan time.Time
 	if l.mesh.conf.Transport == cluster.MeshTransportAuto {
@@ -181,17 +227,35 @@ func (l *link) watch(ctx context.Context) error {
 				return fmt.Errorf("the other instance does not answer: %w", err)
 			}
 
-			l.setRTT(rtt)
+			l.setRTT(s.peer, rtt)
+
+		case <-exchange.C:
+			peers, err := l.mesh.askPeers(ctx, s)
+			if err != nil {
+				// The pings are what tells a lost link.
+				l.logger.Debug().Err(err).Str("peer", s.peer).Msg("Unable to ask an instance of the mesh for the instances it reaches")
+				continue
+			}
+
+			l.mesh.learnPeers(peers)
 
 		case <-upgrade:
 			if s.transport != TransportTCP {
 				continue
 			}
 
-			if better, err := l.open(ctx, TransportQUIC, l.mesh.quicDialTimeout); err == nil {
-				l.setUp(better, 0)
-				s.Close()
+			better, theirs, err := l.open(ctx, address, TransportQUIC, l.mesh.quicDialTimeout)
+			if err != nil {
+				continue
 			}
+
+			if theirs.NodeID != s.peer {
+				better.Close()
+				continue
+			}
+
+			l.setUp(better, address)
+			s.Close()
 
 		case <-s.Done():
 			if ctx.Err() != nil {
@@ -231,65 +295,66 @@ func (l *link) snapshot() LinkStatus {
 	return l.status
 }
 
-func (l *link) setUp(s *session, rtt time.Duration) {
+func (l *link) tried(address string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if !l.status.Up {
+		l.status.Address = address
+	}
+}
+
+func (l *link) setUp(s *session, address string) {
 	l.mu.Lock()
 	previous := l.status
 	l.session = s
-	l.status = LinkStatus{Address: l.address, NodeID: s.peer, Up: true, Transport: s.transport, Since: time.Now(), RTT: rtt}
+	l.status = LinkStatus{NodeID: s.peer, Address: address, Up: true, Transport: s.transport, Since: l.mesh.now()}
+	current := l.status
 	l.mu.Unlock()
 
-	l.logger.Info().Str("peer", s.peer).Str("transport", s.transport).Msg("Linked to an instance of the mesh")
+	l.logger.Info().Str("peer", s.peer).Str("address", address).Str("transport", s.transport).Msg("Linked to an instance of the mesh")
 
-	l.mesh.linkChanged(previous, l.snapshot())
+	l.mesh.linkChanged(previous, current)
 }
 
-func (l *link) setRTT(rtt time.Duration) {
+func (l *link) setRTT(nodeID string, rtt time.Duration) {
 	l.mu.Lock()
 	l.status.RTT = rtt
-	status := l.status
 	l.mu.Unlock()
 
-	l.mesh.linkMeasured(status)
+	l.mesh.contact(nodeID)
+	l.mesh.setLinkRTT(nodeID, rtt)
 }
 
 func (l *link) setDown(ctx context.Context, cause error) {
 	if ctx.Err() != nil {
-		// The instance is stopping.
+		// The instance is stopping, or the link is given up.
 		return
 	}
 
 	l.mu.Lock()
 	previous := l.status
 	l.status.Up = false
+	l.status.Transport = ""
 	l.status.RTT = 0
 	l.status.Error = cause.Error()
 	if previous.Up {
-		l.status.Since = time.Now()
+		l.status.Since = l.mesh.now()
 	}
-	status := l.status
+	current := l.status
 	l.mu.Unlock()
+
+	logger := l.logger.With().Str("peer", current.NodeID).Str("address", current.Address).Logger()
 
 	switch {
 	case previous.Up:
-		l.logger.Warn().Err(cause).Str("peer", previous.NodeID).Msg("Lost the link to an instance of the mesh")
-	case previous.Error != status.Error:
+		logger.Warn().Err(cause).Msg("Lost the link to an instance of the mesh")
+	case previous.Error != current.Error:
 		// The attempts repeat for as long as the other instance is away: only a new reason is worth a line.
-		l.logger.Warn().Err(cause).Msg("Unable to link to an instance of the mesh")
+		logger.Warn().Err(cause).Msg("Unable to link to an instance of the mesh")
 	default:
-		l.logger.Debug().Err(cause).Msg("Unable to link to an instance of the mesh")
+		logger.Debug().Err(cause).Msg("Unable to link to an instance of the mesh")
 	}
 
-	l.mesh.linkChanged(previous, status)
-}
-
-func (l *link) setSelf() {
-	l.mu.Lock()
-	previous := l.status
-	l.status = LinkStatus{Address: l.address, NodeID: l.mesh.member.NodeID(), Self: true, Since: time.Now()}
-	status := l.status
-	l.mu.Unlock()
-
-	l.logger.Debug().Msg("The address is the one of this instance: it is not linked to")
-
-	l.mesh.linkChanged(previous, status)
+	l.mesh.linkChanged(previous, current)
 }
