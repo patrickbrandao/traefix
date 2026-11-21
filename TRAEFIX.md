@@ -115,6 +115,13 @@ servidores, satélite atrás de NAT). Implementado até agora:
   `pkg/config/static/static_config.go` e `cmd/traefik/traefik.go`. Documentação:
   `docs/content/reference/install-configuration/tls/certificate-resolvers/acme-certstore.md`.
 
+- **Base do cluster** (`cluster`, etapa 2): cada instância se anuncia num Valkey ou Redis (único,
+  Sentinel ou Cluster) com `nodeID` e `priority`; o pacote `pkg/cluster/` oferece a lista de nós vivos,
+  travas com validade (`TryLock`, `Keep`, `Release`) e um canal de eventos com reassinatura. Nenhum
+  recurso usa o cluster ainda. Ganchos no upstream em `pkg/config/static/static_config.go` (campo
+  `Cluster`) e `cmd/traefik/traefik.go`. Documentação:
+  `docs/content/reference/install-configuration/cluster.md`.
+
 ## Infopage
 
 `infopage/` (fork do `traefik/whoami`, imagem `tmsoftbrasil/traefix-infopage`, em

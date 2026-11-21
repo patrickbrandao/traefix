@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 	slogzerolog "github.com/samber/slog-zerolog/v2"
 	ptypes "github.com/traefik/paerser/types"
+	"github.com/traefik/traefik/v3/pkg/cluster"
 	otypes "github.com/traefik/traefik/v3/pkg/observability/types"
 	"github.com/traefik/traefik/v3/pkg/ping"
 	acmeprovider "github.com/traefik/traefik/v3/pkg/provider/acme"
@@ -110,6 +111,8 @@ type Configuration struct {
 	Spiffe *SpiffeClientConfig `description:"SPIFFE integration configuration." json:"spiffe,omitempty" toml:"spiffe,omitempty" yaml:"spiffe,omitempty" export:"true"`
 
 	OCSP *tls.OCSPConfig `description:"OCSP configuration." json:"ocsp,omitempty" toml:"ocsp,omitempty" yaml:"ocsp,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+
+	Cluster *cluster.Configuration `description:"Joins the Traefix instances that share a Valkey or Redis server (Traefix)." json:"cluster,omitempty" toml:"cluster,omitempty" yaml:"cluster,omitempty" export:"true"`
 }
 
 // Core configures Traefik core behavior.
@@ -468,6 +471,10 @@ func (c *Configuration) SetEffectiveConfiguration() {
 
 // ValidateConfiguration validate that configuration is coherent.
 func (c *Configuration) ValidateConfiguration() error {
+	if err := c.Cluster.Validate(); err != nil {
+		return err
+	}
+
 	for name, resolver := range c.CertificatesResolvers {
 		if resolver.ACME != nil && resolver.Tailscale != nil {
 			return fmt.Errorf("unable to initialize certificates resolver %q, as ACME and Tailscale providers are mutually exclusive", name)

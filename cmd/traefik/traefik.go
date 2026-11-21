@@ -26,6 +26,7 @@ import (
 	"github.com/traefik/traefik/v3/cmd/healthcheck"
 	cmdVersion "github.com/traefik/traefik/v3/cmd/version"
 	tcli "github.com/traefik/traefik/v3/pkg/cli"
+	"github.com/traefik/traefik/v3/pkg/cluster"
 	"github.com/traefik/traefik/v3/pkg/collector"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/config/runtime"
@@ -200,6 +201,17 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 	err := providerAggregator.AddProvider(traefik.New(*staticConfiguration))
 	if err != nil {
 		return nil, err
+	}
+
+	// Cluster (Traefix)
+
+	if staticConfiguration.Cluster != nil {
+		member, err := cluster.New(ctx, staticConfiguration.Cluster)
+		if err != nil {
+			return nil, fmt.Errorf("joining the cluster: %w", err)
+		}
+
+		routinesPool.GoCtx(member.Run)
 	}
 
 	// ACME
