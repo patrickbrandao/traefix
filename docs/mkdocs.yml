@@ -280,6 +280,7 @@ nav:
           - 'Certificate Resolvers':
             - "Overview" : 'reference/install-configuration/tls/certificate-resolvers/overview.md'
             - "ACME" : 'reference/install-configuration/tls/certificate-resolvers/acme.md'
+            - "ACME Certificate Store" : 'reference/install-configuration/tls/certificate-resolvers/acme-certstore.md'
             - "Tailscale" : 'reference/install-configuration/tls/certificate-resolvers/tailscale.md'
           - "SPIFFE" : 'reference/install-configuration/tls/spiffe.md'
           - "OCSP" : 'reference/install-configuration/tls/ocsp.md'

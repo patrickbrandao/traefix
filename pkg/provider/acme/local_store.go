@@ -45,13 +45,11 @@ func (s *LocalStore) GetAccount(resolverName string) (*Account, error) {
 
 // SaveAccount stores ACME Account.
 func (s *LocalStore) SaveAccount(resolverName string, account *Account) error {
-	storedData, err := s.get(resolverName)
-	if err != nil {
+	if _, err := s.get(resolverName); err != nil {
 		return err
 	}
 
-	storedData.Account = account
-	s.save(resolverName, storedData)
+	s.update(resolverName, func(storedData *StoredData) { storedData.Account = account })
 
 	return nil
 }
@@ -68,20 +66,26 @@ func (s *LocalStore) GetCertificates(resolverName string) ([]*CertAndStore, erro
 
 // SaveCertificates stores ACME Certificates list.
 func (s *LocalStore) SaveCertificates(resolverName string, certificates []*CertAndStore) error {
-	storedData, err := s.get(resolverName)
-	if err != nil {
+	if _, err := s.get(resolverName); err != nil {
 		return err
 	}
 
-	storedData.Certificates = certificates
-	s.save(resolverName, storedData)
+	s.update(resolverName, func(storedData *StoredData) { storedData.Certificates = certificates })
 
 	return nil
 }
 
-func (s *LocalStore) save(resolverName string, storedData *StoredData) {
+// update changes the data of a resolver and saves it.
+// The data is replaced by a modified copy: the background writer may still be encoding the previous one (Traefix).
+func (s *LocalStore) update(resolverName string, change func(storedData *StoredData)) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	storedData := &StoredData{}
+	if current := s.storedData[resolverName]; current != nil {
+		*storedData = *current
+	}
+	change(storedData)
 
 	s.storedData[resolverName] = storedData
 

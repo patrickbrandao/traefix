@@ -480,6 +480,10 @@ func (c *Configuration) ValidateConfiguration() error {
 		if len(resolver.ACME.Storage) == 0 {
 			return fmt.Errorf("unable to initialize certificates resolver %q with no storage location for the certificates", name)
 		}
+
+		if err := resolver.ACME.CertStore.Validate(); err != nil {
+			return fmt.Errorf("unable to initialize certificates resolver %q: %w", name, err)
+		}
 	}
 
 	if c.Core != nil {

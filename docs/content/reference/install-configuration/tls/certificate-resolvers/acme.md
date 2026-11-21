@@ -106,6 +106,7 @@ ACME certificate resolvers have the following configuration options:
 | <a id="opt-acme-tlsChallenge" href="#opt-acme-tlsChallenge" title="#opt-acme-tlsChallenge">`acme.tlsChallenge`</a> | Enable TLS-ALPN-01 challenge. Traefik must be reachable by Let's Encrypt through port 443. More information [here](#tlschallenge). | - | No |
 | <a id="opt-acme-tlschallenge-delay" href="#opt-acme-tlschallenge-delay" title="#opt-acme-tlschallenge-delay">`acme.tlschallenge.delay`</a> | The delay between the creation of the challenge and the validation. A value lower than or equal to zero means no delay.                                                                                                                                                 | 0                                              | No       |
 | <a id="opt-acme-storage" href="#opt-acme-storage" title="#opt-acme-storage">`acme.storage`</a> | File path used for certificates storage. | "acme.json" | Yes |
+| <a id="opt-acme-certStore" href="#opt-acme-certStore" title="#opt-acme-certStore">`acme.certStore`</a> | Keeps the account and certificates in the `storage` file, in one directory of PEM files per domain, or in both (Traefix). More information [here](./acme-certstore.md). | | No |
 
 ## Automatic Certificate Renewal
 

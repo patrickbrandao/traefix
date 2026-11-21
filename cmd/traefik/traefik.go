@@ -477,21 +477,20 @@ func switchRouter(routerFactory *server.RouterFactory, serverEntryPointsTCP serv
 
 // initACMEProvider creates and registers acme.Provider instances corresponding to the configured ACME certificate resolvers.
 func initACMEProvider(c *static.Configuration, providerAggregator *aggregator.ProviderAggregator, tlsManager *traefiktls.Manager, httpChallengeProvider, tlsChallengeProvider challenge.Provider, routinesPool *safe.Pool) []*acme.Provider {
-	localStores := map[string]*acme.LocalStore{}
+	stores := acme.NewStoreBuilder(routinesPool)
 
+	var names []string
 	var resolvers []*acme.Provider
 	for name, resolver := range c.CertificatesResolvers {
 		if resolver.ACME == nil {
 			continue
 		}
 
-		if localStores[resolver.ACME.Storage] == nil {
-			localStores[resolver.ACME.Storage] = acme.NewLocalStore(resolver.ACME.Storage, routinesPool)
-		}
+		names = append(names, name)
 
 		p := &acme.Provider{
 			Configuration:         resolver.ACME,
-			Store:                 localStores[resolver.ACME.Storage],
+			Store:                 stores.Build(resolver.ACME),
 			ResolverName:          name,
 			HTTPChallengeProvider: httpChallengeProvider,
 			TLSChallengeProvider:  tlsChallengeProvider,
@@ -508,6 +507,8 @@ func initACMEProvider(c *static.Configuration, providerAggregator *aggregator.Pr
 
 		resolvers = append(resolvers, p)
 	}
+
+	stores.ReportUnmanaged(names)
 
 	return resolvers
 }

@@ -100,6 +100,21 @@ Especificação: `tmp/report-waf-features.md` (fases 0 a 4). Implementado até a
   `pkg/server/router/router.go`, `pkg/config/static/entrypoints.go` e uma linha por backend em
   `pkg/observability/metrics/` (métricas em `traefix.go`).
 
+## Cluster e certificados
+
+Especificação: `tmp/report-cluster-certs.md` (três entregas: certificados em cluster, malha entre
+servidores, satélite atrás de NAT). Implementado até agora:
+
+- **Armazenamento dos certificados ACME** (`certificatesResolvers.<nome>.acme.certStore`, etapa 1 da
+  primeira entrega): fonte da verdade em `file` (o `acme.json` de `storage`) ou `dir` (um diretório por
+  domínio com `fullchain.pem`, `cert.pem`, `chain.pem`, `privkey.pem`, `cert.md5` e `cert.json`, no
+  layout do projeto `traefik-certs`), com `export` para o outro. Com `primary: dir`, a conta fica em
+  `<dir>/_traefix/<resolver>/account.json` e um `acme.json` existente é importado uma vez. Código em
+  `pkg/provider/acme/store_*.go`; ganchos no upstream em `pkg/provider/acme/provider.go` (campo
+  `CertStore`), `pkg/provider/acme/local_store.go` (cópia do registro antes de gravar),
+  `pkg/config/static/static_config.go` e `cmd/traefik/traefik.go`. Documentação:
+  `docs/content/reference/install-configuration/tls/certificate-resolvers/acme-certstore.md`.
+
 ## Infopage
 
 `infopage/` (fork do `traefik/whoami`, imagem `tmsoftbrasil/traefix-infopage`, em
