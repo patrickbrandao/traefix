@@ -224,6 +224,12 @@ type tunnelConn struct {
 	remote net.Addr
 
 	once sync.Once
+
+	// The services of Traefik set the deadlines of a connection after they say they are done with it, e.g. for the
+	// termination delay. The stream belongs to the request of the link, which is over once its handler returns:
+	// no deadline reaches it after Close, and Close waits for the ones under way.
+	deadlines sync.RWMutex
+	closed    bool
 }
 
 func newTunnelConn(stream Stream, local, remote string) *tunnelConn {
@@ -257,7 +263,13 @@ func (c *tunnelConn) RemoteAddr() net.Addr        { return c.remote }
 func (c *tunnelConn) Close() error {
 	var err error
 
-	c.once.Do(func() { err = c.stream.Close() })
+	c.once.Do(func() {
+		c.deadlines.Lock()
+		c.closed = true
+		c.deadlines.Unlock()
+
+		err = c.stream.Close()
+	})
 
 	return err
 }
@@ -271,17 +283,25 @@ func (c *tunnelConn) SetDeadline(t time.Time) error {
 }
 
 func (c *tunnelConn) SetReadDeadline(t time.Time) error {
-	if stream, ok := c.stream.(deadliner); ok {
-		return stream.SetReadDeadline(t)
-	}
-
-	return os.ErrNoDeadline
+	return c.setDeadline(func(stream deadliner) error { return stream.SetReadDeadline(t) })
 }
 
 func (c *tunnelConn) SetWriteDeadline(t time.Time) error {
-	if stream, ok := c.stream.(deadliner); ok {
-		return stream.SetWriteDeadline(t)
+	return c.setDeadline(func(stream deadliner) error { return stream.SetWriteDeadline(t) })
+}
+
+func (c *tunnelConn) setDeadline(set func(stream deadliner) error) error {
+	stream, ok := c.stream.(deadliner)
+	if !ok {
+		return os.ErrNoDeadline
 	}
 
-	return os.ErrNoDeadline
+	c.deadlines.RLock()
+	defer c.deadlines.RUnlock()
+
+	if c.closed {
+		return net.ErrClosed
+	}
+
+	return set(stream)
 }

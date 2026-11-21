@@ -505,3 +505,49 @@ type fakeStream struct {
 
 func (s *fakeStream) CloseWrite() error     { return nil }
 func (s *fakeStream) Done() <-chan struct{} { return s.done }
+
+// deadlineStream is a stream of a link whose deadlines must not be set once its connection is closed,
+// as the one of a request over HTTP/2 whose handler returned.
+type deadlineStream struct {
+	fakeStream
+
+	closed    atomic.Bool
+	deadlines atomic.Int32
+}
+
+func (s *deadlineStream) Close() error {
+	s.closed.Store(true)
+	return s.fakeStream.Close()
+}
+
+func (s *deadlineStream) SetReadDeadline(time.Time) error {
+	if s.closed.Load() {
+		panic("deadline set on a stream whose request is over")
+	}
+
+	s.deadlines.Add(1)
+
+	return nil
+}
+
+func (s *deadlineStream) SetWriteDeadline(t time.Time) error { return s.SetReadDeadline(t) }
+
+func Test_tunnelConn_deadlinesAfterClose(t *testing.T) {
+	near, far := net.Pipe()
+	t.Cleanup(func() { _ = near.Close() })
+
+	stream := &deadlineStream{}
+	stream.Conn = far
+	stream.done = make(chan struct{})
+	conn := newTunnelConn(stream, "127.0.0.1:443", "198.51.100.7:1000")
+
+	require.NoError(t, conn.SetDeadline(time.Now().Add(time.Second)))
+	assert.Equal(t, int32(2), stream.deadlines.Load())
+
+	require.NoError(t, conn.Close())
+
+	// What the termination delay of a service does after the service is done with the connection.
+	require.ErrorIs(t, conn.SetReadDeadline(time.Now().Add(time.Second)), net.ErrClosed)
+	require.ErrorIs(t, conn.SetWriteDeadline(time.Now().Add(time.Second)), net.ErrClosed)
+	assert.Equal(t, int32(2), stream.deadlines.Load())
+}
