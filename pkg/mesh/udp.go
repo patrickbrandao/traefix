@@ -118,6 +118,7 @@ func (m *Mesh) dispatchUDP(conn *udp.Conn, target *forwardTarget, local udp.Hand
 
 		carryPackets(conn, flow)
 		release()
+		m.countPackets(next.nodeID, flow)
 
 		return
 	}
@@ -222,6 +223,8 @@ func (m *Mesh) serveUDP(rw http.ResponseWriter, req *http.Request, info forwardI
 	_ = conn.Close()
 
 	<-received
+
+	m.countPackets(peerFrom(req.Context()), flow)
 }
 
 // udpAddr reads an address as the one of a UDP client, which is what the handlers expect.

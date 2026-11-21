@@ -141,7 +141,7 @@ func newPrometheusClusterMetrics() (clusterMetrics, []vector) {
 	elections := newCounterFrom(stdprometheus.CounterOpts{Name: acmeClusterElectionsName, Help: acmeClusterElectionsHelp},
 		[]string{labelResolver, labelResult})
 	issuances := newCounterFrom(stdprometheus.CounterOpts{Name: acmeClusterIssuancesName, Help: acmeClusterIssuancesHelp},
-		[]string{labelResolver, "kind", labelResult})
+		[]string{labelResolver, labelKind, labelResult})
 	challengeLookups := newCounterFrom(stdprometheus.CounterOpts{Name: acmeClusterChallengeLookupsName, Help: acmeClusterChallengeLookupsHelp},
 		[]string{labelResult})
 	configMismatch := newGaugeFrom(stdprometheus.GaugeOpts{Name: acmeClusterConfigMismatchName, Help: acmeClusterConfigMismatchHelp},

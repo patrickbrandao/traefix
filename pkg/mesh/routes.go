@@ -456,6 +456,7 @@ func (m *Mesh) setImported(nodeID string, table *importedTable) {
 		m.mu.Unlock()
 
 		if known {
+			m.setRoutes(nodeID, nil)
 			m.publish()
 		}
 
@@ -465,6 +466,7 @@ func (m *Mesh) setImported(nodeID string, table *importedTable) {
 	m.imported[nodeID] = table
 	m.mu.Unlock()
 
+	m.setRoutes(nodeID, table.routes)
 	m.publish()
 }
 

@@ -161,7 +161,7 @@ servidores, satélite atrás de NAT). Implementado até agora:
 
 ## Malha entre servidores
 
-Especificação: `tmp/report-cluster-mesh.md` (segunda entrega, nove etapas). Cada Traefix anuncia aos outros
+Especificação: `tmp/report-cluster-mesh.md` (segunda entrega, nove etapas, todas feitas). Cada Traefix anuncia aos outros
 os routers que descobriu, e uma requisição que chega a um servidor sem o container é encaminhada ao
 servidor que o tem, sem rede overlay. Implementado até agora:
 
@@ -247,7 +247,14 @@ servidor que o tem, sem rede overlay. Implementado até agora:
   servidor. Código em `pkg/mesh/udp.go`; ganchos no upstream em `pkg/server/router/udp/router.go` (`meshHandler`,
   com o resto em `manager_traefix_mesh.go`), `pkg/server/service/udp/service.go` (`buildTraefix`, em
   `service_traefix.go`) e `pkg/server/routerfactory.go` (`setMeshUDP`).
-  **Falta a etapa 9** (conferência de configuração entre pares, troca de token, métricas e `scripts/traefix/e2e-mesh.sh`).
+
+- **Acabamento** (etapa 9): na apresentação, cada instância informa por entrypoint o protocolo, se tem
+  `fingerprint` e a lista de middlewares; as de mesmo nome que diferem geram um aviso no log, o campo
+  `configMismatch` de `/api/mesh` e a métrica `traefik_mesh_config_mismatch` (`pkg/mesh/config.go`; gancho em
+  `cmd/traefik/traefix_mesh.go`). Métricas `traefik_mesh_routes`, `traefik_mesh_exported_routes` e
+  `traefik_mesh_udp_packets_total`. `scripts/traefix/e2e-mesh.sh` confere com o binário real, sem Docker, os
+  cenários `formation token http priority tcp udp fallback config` (55 verificações, cerca de 1 min;
+  `TRANSPORT=tcp` para as ligações pela reserva), com os servidores de teste em `scripts/traefix/e2e-mesh/`.
 
 ## Infopage
 

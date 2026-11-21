@@ -311,8 +311,15 @@ type Flow struct {
 	writeMu  sync.Mutex
 	incoming chan []byte
 
-	sentDatagrams atomic.Uint64
-	sentInStream  atomic.Uint64
+	sentDatagrams     atomic.Uint64
+	sentInStream      atomic.Uint64
+	receivedDatagrams atomic.Uint64
+	receivedInStream  atomic.Uint64
+}
+
+// flowCounts are the packets a flow carried, by path and direction.
+type flowCounts struct {
+	sentDatagrams, sentInStream, receivedDatagrams, receivedInStream uint64
 }
 
 func newFlow(ctx context.Context, stream Stream, datagrams datagrammer) *Flow {
@@ -385,6 +392,15 @@ func (f *Flow) Close() error {
 	return nil
 }
 
+func (f *Flow) counts() flowCounts {
+	return flowCounts{
+		sentDatagrams:     f.sentDatagrams.Load(),
+		sentInStream:      f.sentInStream.Load(),
+		receivedDatagrams: f.receivedDatagrams.Load(),
+		receivedInStream:  f.receivedInStream.Load(),
+	}
+}
+
 func (f *Flow) readStream() {
 	header := make([]byte, 2)
 
@@ -400,6 +416,8 @@ func (f *Flow) readStream() {
 			f.cancel(err)
 			return
 		}
+
+		f.receivedInStream.Add(1)
 
 		// The stream is reliable: its packets wait for the reader instead of being dropped.
 		select {
@@ -417,6 +435,8 @@ func (f *Flow) readDatagrams() {
 			f.cancel(err)
 			return
 		}
+
+		f.receivedDatagrams.Add(1)
 
 		select {
 		case f.incoming <- p:

@@ -102,6 +102,11 @@ type Mesh struct {
 	// localUDPEntryPoints are the UDP entry points that have a router of the local providers, announced or not:
 	// an entry point has one UDP router only.
 	localUDPEntryPoints map[string]struct{}
+
+	// entryPointSummaries are what this instance tells the others of its entry points.
+	entryPointSummaries map[string]EntryPointSummary
+	// mismatches are the differences of configuration with the other instances, by identifier.
+	mismatches map[string][]string
 	// routing serves these routers by name, for what the other instances forward.
 	routing atomic.Pointer[routing]
 	// tables are the routes as the requests need them.
@@ -222,6 +227,7 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 		localHTTP:         map[string]*dynamic.Router{},
 		localTCP:          map[string]*dynamic.TCPRouter{},
 		localUDP:          map[string]*dynamic.UDPRouter{},
+		mismatches:        map[string][]string{},
 		quarantines:       map[string]*quarantine{},
 		healthInterval:    defaultHealthInterval,
 	}

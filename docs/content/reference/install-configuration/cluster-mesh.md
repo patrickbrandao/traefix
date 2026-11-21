@@ -5,10 +5,6 @@ description: "Link the Traefix instances of a cluster with the mesh option: the 
 
 The `cluster.mesh` option links the Traefix instances of a [cluster](./cluster.md) to each other, so that an instance can reach the services that another instance discovered on its own host. The option is specific to Traefix, the fork of Traefik Proxy.
 
-!!! warning "Work in progress"
-
-    In this version, the mesh forwards the HTTP requests, the TCP connections and the UDP sessions. The instances don't compare their configurations yet.
-
 ## Configuration Examples
 
 ```yaml tab="File (YAML)"
@@ -165,7 +161,7 @@ A request for a router that the instance learned from the mesh goes to an instan
 
 - **The instance that owns the router sees the client.** The request has the address and the port of the client, its TLS version, cipher and server name, and the `X-Forwarded-*` and `X-Real-Ip` headers that the entry point set. The `ipAllowList` and `rateLimit` middlewares of the router, and the `X-Forwarded-For` header sent to the server, are the same as for a request received directly.
 - **The fingerprints follow the request.** The `X-Traefix-*` headers reach the server, and the [`fingerprintList`](../routing-configuration/http/middlewares/fingerprintlist.md) middleware, the access log and the traces of the instance that owns the router use the fingerprints that the entry point measured. Enable the `fingerprint` option on the entry points of every instance that receives requests.
-- **The middlewares of the entry points only run where the request arrives.** A request that reaches the instance that owns the router through the mesh doesn't go through its entry points. Declare the same entry point middlewares on every instance.
+- **The middlewares of the entry points only run where the request arrives.** A request that reaches the instance that owns the router through the mesh doesn't go through its entry points. Declare the same entry point middlewares on every instance: the instances [compare them](#compare-the-entry-points).
 - **WebSocket and gRPC work.** A request with an `Upgrade` header travels in a stream of its own, and streaming requests and responses flow in both directions at the same time.
 - **The client certificate stops at the entry point.** The [`passTLSClientCert`](../routing-configuration/http/middlewares/passtlsclientcert.md) middleware of a router has nothing to pass for a request that came through the mesh.
 - **An answer of the mesh carries a `Proxy-Status` header.** The instance answers `503` when it has no link to an instance that owns the router, and `502` when the request could not be delivered. An error of the service itself comes back as the service sent it, without the header.
@@ -228,13 +224,22 @@ A UDP session for a router that the instance learned from the mesh goes to an in
 - **A session that no instance can take is dropped.** Its packets get no answer.
 - **A session that starts while the instance that owns the router dies may wait.** Over QUIC, nothing tells that the other instance died: the session goes to the next candidate after `linkTimeout` at most, when the link is considered lost.
 
+## Compare the Entry Points
+
+When a link opens, each instance tells the other one, for each of its entry points, the protocol, whether the `fingerprint` option is set, and the list of its middlewares. The instance compares the entry points with the same names as its own.
+
+- **A difference is logged once.** The warning names the entry point and both values, such as `web: middlewares [waf@file] here, [] there`. The `traefik_mesh_config_mismatch` metric and the `configMismatch` field of the [API](#api) show the differences for as long as they last.
+- **The order of the middlewares counts.** The same middlewares in another order run in another order.
+- **An entry point that only one instance has is not a difference.** The instances don't need the same entry points.
+- **The comparison runs again when a link opens.** An instance that restarts with the same configuration clears the difference.
+
 ## API
 
 With the [API](./api-dashboard.md) enabled, `GET /api/mesh` returns the state of the mesh on the instance:
 
 | Field | Contains |
 |:------|:---------|
-| <a id="opt-links" href="#opt-links" title="#opt-links">`links`</a> | The links that the instance opens: the other instance, its addresses, where it was learned from, the transport, the time of the last ping, and the number of routers it announces. |
+| <a id="opt-links" href="#opt-links" title="#opt-links">`links`</a> | The links that the instance opens: the other instance, its addresses, where it was learned from, the transport, the time of the last ping, the number of routers it announces, and the entry points it has [with another configuration](#compare-the-entry-points). |
 | <a id="opt-inbound" href="#opt-inbound" title="#opt-inbound">`inbound`</a> | The instances that opened a link to this one. |
 | <a id="opt-exported" href="#opt-exported" title="#opt-exported">`exported`</a> | The routers that the instance announces. |
 | <a id="opt-imported" href="#opt-imported" title="#opt-imported">`imported`</a> | The routers that the other instances announce, with the instances that announce each one and what this instance made of it: `imported` with the name of its router, `local` when it has its own router, or `skipped` with the reason. |
@@ -249,6 +254,10 @@ The rules of the announced routers appear in this answer. Protect the API as you
 | <a id="opt-traefik-mesh-link-up" href="#opt-traefik-mesh-link-up" title="#opt-traefik-mesh-link-up">`traefik_mesh_link_up`</a> | `peer`, `transport` | `1` for the transport, `quic` or `tcp`, that the link to the instance is up with, `0` otherwise. |
 | <a id="opt-traefik-mesh-link-rtt-seconds" href="#opt-traefik-mesh-link-rtt-seconds" title="#opt-traefik-mesh-link-rtt-seconds">`traefik_mesh_link_rtt_seconds`</a> | `peer` | Time the other instance took to answer the last ping, `0` while the link is down. |
 | <a id="opt-traefik-mesh-requests-total" href="#opt-traefik-mesh-requests-total" title="#opt-traefik-mesh-requests-total">`traefik_mesh_requests_total`</a> | `peer`, `kind`, `result` | Requests that the instance sent to another instance. The `kind` is `http`, `upgrade`, `tcp` for a connection of a TCP router, or `udp` for a session of a UDP router. The `result` is `forwarded`, `error` when the request could not be delivered, or `unavailable`, with an empty `peer`, when no instance could take it. |
+| <a id="opt-traefik-mesh-routes" href="#opt-traefik-mesh-routes" title="#opt-traefik-mesh-routes">`traefik_mesh_routes`</a> | `peer`, `kind` | Number of routers of each kind, `http`, `tcp` or `udp`, that the other instance announces. `0` once the link is lost. |
+| <a id="opt-traefik-mesh-exported-routes" href="#opt-traefik-mesh-exported-routes" title="#opt-traefik-mesh-exported-routes">`traefik_mesh_exported_routes`</a> | `kind` | Number of routers of each kind that the instance announces. |
+| <a id="opt-traefik-mesh-udp-packets-total" href="#opt-traefik-mesh-udp-packets-total" title="#opt-traefik-mesh-udp-packets-total">`traefik_mesh_udp_packets_total`</a> | `peer`, `path`, `direction` | UDP packets that the instance carried on its links, `sent` or `received`, in a `datagram` or in the `stream` of the flow. A session counts when it ends. |
+| <a id="opt-traefik-mesh-config-mismatch" href="#opt-traefik-mesh-config-mismatch" title="#opt-traefik-mesh-config-mismatch">`traefik_mesh_config_mismatch`</a> | `peer` | Number of entry points that the other instance has with the same name and another configuration. |
 | <a id="opt-traefik-mesh-received-total" href="#opt-traefik-mesh-received-total" title="#opt-traefik-mesh-received-total">`traefik_mesh_received_total`</a> | `peer`, `kind`, `result` | Requests, connections and sessions that the instance received from another instance: `served`, or `unknown` when it no longer has the router. |
 
 The `peer` label is the `nodeID` of the other instance. An address of the list or of the DNS that no instance answered at yet has no `nodeID`: it only counts in `traefik_mesh_peers`. Datadog, StatsD and InfluxDB use the same names with dots, for example `traefik.mesh.link.up`.

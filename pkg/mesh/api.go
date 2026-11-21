@@ -34,6 +34,8 @@ type apiLink struct {
 	LastContact *time.Time `json:"lastContact,omitempty"`
 	// Routes is how many routers the instance announces to this one.
 	Routes int `json:"routes"`
+	// ConfigMismatch are the entry points that the instance has with the same name and another configuration.
+	ConfigMismatch []string `json:"configMismatch,omitempty"`
 }
 
 type apiInbound struct {
@@ -83,6 +85,10 @@ func (m *Mesh) APIHandler() http.Handler {
 				RTTSeconds: link.RTT.Seconds(),
 				Error:      link.Error,
 				Routes:     routes[link.NodeID],
+			}
+
+			if link.NodeID != "" {
+				entry.ConfigMismatch = m.mismatchOf(link.NodeID)
 			}
 
 			if !link.LastContact.IsZero() {

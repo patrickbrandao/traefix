@@ -31,9 +31,10 @@ type testNode struct {
 	configurations chan dynamic.Message
 
 	// What the instance gets each time it starts.
-	registry  metrics.Registry
-	lookupSRV func(ctx context.Context, name string) ([]*net.SRV, error)
-	lookupTXT func(ctx context.Context, name string) ([]string, error)
+	registry    metrics.Registry
+	entryPoints map[string]EntryPointSummary
+	lookupSRV   func(ctx context.Context, name string) ([]*net.SRV, error)
+	lookupTXT   func(ctx context.Context, name string) ([]string, error)
 
 	mu     sync.Mutex
 	offset time.Duration
@@ -118,6 +119,7 @@ func (n *testNode) start() {
 	n.mesh.healthInterval = time.Hour
 	n.mesh.publishDelay = 10 * time.Millisecond
 	n.mesh.SetEntryPoints([]string{"traefik", "web", "websecure"}, []string{"dns"}, []string{"web", "websecure"})
+	n.mesh.SetEntryPointSummaries(n.entryPoints)
 
 	// The routing configuration of the instance, as far as the mesh is concerned.
 	n.configurations = make(chan dynamic.Message, 100)
@@ -393,25 +395,57 @@ func (g *recordingGauge) series() []string {
 	return slices.Sorted(maps.Keys(g.values))
 }
 
+// recordingCounter keeps the totals of a counter, by labels.
+type recordingCounter struct {
+	*recordingGauge
+}
+
+func (c *recordingCounter) With(labelValues ...string) gokitmetrics.Counter {
+	return &recordingCounter{recordingGauge: c.recordingGauge.With(labelValues...).(*recordingGauge)}
+}
+
+func (c *recordingCounter) Add(delta float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.values[c.labels] += delta
+}
+
 type recordingRegistry struct {
 	metrics.Registry
 
-	peers   *recordingGauge
-	linkUp  *recordingGauge
-	linkRTT *recordingGauge
+	peers    *recordingGauge
+	linkUp   *recordingGauge
+	linkRTT  *recordingGauge
+	routes   *recordingGauge
+	exported *recordingGauge
+	mismatch *recordingGauge
+	packets  *recordingCounter
 }
 
-func (r *recordingRegistry) MeshPeersGauge() gokitmetrics.Gauge   { return r.peers }
-func (r *recordingRegistry) MeshLinkUpGauge() gokitmetrics.Gauge  { return r.linkUp }
-func (r *recordingRegistry) MeshLinkRTTGauge() gokitmetrics.Gauge { return r.linkRTT }
-
-func TestMesh_metrics(t *testing.T) {
-	registry := &recordingRegistry{
+func newRecordingRegistry() *recordingRegistry {
+	return &recordingRegistry{
 		Registry: metrics.NewVoidRegistry(),
 		peers:    newRecordingGauge(),
 		linkUp:   newRecordingGauge(),
 		linkRTT:  newRecordingGauge(),
+		routes:   newRecordingGauge(),
+		exported: newRecordingGauge(),
+		mismatch: newRecordingGauge(),
+		packets:  &recordingCounter{recordingGauge: newRecordingGauge()},
 	}
+}
+
+func (r *recordingRegistry) MeshPeersGauge() gokitmetrics.Gauge          { return r.peers }
+func (r *recordingRegistry) MeshLinkUpGauge() gokitmetrics.Gauge         { return r.linkUp }
+func (r *recordingRegistry) MeshLinkRTTGauge() gokitmetrics.Gauge        { return r.linkRTT }
+func (r *recordingRegistry) MeshRoutesGauge() gokitmetrics.Gauge         { return r.routes }
+func (r *recordingRegistry) MeshExportedRoutesGauge() gokitmetrics.Gauge { return r.exported }
+func (r *recordingRegistry) MeshConfigMismatchGauge() gokitmetrics.Gauge { return r.mismatch }
+func (r *recordingRegistry) MeshUDPPacketsCounter() gokitmetrics.Counter { return r.packets }
+
+func TestMesh_metrics(t *testing.T) {
+	registry := newRecordingRegistry()
 
 	first := newTestNode(t, "srv1", testToken, nil)
 

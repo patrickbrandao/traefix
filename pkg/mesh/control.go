@@ -30,6 +30,8 @@ type hello struct {
 	Advertise []string `json:"advertise,omitempty"`
 	// Peers are the other instances the instance is in contact with: a new instance that knows one finds them all.
 	Peers []peerInfo `json:"peers,omitempty"`
+	// EntryPoints tell the other instances what the entry points of the instance do.
+	EntryPoints map[string]EntryPointSummary `json:"entryPoints,omitempty"`
 }
 
 // peersAnswer is the answer to a request for the instances an instance is in contact with.
@@ -91,6 +93,7 @@ func (m *Mesh) serveHello(rw http.ResponseWriter, req *http.Request) {
 	// and is not counted among the instances linked to this one.
 	if theirs.NodeID != m.member.NodeID() {
 		m.greeted(theirs, req.RemoteAddr)
+		m.compareConfiguration(theirs)
 
 		// The instance that opened the link is linked back, at the addresses it says it is reached at,
 		// and so are the instances it is in contact with.
@@ -107,12 +110,17 @@ func (m *Mesh) serveHello(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Mesh) hello() hello {
+	m.mu.Lock()
+	entryPoints := m.entryPointSummaries
+	m.mu.Unlock()
+
 	return hello{
-		NodeID:    m.member.NodeID(),
-		Instance:  m.member.Instance(),
-		Version:   m.version,
-		Advertise: m.advertise,
-		Peers:     m.knownPeers(),
+		NodeID:      m.member.NodeID(),
+		Instance:    m.member.Instance(),
+		Version:     m.version,
+		Advertise:   m.advertise,
+		Peers:       m.knownPeers(),
+		EntryPoints: entryPoints,
 	}
 }
 

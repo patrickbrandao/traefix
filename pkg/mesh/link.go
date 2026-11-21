@@ -176,6 +176,8 @@ func (l *link) connect(ctx context.Context) (*session, string, error) {
 
 		if err == nil {
 			l.mesh.learnPeers(theirs.Peers)
+			l.mesh.compareConfiguration(theirs)
+
 			return s, address, nil
 		}
 

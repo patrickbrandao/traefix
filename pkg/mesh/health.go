@@ -140,6 +140,7 @@ func (m *Mesh) refreshExportedLocked() bool {
 
 	m.exported = routes
 	m.exportGeneration++
+	m.setExportedRoutes(routes)
 
 	close(m.exportChanged)
 	m.exportChanged = make(chan struct{})

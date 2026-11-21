@@ -35,6 +35,7 @@ func wireMesh(node *mesh.Mesh, conf *static.Configuration, providerAggregator *a
 	slices.Sort(udpEntryPoints)
 
 	node.SetEntryPoints(entryPoints, udpEntryPoints, getDefaultsEntrypoints(conf))
+	node.SetEntryPointSummaries(entryPointSummaries(conf))
 
 	if err := providerAggregator.AddProvider(node.Provider()); err != nil {
 		return err
@@ -51,4 +52,24 @@ func wireMesh(node *mesh.Mesh, conf *static.Configuration, providerAggregator *a
 	routinesPool.GoCtx(node.Run)
 
 	return nil
+}
+
+// entryPointSummaries describes the entry points for the other instances of the mesh, which compare them with theirs.
+func entryPointSummaries(conf *static.Configuration) map[string]mesh.EntryPointSummary {
+	summaries := make(map[string]mesh.EntryPointSummary, len(conf.EntryPoints))
+
+	for name, entryPoint := range conf.EntryPoints {
+		protocol, err := entryPoint.GetProtocol()
+		if err != nil {
+			continue
+		}
+
+		summaries[name] = mesh.EntryPointSummary{
+			Protocol:    protocol,
+			Fingerprint: entryPoint.Fingerprint != nil,
+			Middlewares: slices.Clone(entryPoint.HTTP.Middlewares),
+		}
+	}
+
+	return summaries
 }

@@ -73,3 +73,77 @@ func (m *Mesh) countReceived(peer, kind, result string) {
 		registry.MeshReceivedCounter().With("peer", peer, "kind", kind, "result", result).Add(1)
 	}
 }
+
+func (m *Mesh) setConfigMismatch(peer string, differences int) {
+	if registry := m.registry(); registry != nil {
+		registry.MeshConfigMismatchGauge().With("peer", peer).Set(float64(differences))
+	}
+}
+
+// setRoutes follows how many routers of each kind another instance announces.
+func (m *Mesh) setRoutes(peer string, routes []Route) {
+	registry := m.registry()
+	if registry == nil {
+		return
+	}
+
+	counts := countByKind(routes)
+
+	for _, kind := range []string{KindHTTP, KindTCP, KindUDP} {
+		registry.MeshRoutesGauge().With("peer", peer, "kind", kind).Set(float64(counts[kind]))
+	}
+}
+
+// setExportedRoutes follows how many routers of each kind this instance announces.
+func (m *Mesh) setExportedRoutes(routes []Route) {
+	registry := m.registry()
+	if registry == nil {
+		return
+	}
+
+	counts := countByKind(routes)
+
+	for _, kind := range []string{KindHTTP, KindTCP, KindUDP} {
+		registry.MeshExportedRoutesGauge().With("kind", kind).Set(float64(counts[kind]))
+	}
+}
+
+func countByKind(routes []Route) map[string]int {
+	counts := map[string]int{}
+	for _, route := range routes {
+		counts[route.Kind]++
+	}
+
+	return counts
+}
+
+// countPackets counts the packets of a flow that ended.
+func (m *Mesh) countPackets(peer string, flow *Flow) {
+	registry := m.registry()
+	if registry == nil {
+		return
+	}
+
+	counts := flow.counts()
+
+	for _, count := range []struct {
+		path, direction string
+		value           uint64
+	}{
+		{pathDatagram, directionSent, counts.sentDatagrams},
+		{pathStream, directionSent, counts.sentInStream},
+		{pathDatagram, directionReceived, counts.receivedDatagrams},
+		{pathStream, directionReceived, counts.receivedInStream},
+	} {
+		if count.value > 0 {
+			registry.MeshUDPPacketsCounter().With("peer", peer, "path", count.path, "direction", count.direction).Add(float64(count.value))
+		}
+	}
+}
+
+const (
+	pathDatagram      = "datagram"
+	pathStream        = "stream"
+	directionSent     = "sent"
+	directionReceived = "received"
+)
