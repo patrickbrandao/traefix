@@ -10,6 +10,7 @@ import (
 // apiStatus is the answer of the API of the mesh.
 type apiStatus struct {
 	NodeID    string   `json:"nodeID"`
+	Role      string   `json:"role"`
 	Advertise []string `json:"advertise"`
 	// Links are the links this instance opens to the other instances.
 	Links []apiLink `json:"links"`
@@ -23,6 +24,7 @@ type apiStatus struct {
 
 type apiLink struct {
 	NodeID      string     `json:"nodeID,omitempty"`
+	Role        string     `json:"role,omitempty"`
 	Address     string     `json:"address,omitempty"`
 	Addresses   []string   `json:"addresses"`
 	Sources     []string   `json:"sources"`
@@ -40,6 +42,7 @@ type apiLink struct {
 
 type apiInbound struct {
 	NodeID    string    `json:"nodeID"`
+	Role      string    `json:"role"`
 	Version   string    `json:"version,omitempty"`
 	Remote    string    `json:"remote"`
 	Advertise []string  `json:"advertise"`
@@ -54,6 +57,7 @@ func (m *Mesh) APIHandler() http.Handler {
 
 		answer := apiStatus{
 			NodeID:    status.NodeID,
+			Role:      status.Role,
 			Advertise: status.Advertise,
 			Links:     []apiLink{},
 			Inbound:   []apiInbound{},
@@ -69,6 +73,11 @@ func (m *Mesh) APIHandler() http.Handler {
 		}
 		m.mu.Unlock()
 
+		// A satellite has no address to tell.
+		if answer.Advertise == nil {
+			answer.Advertise = []string{}
+		}
+
 		if answer.Imported == nil {
 			answer.Imported = []ImportedRoute{}
 		}
@@ -76,6 +85,7 @@ func (m *Mesh) APIHandler() http.Handler {
 		for _, link := range status.Links {
 			entry := apiLink{
 				NodeID:     link.NodeID,
+				Role:       link.Role,
 				Address:    link.Address,
 				Addresses:  link.Addresses,
 				Sources:    link.Sources,

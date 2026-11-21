@@ -109,6 +109,10 @@ func (c *Configuration) Validate() error {
 	}
 
 	if c.Mesh != nil {
+		if c.Mesh.Satellite && c.Redis != nil {
+			return errors.New("a cluster mesh satellite does not use the Redis server: remove the cluster redis option")
+		}
+
 		if c.Token == "" && c.TokenFile == "" {
 			return errors.New("cluster mesh needs the cluster token or tokenFile")
 		}

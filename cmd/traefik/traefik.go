@@ -195,11 +195,13 @@ func runCmd(staticConfiguration *static.Configuration) error {
 func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog func() error) (*server.Server, error) {
 	providerAggregator := aggregator.NewProviderAggregator(*staticConfiguration.Providers)
 
+	acmeConfiguration, satelliteResolverNames := satelliteResolvers(staticConfiguration)
+
 	ctx := context.Background()
 	routinesPool := safe.NewPool(ctx)
 
 	// adds internal provider
-	err := providerAggregator.AddProvider(traefik.New(*staticConfiguration))
+	err := providerAggregator.AddProvider(traefik.New(*acmeConfiguration))
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +239,7 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 		return nil, err
 	}
 
-	acmeProviders := initACMEProvider(staticConfiguration, providerAggregator, tlsManager, httpChallengeProvider, tlsChallengeProvider, routinesPool, clusterMember)
+	acmeProviders := initACMEProvider(acmeConfiguration, providerAggregator, tlsManager, httpChallengeProvider, tlsChallengeProvider, routinesPool, clusterMember)
 
 	// Tailscale
 
@@ -418,6 +420,9 @@ func setupServer(staticConfiguration *static.Configuration, rotateTraefikLog fun
 	// Certificate Resolvers
 
 	resolverNames := map[string]struct{}{}
+	for _, name := range satelliteResolverNames {
+		resolverNames[name] = struct{}{}
+	}
 
 	// ACME
 	for _, p := range acmeProviders {

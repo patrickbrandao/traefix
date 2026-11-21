@@ -31,7 +31,9 @@ type LinkStatus struct {
 	// Addresses are the addresses known for the instance, in the order they are tried.
 	Addresses []string
 	// Sources are where the instance was learned from.
-	Sources   []string
+	Sources []string
+	// Role is the one the instance told when the link opened.
+	Role      string
 	Up        bool
 	Transport string
 	// Since is when the link went up or down.
@@ -55,6 +57,8 @@ type link struct {
 	mu      sync.Mutex
 	status  LinkStatus
 	session *session
+	// role is the one the other instance told when the session opened.
+	role string
 }
 
 func newLink(m *Mesh, entry *peerEntry) *link {
@@ -81,6 +85,13 @@ func (l *link) run(ctx context.Context) {
 		s, address, err := l.connect(ctx)
 
 		switch {
+		case errors.Is(err, errSatellitePeer):
+			// The entry is gone, and the address is not dialed again: a satellite was listed as a peer.
+			l.logger.Warn().Err(err).Str("address", l.snapshot().Address).Msg("A satellite answers at an address of the peers of the mesh: it is not linked to")
+			l.mesh.countPeers()
+
+			return
+
 		case errors.Is(err, errSelf), errors.Is(err, errMerged):
 			// The entry is gone: there is nothing left to link to under it.
 			l.logger.Debug().Err(err).Msg("The address is not linked to")
@@ -107,12 +118,16 @@ func (l *link) run(ctx context.Context) {
 		l.setUp(s, address)
 
 		// The routes of the instance are followed for as long as the link is up, and dropped with it.
+		// A satellite only announces its routers: it imports none.
 		followCtx, stopFollowing := context.WithCancel(ctx)
 		followed := make(chan struct{})
 
 		go func() {
 			defer close(followed)
-			l.followRoutes(followCtx, s.peer)
+
+			if !l.mesh.conf.Satellite {
+				l.followRoutes(followCtx, s.peer)
+			}
 		}()
 
 		err = l.watch(ctx, address)
@@ -175,13 +190,17 @@ func (l *link) connect(ctx context.Context) (*session, string, error) {
 		}
 
 		if err == nil {
+			l.mu.Lock()
+			l.role = roleOf(theirs)
+			l.mu.Unlock()
+
 			l.mesh.learnPeers(theirs.Peers)
 			l.mesh.compareConfiguration(theirs)
 
 			return s, address, nil
 		}
 
-		if errors.Is(err, errSelf) || errors.Is(err, errMerged) || ctx.Err() != nil {
+		if errors.Is(err, errSelf) || errors.Is(err, errMerged) || errors.Is(err, errSatellitePeer) || ctx.Err() != nil {
 			return nil, "", err
 		}
 
@@ -352,7 +371,7 @@ func (l *link) setUp(s *session, address string) {
 	l.mu.Lock()
 	previous := l.status
 	l.session = s
-	l.status = LinkStatus{NodeID: s.peer, Address: address, Up: true, Transport: s.transport, Since: l.mesh.now()}
+	l.status = LinkStatus{NodeID: s.peer, Address: address, Role: l.role, Up: true, Transport: s.transport, Since: l.mesh.now()}
 	current := l.status
 	l.mu.Unlock()
 

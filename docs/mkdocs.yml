@@ -277,6 +277,7 @@ nav:
       - 'Fingerprint Signals': 'reference/install-configuration/entrypoints-fingerprint-signals.md'
       - 'Cluster': 'reference/install-configuration/cluster.md'
       - 'Cluster Mesh': 'reference/install-configuration/cluster-mesh.md'
+      - 'Cluster Satellite': 'reference/install-configuration/cluster-satellite.md'
       - 'API & Dashboard': 'reference/install-configuration/api-dashboard.md'
       - 'TLS':
           - 'Certificate Resolvers':

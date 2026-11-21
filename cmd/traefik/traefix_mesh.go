@@ -3,6 +3,7 @@ package main
 import (
 	"slices"
 
+	"github.com/rs/zerolog/log"
 	"github.com/traefik/traefik/v3/pkg/api"
 	"github.com/traefik/traefik/v3/pkg/config/static"
 	"github.com/traefik/traefik/v3/pkg/fingerprint"
@@ -72,4 +73,40 @@ func entryPointSummaries(conf *static.Configuration) map[string]mesh.EntryPointS
 	}
 
 	return summaries
+}
+
+// satelliteResolvers keeps the ACME resolvers of a satellite of the mesh from starting (Traefix): a satellite never asks
+// a CA for a certificate, the instances it links to do. It returns the configuration the ACME resolvers are made from,
+// and the names of the resolvers left out, which the routers of the satellite still name.
+func satelliteResolvers(conf *static.Configuration) (*static.Configuration, []string) {
+	if conf.Cluster == nil || conf.Cluster.Mesh == nil || !conf.Cluster.Mesh.Satellite {
+		return conf, nil
+	}
+
+	var names []string
+
+	resolvers := make(map[string]static.CertificateResolver, len(conf.CertificatesResolvers))
+
+	for name, resolver := range conf.CertificatesResolvers {
+		if resolver.ACME != nil {
+			names = append(names, name)
+			continue
+		}
+
+		resolvers[name] = resolver
+	}
+
+	if len(names) == 0 {
+		return conf, nil
+	}
+
+	slices.Sort(names)
+
+	log.Warn().Strs("resolvers", names).
+		Msg("This instance is a satellite of the mesh: its ACME certificate resolvers do not start, the instances it links to ask for the certificates")
+
+	withoutACME := *conf
+	withoutACME.CertificatesResolvers = resolvers
+
+	return &withoutACME, names
 }

@@ -43,6 +43,7 @@ type Mesh struct {
 	PeerRetention ptypes.Duration `description:"Time without a link after which a learned instance is forgotten." json:"peerRetention,omitempty" toml:"peerRetention,omitempty" yaml:"peerRetention,omitempty" export:"true"`
 	Export        string          `description:"Routers announced to the other instances: all, or labeled for the ones that opt in." json:"export,omitempty" toml:"export,omitempty" yaml:"export,omitempty" export:"true"`
 	Balance       string          `description:"Choice between the instances with the same priority for a router: clientIP or roundRobin." json:"balance,omitempty" toml:"balance,omitempty" yaml:"balance,omitempty" export:"true"`
+	Satellite     bool            `description:"Makes the instance a satellite: it accepts no link, dials the other instances, and gets its traffic through the links it opened." json:"satellite,omitempty" toml:"satellite,omitempty" yaml:"satellite,omitempty" export:"true"`
 }
 
 // SetDefaults sets the default values.
@@ -92,6 +93,16 @@ func (m *Mesh) validate() error {
 	case MeshBalanceClientIP, MeshBalanceRoundRobin:
 	default:
 		return fmt.Errorf("cluster mesh balance %q must be clientIP or roundRobin", m.Balance)
+	}
+
+	if m.Satellite {
+		if len(m.Peers) == 0 && len(m.DNS) == 0 {
+			return errors.New("a cluster mesh satellite needs peers or dns: it reaches the other instances, which never reach it first")
+		}
+
+		if len(m.Advertise) > 0 {
+			return errors.New("a cluster mesh satellite has no advertise address: the other instances do not reach it at an address")
+		}
 	}
 
 	if time.Duration(m.LinkTimeout) < time.Second {

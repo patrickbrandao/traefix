@@ -56,6 +56,7 @@ The mesh doesn't need the `cluster.redis` option. With a Redis server, the insta
 | <a id="opt-cluster-mesh-peerRetention" href="#opt-cluster-mesh-peerRetention" title="#opt-cluster-mesh-peerRetention">`cluster.mesh.peerRetention`</a> | Time without a link after which the instance forgets a learned instance. At least `cluster.mesh.linkTimeout`. | 168h | No |
 | <a id="opt-cluster-mesh-export" href="#opt-cluster-mesh-export" title="#opt-cluster-mesh-export">`cluster.mesh.export`</a> | Routers that the instance announces to the other instances: `all`, or `labeled` for the routers that opt in. | `all` | No |
 | <a id="opt-cluster-mesh-balance" href="#opt-cluster-mesh-balance" title="#opt-cluster-mesh-balance">`cluster.mesh.balance`</a> | Choice between the instances with the same priority for a router: `clientIP` sends a client to the same instance whichever instance the client reaches, `roundRobin` spreads the requests evenly. | `clientIP` | No |
+| <a id="opt-cluster-mesh-satellite" href="#opt-cluster-mesh-satellite" title="#opt-cluster-mesh-satellite">`cluster.mesh.satellite`</a> | Makes the instance a [satellite](./cluster-satellite.md), behind NAT: it dials the other instances and gets its traffic through the links it opens. | false | No |
 
 Traefix doesn't start when the `cluster.mesh` option is set without a token, when the token has less than 32 characters or its file can't be read, when an address has no port, or when the port of `cluster.mesh.address` is in use.
 

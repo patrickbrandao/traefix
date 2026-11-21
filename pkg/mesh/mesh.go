@@ -66,6 +66,8 @@ type Mesh struct {
 	byAddress map[string]*peerEntry
 	// selfAddresses are the addresses that turned out to be this instance.
 	selfAddresses map[string]struct{}
+	// satelliteAddresses are the addresses where a satellite answered: no link is opened to them.
+	satelliteAddresses map[string]struct{}
 	// refused are the instances of the cluster with another token, which were warned about.
 	refused map[string]struct{}
 	// dirty tells that the file of learned instances is out of date.
@@ -130,6 +132,7 @@ type Mesh struct {
 // InboundStatus is an instance that opened a link to this one.
 type InboundStatus struct {
 	NodeID    string
+	Role      string
 	Version   string
 	Remote    string
 	Advertise []string
@@ -139,6 +142,7 @@ type InboundStatus struct {
 // Status is what an instance knows of its links.
 type Status struct {
 	NodeID    string
+	Role      string
 	Advertise []string
 	// Links are the links this instance opens, in the order of the identifiers of the instances, then of their addresses.
 	Links []LinkStatus
@@ -165,12 +169,25 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 
 	logger := log.With().Str("cluster", member.Prefix()).Str("nodeID", member.NodeID()).Logger()
 
-	advertise, guessed, err := advertisedAddresses(conf, outboundIP)
-	if err != nil {
-		return nil, err
+	var (
+		advertise []string
+		guessed   bool
+	)
+
+	// A satellite is never reached at an address: it has none to tell.
+	if !conf.Mesh.Satellite {
+		advertise, guessed, err = advertisedAddresses(conf, outboundIP)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	if guessed {
+	switch {
+	case conf.Mesh.Satellite:
+		logger.Info().Strs("peers", conf.Mesh.Peers).Strs("dns", conf.Mesh.DNS).
+			Msg("This instance is a satellite of the mesh: it dials the other instances, and gets its traffic through the links it opens")
+
+	case guessed:
 		logger.Info().Strs("advertise", advertise).
 			Msg("The cluster mesh advertise option is not set: the other instances are told to reach this instance at these addresses")
 	}
@@ -179,7 +196,9 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 		logger.Warn().Msg("The mesh has no Redis server, peers or dns to find the other instances: this instance waits for them to link to it")
 	}
 
-	member.SetAttribute(attributeAddresses, strings.Join(advertise, ","))
+	if len(advertise) > 0 {
+		member.SetAttribute(attributeAddresses, strings.Join(advertise, ","))
+	}
 	member.SetAttribute(attributeAuthority, identity.Fingerprint())
 
 	// The fingerprint lets an operator check that two instances hold the same token, without showing the token.
@@ -194,42 +213,43 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 	}
 
 	m := &Mesh{
-		conf:              conf.Mesh,
-		member:            member,
-		identity:          identity,
-		advertise:         advertise,
-		version:           version.Version,
-		logger:            logger,
-		linkTimeout:       linkTimeout,
-		quicDialTimeout:   min(defaultQUICDialTimeout, linkTimeout),
-		quicRetryInterval: defaultQUICRetryInterval,
-		redialFirst:       defaultRedialFirst,
-		redialLongest:     defaultRedialLongest,
-		discoverInterval:  defaultDiscoverInterval,
-		dnsInterval:       defaultDNSInterval,
-		exchangeInterval:  defaultExchangeInterval,
-		now:               time.Now,
-		listener:          l,
-		inbound:           map[string]InboundStatus{},
-		entries:           map[*peerEntry]struct{}{},
-		byNode:            map[string]*peerEntry{},
-		byAddress:         map[string]*peerEntry{},
-		selfAddresses:     map[string]struct{}{},
-		refused:           map[string]struct{}{},
-		routesPollTimeout: routesPollTimeout,
-		publishDelay:      publishDelay,
-		exported:          []Route{},
-		exportChanged:     make(chan struct{}),
-		localRouters:      map[string]struct{}{},
-		imported:          map[string]*importedTable{},
-		warned:            map[string]struct{}{},
-		publishCh:         make(chan struct{}, 1),
-		localHTTP:         map[string]*dynamic.Router{},
-		localTCP:          map[string]*dynamic.TCPRouter{},
-		localUDP:          map[string]*dynamic.UDPRouter{},
-		mismatches:        map[string][]string{},
-		quarantines:       map[string]*quarantine{},
-		healthInterval:    defaultHealthInterval,
+		conf:               conf.Mesh,
+		member:             member,
+		identity:           identity,
+		advertise:          advertise,
+		version:            version.Version,
+		logger:             logger,
+		linkTimeout:        linkTimeout,
+		quicDialTimeout:    min(defaultQUICDialTimeout, linkTimeout),
+		quicRetryInterval:  defaultQUICRetryInterval,
+		redialFirst:        defaultRedialFirst,
+		redialLongest:      defaultRedialLongest,
+		discoverInterval:   defaultDiscoverInterval,
+		dnsInterval:        defaultDNSInterval,
+		exchangeInterval:   defaultExchangeInterval,
+		now:                time.Now,
+		listener:           l,
+		inbound:            map[string]InboundStatus{},
+		entries:            map[*peerEntry]struct{}{},
+		byNode:             map[string]*peerEntry{},
+		byAddress:          map[string]*peerEntry{},
+		selfAddresses:      map[string]struct{}{},
+		satelliteAddresses: map[string]struct{}{},
+		refused:            map[string]struct{}{},
+		routesPollTimeout:  routesPollTimeout,
+		publishDelay:       publishDelay,
+		exported:           []Route{},
+		exportChanged:      make(chan struct{}),
+		localRouters:       map[string]struct{}{},
+		imported:           map[string]*importedTable{},
+		warned:             map[string]struct{}{},
+		publishCh:          make(chan struct{}, 1),
+		localHTTP:          map[string]*dynamic.Router{},
+		localTCP:           map[string]*dynamic.TCPRouter{},
+		localUDP:           map[string]*dynamic.UDPRouter{},
+		mismatches:         map[string][]string{},
+		quarantines:        map[string]*quarantine{},
+		healthInterval:     defaultHealthInterval,
 	}
 
 	m.tables.Store(newForwardTables())
@@ -283,7 +303,7 @@ func (m *Mesh) Run(ctx context.Context) {
 
 // Status returns the links of this instance.
 func (m *Mesh) Status() Status {
-	status := Status{NodeID: m.member.NodeID(), Advertise: m.advertise}
+	status := Status{NodeID: m.member.NodeID(), Role: m.role(), Advertise: m.advertise}
 
 	m.mu.Lock()
 	for entry := range m.entries {
@@ -337,6 +357,7 @@ func (m *Mesh) greeted(theirs hello, remote string) {
 	_, known := m.inbound[theirs.NodeID]
 	m.inbound[theirs.NodeID] = InboundStatus{
 		NodeID:    theirs.NodeID,
+		Role:      roleOf(theirs),
 		Version:   theirs.Version,
 		Remote:    remote,
 		Advertise: theirs.Advertise,

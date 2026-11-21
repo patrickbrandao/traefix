@@ -156,6 +156,10 @@ func (m *Mesh) learnAddressLocked(source, address string, learnedAt time.Time) {
 		return
 	}
 
+	if _, satellite := m.satelliteAddresses[address]; satellite {
+		return
+	}
+
 	if entry, known := m.byAddress[address]; known {
 		entry.sources[source] = struct{}{}
 		return
@@ -239,6 +243,12 @@ func (m *Mesh) connected(entry *peerEntry, address string, theirs hello) error {
 		entry.addresses = slices.DeleteFunc(entry.addresses, func(a string) bool { return a == address })
 
 		return errors.New("this instance answers at the address")
+	}
+
+	if roleOf(theirs) == RoleSatellite {
+		m.refuseSatelliteLocked(entry, address)
+
+		return errSatellitePeer
 	}
 
 	switch {

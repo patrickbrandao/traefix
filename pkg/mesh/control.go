@@ -32,6 +32,8 @@ type hello struct {
 	Peers []peerInfo `json:"peers,omitempty"`
 	// EntryPoints tell the other instances what the entry points of the instance do.
 	EntryPoints map[string]EntryPointSummary `json:"entryPoints,omitempty"`
+	// Role is member or satellite. The versions before the satellites tell none, and are members.
+	Role string `json:"role,omitempty"`
 }
 
 // peersAnswer is the answer to a request for the instances an instance is in contact with.
@@ -90,8 +92,9 @@ func (m *Mesh) serveHello(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	// An instance that reached itself, or one that took the nodeID of this one, gets the answer that tells it so,
-	// and is not counted among the instances linked to this one.
-	if theirs.NodeID != m.member.NodeID() {
+	// and is not counted among the instances linked to this one. So does a satellite that reached another satellite:
+	// the answer tells it that a satellite answers here, and it stops.
+	if theirs.NodeID != m.member.NodeID() && (!m.conf.Satellite || roleOf(theirs) != RoleSatellite) {
 		m.greeted(theirs, req.RemoteAddr)
 		m.compareConfiguration(theirs)
 
@@ -121,6 +124,7 @@ func (m *Mesh) hello() hello {
 		Advertise:   m.advertise,
 		Peers:       m.knownPeers(),
 		EntryPoints: entryPoints,
+		Role:        m.role(),
 	}
 }
 

@@ -256,6 +256,21 @@ servidor que o tem, sem rede overlay. Implementado até agora:
   cenários `formation token http priority tcp udp fallback config` (55 verificações, cerca de 1 min;
   `TRANSPORT=tcp` para as ligações pela reserva), com os servidores de teste em `scripts/traefix/e2e-mesh/`.
 
+## Satélite atrás de NAT
+
+Especificação: `tmp/report-cluster-satellite.md` (terceira entrega, sete etapas). Um satélite é um Traefix sem conexão de
+entrada (NAT doméstico, CGNAT): disca para os centrais e recebe o tráfego pelo que abriu. Usa o token do cluster, anuncia
+os seus routers, não importa nenhum, não usa Valkey e não pede certificado à CA. Implementado até agora:
+
+- **Configuração e papel** (etapa 1): `cluster.mesh.satellite` (exige `peers` ou `dns`, recusa `advertise` e
+  `cluster.redis`); `role` (`member` ou `satellite`) na apresentação e em `/api/mesh`; os centrais não discam para um
+  satélite nem o passam adiante, um endereço de satélite numa lista de pares é largado com aviso, e satélite não liga a
+  satélite; o satélite não consulta as rotas dos outros; os resolvers ACME do satélite não iniciam, nem o router
+  `acme-http@internal`, e os nomes deles continuam valendo nos routers. Código em `pkg/mesh/satellite.go`; gancho no
+  upstream em `cmd/traefik/traefik.go` (`satelliteResolvers`, em `traefix_mesh.go`). Documentação:
+  `docs/content/reference/install-configuration/cluster-satellite.md`. **Os centrais ainda não alcançam o satélite de
+  volta** (etapa 3).
+
 ## Infopage
 
 `infopage/` (fork do `traefik/whoami`, imagem `tmsoftbrasil/traefix-infopage`, em

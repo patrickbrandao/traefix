@@ -62,6 +62,26 @@ func TestConfiguration_Validate_mesh(t *testing.T) {
 		{desc: "unknown balance", change: func(conf *Configuration) { conf.Mesh.Balance = "random" }, expectErr: true},
 		{desc: "short linkTimeout", change: func(conf *Configuration) { conf.Mesh.LinkTimeout = ptypes.Duration(100 * time.Millisecond) }, expectErr: true},
 		{desc: "peerRetention under linkTimeout", change: func(conf *Configuration) { conf.Mesh.PeerRetention = ptypes.Duration(time.Second) }, expectErr: true},
+		{desc: "satellite with peers", change: func(conf *Configuration) {
+			conf.Mesh.Satellite = true
+			conf.Mesh.Peers = []string{"edge1.example.com:7443"}
+		}},
+		{desc: "satellite with dns", change: func(conf *Configuration) {
+			conf.Mesh.Satellite = true
+			conf.Mesh.DNS = []string{"_traefix-mesh._udp.example.com"}
+		}},
+		{desc: "satellite without peers nor dns", change: func(conf *Configuration) { conf.Mesh.Satellite = true }, expectErr: true},
+		{desc: "satellite with an advertise address", change: func(conf *Configuration) {
+			conf.Mesh.Satellite = true
+			conf.Mesh.Peers = []string{"edge1.example.com:7443"}
+			conf.Mesh.Advertise = []string{"203.0.113.10:7443"}
+		}, expectErr: true},
+		{desc: "satellite with redis", change: func(conf *Configuration) {
+			conf.Mesh.Satellite = true
+			conf.Mesh.Peers = []string{"edge1.example.com:7443"}
+			conf.Redis = &Redis{}
+			conf.Redis.SetDefaults()
+		}, expectErr: true},
 	}
 
 	for _, test := range testCases {
