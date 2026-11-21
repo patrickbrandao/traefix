@@ -138,8 +138,6 @@ func (f *RouterFactory) CreateRouters(rtConf *runtime.Configuration) (map[string
 
 	routersTCP := rtTCPManager.BuildHandlers(ctx, f.entryPointsTCP)
 
-	f.switchMeshHandlers(ctx, meshHandlers, rtTCPManager, rtConf)
-
 	for ep, r := range routersTCP {
 		if allowACMEByPass, ok := f.allowACMEByPass[ep]; ok && allowACMEByPass {
 			r.EnableACMETLSPassthrough()
@@ -151,7 +149,11 @@ func (f *RouterFactory) CreateRouters(rtConf *runtime.Configuration) (map[string
 	// UDP
 	svcUDPManager := udpsvc.NewManager(rtConf)
 	rtUDPManager := udprouter.NewManager(rtConf, svcUDPManager)
+	f.setMeshUDP(rtUDPManager, svcUDPManager)
+
 	routersUDP := rtUDPManager.BuildHandlers(ctx, f.entryPointsUDP)
+
+	f.switchMeshHandlers(ctx, meshHandlers, rtTCPManager, rtUDPManager, rtConf)
 
 	rtConf.PopulateUsedBy()
 

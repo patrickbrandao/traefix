@@ -224,6 +224,9 @@ type Conn struct {
 	timeout  time.Duration // for timeouts
 	doneOnce sync.Once
 	doneCh   chan struct{}
+
+	// flow is set on a session made outside a listener, by NewFlowConn (Traefix).
+	flow *flowHooks
 }
 
 // Read reads up to len(p) bytes into p from the connection.
@@ -251,12 +254,21 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 	c.lastActivity = time.Now()
 	c.muActivity.Unlock()
 
+	if c.flow != nil {
+		return c.flow.write(p)
+	}
+
 	return c.listener.pConn.WriteTo(p, c.rAddr)
 }
 
 // Close releases resources related to the Conn.
 func (c *Conn) Close() error {
 	c.close()
+
+	if c.flow != nil {
+		c.flow.end()
+		return nil
+	}
 
 	c.listener.mu.Lock()
 	defer c.listener.mu.Unlock()

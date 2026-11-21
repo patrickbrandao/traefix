@@ -17,6 +17,8 @@ import (
 type Manager struct {
 	serviceManager *udpservice.Manager
 	conf           *runtime.Configuration
+
+	mesh MeshDecider
 }
 
 // NewManager Creates a new Manager.
@@ -93,7 +95,7 @@ func (m *Manager) buildEntryPointHandlers(ctx context.Context, configs map[strin
 			continue
 		}
 
-		handlers = append(handlers, handler)
+		handlers = append(handlers, m.meshHandler(routerName, handler))
 	}
 
 	return handlers

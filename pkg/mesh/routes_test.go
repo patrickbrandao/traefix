@@ -262,8 +262,9 @@ func TestMesh_buildConfiguration(t *testing.T) {
 	assert.Equal(t, ImportImported, byName["tcp/mqtt@docker/HostSNI(`mqtt.example.com`)"].Status)
 	assert.Equal(t, ImportSkipped, byName["tcp/ldap@docker/HostSNI(`*`)"].Status)
 	assert.Contains(t, byName["tcp/ldap@docker/HostSNI(`*`)"].Reason, "entry points")
-	assert.Equal(t, ImportSkipped, byName["udp/dns@docker/"].Status)
-	assert.Contains(t, byName["udp/dns@docker/"].Reason, "UDP")
+	assert.Equal(t, ImportImported, byName["udp/dns@docker/"].Status)
+	assert.Equal(t, map[string]*dynamic.UDPRouter{"dns-docker": {EntryPoints: []string{"dns"}, Service: "dns-docker"}}, conf.UDP.Routers)
+	assert.Equal(t, map[string]*dynamic.UDPService{"dns-docker": {}}, conf.UDP.Services)
 
 	// The requests and the connections find their routes apart: a TCP router may have the name of an HTTP one.
 	tables := node.mesh.tables.Load()
@@ -286,6 +287,9 @@ func TestMesh_buildConfiguration_empty(t *testing.T) {
 	require.NotNil(t, conf.TCP)
 	assert.NotNil(t, conf.TCP.Routers)
 	assert.NotNil(t, conf.TCP.Services)
+	require.NotNil(t, conf.UDP)
+	assert.NotNil(t, conf.UDP.Routers)
+	assert.NotNil(t, conf.UDP.Services)
 	assert.Empty(t, report)
 }
 

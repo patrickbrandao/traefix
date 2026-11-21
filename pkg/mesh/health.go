@@ -11,6 +11,7 @@ import (
 
 	"github.com/traefik/traefik/v3/pkg/config/runtime"
 	"github.com/traefik/traefik/v3/pkg/tcp"
+	"github.com/traefik/traefik/v3/pkg/udp"
 )
 
 // healthInterval is how often an instance looks at the servers of the routers it announces.
@@ -21,13 +22,21 @@ const defaultHealthInterval = time.Second
 type routing struct {
 	http map[string]http.Handler
 	tcp  map[string]tcp.Handler
+	udp  map[string]udp.Handler
 	conf *runtime.Configuration
+}
+
+// Handlers are the handlers that serve the routers of this instance by name, for what the other instances forward.
+type Handlers struct {
+	HTTP map[string]http.Handler
+	TCP  map[string]tcp.Handler
+	UDP  map[string]udp.Handler
 }
 
 // SwitchHandlers replaces the handlers that serve the routers of this instance by name,
 // with the routing configuration they were built from.
-func (m *Mesh) SwitchHandlers(httpHandlers map[string]http.Handler, tcpHandlers map[string]tcp.Handler, conf *runtime.Configuration) {
-	m.routing.Store(&routing{http: httpHandlers, tcp: tcpHandlers, conf: conf})
+func (m *Mesh) SwitchHandlers(handlers Handlers, conf *runtime.Configuration) {
+	m.routing.Store(&routing{http: handlers.HTTP, tcp: handlers.TCP, udp: handlers.UDP, conf: conf})
 
 	m.checkHealth()
 }
@@ -60,6 +69,7 @@ func (m *Mesh) checkHealth() {
 	m.mu.Lock()
 	httpRouters := maps.Clone(m.localHTTP)
 	tcpRouters := maps.Clone(m.localTCP)
+	udpRouters := maps.Clone(m.localUDP)
 	m.mu.Unlock()
 
 	down := map[string]struct{}{}
@@ -73,6 +83,12 @@ func (m *Mesh) checkHealth() {
 	for name, router := range tcpRouters {
 		if current.tcp[name] == nil || !tcpServiceUp(current.conf, qualify(router.Service, name)) {
 			down[routeKey(KindTCP, name)] = struct{}{}
+		}
+	}
+
+	for name, router := range udpRouters {
+		if current.udp[name] == nil || !udpServiceUp(current.conf, qualify(router.Service, name)) {
+			down[routeKey(KindUDP, name)] = struct{}{}
 		}
 	}
 
@@ -188,6 +204,26 @@ func tcpServiceUp(conf *runtime.Configuration, serviceName string) bool {
 	}
 
 	return slices.Contains(slices.Collect(maps.Values(statuses)), runtime.StatusUp)
+}
+
+// udpServiceUp tells whether a UDP service has a server to answer. UDP services have no health check:
+// a load balancer is up while it has servers.
+func udpServiceUp(conf *runtime.Configuration, serviceName string) bool {
+	if conf == nil {
+		return true
+	}
+
+	service, ok := conf.UDPServices[serviceName]
+	if !ok || service == nil {
+		return false
+	}
+
+	if service.UDPService == nil || service.LoadBalancer == nil {
+		// A service made of other services answers for itself.
+		return true
+	}
+
+	return len(service.LoadBalancer.Servers) > 0
 }
 
 // qualify returns the name of an element as the router named by qualified name refers to it: in its provider by default.

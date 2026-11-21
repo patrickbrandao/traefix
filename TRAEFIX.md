@@ -236,7 +236,18 @@ servidor que o tem, sem rede overlay. Implementado até agora:
   `pkg/server/router/tcp/manager.go` (`buildMiddlewaresAndService` e o nome do router no contexto, com o resto
   em `manager_traefix_mesh.go`), `pkg/server/service/tcp/service.go` (`buildTraefix`, em
   `service_traefix.go`) e `pkg/server/routerfactory.go` (`setMeshTCP`, `switchMeshHandlers`).
-  **UDP ainda não é encaminhado** (etapa 8).
+
+- **UDP** (etapa 8): os routers UDP anunciados viram routers `<router>-<provider>@mesh` só nos entrypoints UDP sem
+  router próprio (um entrypoint tem um router UDP só; o primeiro pelo nome leva). Cada sessão UDP vai num fluxo da
+  ligação (`session.OpenFlow`: datagramas QUIC, com sobra pelo stream para o que não cabe e tudo pelo stream na
+  reserva em TCP). No dono, o fluxo vira uma sessão `udp.Conn` sem socket (`udp.NewFlowConn`, em
+  `pkg/udp/conn_traefix.go`, com ganchos de três linhas em `Write` e `Close` de `pkg/udp/conn.go`) entregue ao
+  serviço do router pelo nome. A entrada decide o fim da sessão (`udp.timeout` do entrypoint); o dono espera esse
+  tempo mais o `linkTimeout`. Prioridade e quarentena como no HTTP; o router UDP fica fora quando o serviço não tem
+  servidor. Código em `pkg/mesh/udp.go`; ganchos no upstream em `pkg/server/router/udp/router.go` (`meshHandler`,
+  com o resto em `manager_traefix_mesh.go`), `pkg/server/service/udp/service.go` (`buildTraefix`, em
+  `service_traefix.go`) e `pkg/server/routerfactory.go` (`setMeshUDP`).
+  **Falta a etapa 9** (conferência de configuração entre pares, troca de token, métricas e `scripts/traefix/e2e-mesh.sh`).
 
 ## Infopage
 

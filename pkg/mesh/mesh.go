@@ -98,6 +98,10 @@ type Mesh struct {
 	// localHTTP and localTCP are the routers this instance announces, as their providers wrote them.
 	localHTTP map[string]*dynamic.Router
 	localTCP  map[string]*dynamic.TCPRouter
+	localUDP  map[string]*dynamic.UDPRouter
+	// localUDPEntryPoints are the UDP entry points that have a router of the local providers, announced or not:
+	// an entry point has one UDP router only.
+	localUDPEntryPoints map[string]struct{}
 	// routing serves these routers by name, for what the other instances forward.
 	routing atomic.Pointer[routing]
 	// tables are the routes as the requests need them.
@@ -217,6 +221,7 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 		publishCh:         make(chan struct{}, 1),
 		localHTTP:         map[string]*dynamic.Router{},
 		localTCP:          map[string]*dynamic.TCPRouter{},
+		localUDP:          map[string]*dynamic.UDPRouter{},
 		quarantines:       map[string]*quarantine{},
 		healthInterval:    defaultHealthInterval,
 	}

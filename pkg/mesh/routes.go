@@ -134,6 +134,8 @@ func (m *Mesh) Transform(_ context.Context, configurations dynamic.Configuration
 
 	servedHTTP := map[string]*dynamic.Router{}
 	servedTCP := map[string]*dynamic.TCPRouter{}
+	servedUDP := map[string]*dynamic.UDPRouter{}
+	udpEntryPoints := map[string]struct{}{}
 
 	for providerName, conf := range configurations {
 		if conf == nil {
@@ -159,6 +161,27 @@ func (m *Mesh) Transform(_ context.Context, configurations dynamic.Configuration
 				}
 			}
 		}
+
+		if conf.UDP != nil {
+			for name, router := range conf.UDP.Routers {
+				if router == nil {
+					continue
+				}
+
+				qualified := qualifiedName(name, providerName)
+
+				if _, ok := announced[routeKey(KindUDP, qualified)]; ok {
+					servedUDP[qualified] = router.DeepCopy()
+				}
+
+				// The routers that came from the mesh are the ones the instance may replace.
+				if providerName != ProviderName {
+					for _, entryPoint := range m.entryPointsOf(router.EntryPoints, m.udpEntryPoints) {
+						udpEntryPoints[entryPoint] = struct{}{}
+					}
+				}
+			}
+		}
 	}
 
 	m.mu.Lock()
@@ -169,10 +192,14 @@ func (m *Mesh) Transform(_ context.Context, configurations dynamic.Configuration
 	m.localRouters = local
 	m.localHTTP = servedHTTP
 	m.localTCP = servedTCP
+	m.localUDP = servedUDP
+
+	udpChanged := !reflect.DeepEqual(udpEntryPoints, m.localUDPEntryPoints)
+	m.localUDPEntryPoints = udpEntryPoints
 	m.mu.Unlock()
 
 	// A router that appears, goes or changes locally changes what is made of the routes of the other instances.
-	if localChanged || exportChanged {
+	if localChanged || exportChanged || udpChanged {
 		m.publish()
 	}
 

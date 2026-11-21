@@ -254,7 +254,7 @@ func TestMesh_sharedRoute_anotherRule(t *testing.T) {
 	first.owns(named("srv1"), 10)
 
 	second := newTestNode(t, "srv2", testToken, nil, first.address)
-	second.mesh.SwitchHandlers(map[string]http.Handler{"app@docker": named("srv2")}, nil, nil)
+	second.mesh.SwitchHandlers(Handlers{HTTP: map[string]http.Handler{"app@docker": named("srv2")}}, nil)
 	second.mesh.Transform(t.Context(), dynamic.Configurations{
 		"docker": {HTTP: &dynamic.HTTPConfiguration{Routers: map[string]*dynamic.Router{
 			"app": {Rule: "Host(`other.example.com`)", EntryPoints: []string{"web"}, Service: "app"},
@@ -373,7 +373,7 @@ func TestMesh_health(t *testing.T) {
 
 	conf := &runtime.Configuration{Services: map[string]*runtime.ServiceInfo{"app@docker": service}}
 
-	owner.mesh.SwitchHandlers(map[string]http.Handler{"app@docker": named("srv1")}, nil, conf)
+	owner.mesh.SwitchHandlers(Handlers{HTTP: map[string]http.Handler{"app@docker": named("srv1")}}, conf)
 
 	require.Equal(t, "srv1", ask(t, handler, "198.51.100.7:1000"))
 

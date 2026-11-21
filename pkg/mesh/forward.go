@@ -26,6 +26,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/fingerprint"
 	"github.com/traefik/traefik/v3/pkg/middlewares/accesslog"
 	"github.com/traefik/traefik/v3/pkg/tcp"
+	"github.com/traefik/traefik/v3/pkg/udp"
 	"golang.org/x/net/http/httpguts"
 )
 
@@ -61,8 +62,10 @@ type forwardInfo struct {
 	// Remote is the address of the client, as the entry point saw it.
 	Remote string `json:"remote,omitempty"`
 	// Local is the address the client connected to, for the TCP routers.
-	Local string      `json:"local,omitempty"`
-	TLS   *forwardTLS `json:"tls,omitempty"`
+	Local string `json:"local,omitempty"`
+	// IdleTimeout is how long a UDP session lasts without a packet on the entry point, in milliseconds.
+	IdleTimeout int64       `json:"idleTimeout,omitempty"`
+	TLS         *forwardTLS `json:"tls,omitempty"`
 	// Fingerprint is what the entry point measured of the connection and of the request.
 	Fingerprint *forwardFingerprint `json:"fingerprint,omitempty"`
 }
@@ -168,9 +171,11 @@ type forwardTables struct {
 	targets map[string]*forwardTarget
 	// shared are the HTTP routes this instance has and other instances have too, by the name of the router.
 	shared map[string]*forwardTarget
-	// tcpTargets and tcpShared are the same for the TCP routes.
+	// tcpTargets and tcpShared are the same for the TCP routes, udpTargets and udpShared for the UDP routes.
 	tcpTargets map[string]*forwardTarget
 	tcpShared  map[string]*forwardTarget
+	udpTargets map[string]*forwardTarget
+	udpShared  map[string]*forwardTarget
 }
 
 func newForwardTables() *forwardTables {
@@ -179,23 +184,31 @@ func newForwardTables() *forwardTables {
 		shared:     map[string]*forwardTarget{},
 		tcpTargets: map[string]*forwardTarget{},
 		tcpShared:  map[string]*forwardTarget{},
+		udpTargets: map[string]*forwardTarget{},
+		udpShared:  map[string]*forwardTarget{},
 	}
 }
 
 func (t *forwardTables) targetsOf(kind string) map[string]*forwardTarget {
-	if kind == KindTCP {
+	switch kind {
+	case KindTCP:
 		return t.tcpTargets
+	case KindUDP:
+		return t.udpTargets
+	default:
+		return t.targets
 	}
-
-	return t.targets
 }
 
 func (t *forwardTables) sharedOf(kind string) map[string]*forwardTarget {
-	if kind == KindTCP {
+	switch kind {
+	case KindTCP:
 		return t.tcpShared
+	case KindUDP:
+		return t.udpShared
+	default:
+		return t.shared
 	}
-
-	return t.shared
 }
 
 // choice is a place to serve a request: this instance, or another one.
@@ -680,23 +693,27 @@ func (m *Mesh) serveForwarded(rw http.ResponseWriter, req *http.Request) {
 	var (
 		handler    http.Handler
 		tcpHandler tcp.Handler
+		udpHandler udp.Handler
 	)
 
-	if current := m.routing.Load(); current != nil {
-		handler, tcpHandler = current.http[info.Router], current.tcp[info.Router]
+	current := m.routing.Load()
+	if current == nil {
+		current = &routing{}
 	}
 
 	switch info.Kind {
 	case forwardHTTP, forwardUpgrade:
-		tcpHandler = nil
+		handler = current.http[info.Router]
 	case forwardTCP:
-		handler = nil
+		tcpHandler = current.tcp[info.Router]
+	case forwardUDP:
+		udpHandler = current.udp[info.Router]
 	default:
 		http.Error(rw, "unknown kind of mesh request", http.StatusBadRequest)
 		return
 	}
 
-	if handler == nil && tcpHandler == nil {
+	if handler == nil && tcpHandler == nil && udpHandler == nil {
 		// The router went away between the announcement and the request, e.g. its container stopped.
 		m.countReceived(peer, info.Kind, resultUnknown)
 
@@ -716,6 +733,8 @@ func (m *Mesh) serveForwarded(rw http.ResponseWriter, req *http.Request) {
 		m.serveUpgrade(rw, req, info, handler)
 	case forwardTCP:
 		m.serveTCP(rw, req, info, tcpHandler)
+	case forwardUDP:
+		m.serveUDP(rw, req, info, udpHandler)
 	}
 }
 

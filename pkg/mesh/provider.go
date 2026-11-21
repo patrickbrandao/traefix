@@ -11,6 +11,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/safe"
 	"github.com/traefik/traefik/v3/pkg/tcp"
+	"github.com/traefik/traefik/v3/pkg/udp"
 )
 
 const (
@@ -141,6 +142,12 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 	m.mu.Lock()
 	local := m.localRouters
 
+	// An entry point has one UDP router only: the ones that have a router of their own take no other.
+	udpTaken := maps.Clone(m.localUDPEntryPoints)
+	if udpTaken == nil {
+		udpTaken = map[string]struct{}{}
+	}
+
 	// The routers this instance announces, by key: another instance has the same route when its announcement has the same signature.
 	announced := map[string]Route{}
 	for _, route := range m.exported {
@@ -181,7 +188,10 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 			Routers:  map[string]*dynamic.TCPRouter{},
 			Services: map[string]*dynamic.TCPService{},
 		},
-		UDP: &dynamic.UDPConfiguration{},
+		UDP: &dynamic.UDPConfiguration{
+			Routers:  map[string]*dynamic.UDPRouter{},
+			Services: map[string]*dynamic.UDPService{},
+		},
 	}
 
 	var report []ImportedRoute
@@ -222,7 +232,7 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 				imported.Reason = "this instance has a router with the same name"
 
 				// With the same rule, entry points and TLS, it is the same route: the priorities choose where a request goes.
-				if own, ok := announced[key]; ok && group.route.Kind != KindUDP && own.signature() == group.signature {
+				if own, ok := announced[key]; ok && own.signature() == group.signature {
 					tables.sharedOf(own.Kind)[own.Name] = &forwardTarget{
 						kind:          own.Kind,
 						router:        own.Name,
@@ -235,8 +245,38 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 				}
 
 			case group.route.Kind == KindUDP:
-				imported.Status = ImportSkipped
-				imported.Reason = "the mesh does not forward UDP routers yet"
+				entryPoints := intersect(group.route.EntryPoints, m.udpEntryPoints)
+
+				var free []string
+				for _, entryPoint := range entryPoints {
+					if _, taken := udpTaken[entryPoint]; !taken {
+						free = append(free, entryPoint)
+					}
+				}
+
+				switch {
+				case len(entryPoints) == 0:
+					imported.Status = ImportSkipped
+					imported.Reason = "this instance has none of the entry points of the router"
+
+				case len(free) == 0:
+					imported.Status = ImportSkipped
+					imported.Reason = "the entry points of the router have a UDP router already: an entry point has one UDP router only"
+
+				default:
+					for _, entryPoint := range free {
+						udpTaken[entryPoint] = struct{}{}
+					}
+
+					conf.UDP.Routers[name] = &dynamic.UDPRouter{EntryPoints: free, Service: name}
+					// The service has no configuration: the mesh builds its handler.
+					conf.UDP.Services[name] = &dynamic.UDPService{}
+
+					tables.udpTargets[name+"@"+ProviderName] = &forwardTarget{kind: KindUDP, router: group.route.Name, candidates: group.candidates}
+
+					imported.Status = ImportImported
+					imported.Router = name + "@" + ProviderName
+				}
 
 			default:
 				entryPoints := intersect(group.route.EntryPoints, m.entryPoints)
@@ -351,4 +391,13 @@ func (m *Mesh) BuildTCP(_ context.Context, serviceName string) (tcp.Handler, err
 	}
 
 	return &meshTCPService{mesh: m, name: serviceName}, nil
+}
+
+// BuildUDP returns the handler of a UDP service of the mesh, and nothing for the other services.
+func (m *Mesh) BuildUDP(_ context.Context, serviceName string) (udp.Handler, error) {
+	if !strings.HasSuffix(serviceName, "@"+ProviderName) {
+		return nil, nil
+	}
+
+	return &meshUDPService{mesh: m, name: serviceName}, nil
 }

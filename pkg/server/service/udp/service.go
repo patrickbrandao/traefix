@@ -19,6 +19,8 @@ import (
 type Manager struct {
 	configs map[string]*runtime.UDPServiceInfo
 	rand    *rand.Rand // For the initial shuffling of load-balancers.
+
+	traefixBuilder TraefixBuilder
 }
 
 // NewManager creates a new manager.
@@ -35,6 +37,10 @@ func (m *Manager) BuildUDP(rootCtx context.Context, serviceName string) (udp.Han
 
 	logger := log.Ctx(rootCtx).With().Str(logs.ServiceName, serviceQualifiedName).Logger()
 	ctx := provider.AddInContext(rootCtx, serviceQualifiedName)
+
+	if handler, err := m.buildTraefix(ctx, serviceQualifiedName); handler != nil || err != nil {
+		return handler, err
+	}
 
 	conf, ok := m.configs[serviceQualifiedName]
 	if !ok {

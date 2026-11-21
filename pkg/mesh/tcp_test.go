@@ -24,7 +24,7 @@ import (
 func (n *testNode) ownsTCP(handler tcp.Handler, priority int) {
 	n.t.Helper()
 
-	n.mesh.SwitchHandlers(nil, map[string]tcp.Handler{"pg@docker": handler}, nil)
+	n.mesh.SwitchHandlers(Handlers{TCP: map[string]tcp.Handler{"pg@docker": handler}}, nil)
 	n.mesh.Transform(n.t.Context(), dynamic.Configurations{
 		"docker": {TCP: &dynamic.TCPConfiguration{Routers: map[string]*dynamic.TCPRouter{
 			"pg": {Rule: "HostSNI(`*`)", EntryPoints: []string{"web"}, Service: "pg", Mesh: &dynamic.RouterMesh{Priority: priority}},
@@ -360,7 +360,7 @@ func TestMesh_healthTCP(t *testing.T) {
 
 	conf := &runtime.Configuration{TCPServices: map[string]*runtime.TCPServiceInfo{"pg@docker": service}}
 
-	owner.mesh.SwitchHandlers(nil, map[string]tcp.Handler{"pg@docker": tcpNamed("srv1")}, conf)
+	owner.mesh.SwitchHandlers(Handlers{TCP: map[string]tcp.Handler{"pg@docker": tcpNamed("srv1")}}, conf)
 
 	require.Equal(t, "srv1", askTCP(t, handler))
 

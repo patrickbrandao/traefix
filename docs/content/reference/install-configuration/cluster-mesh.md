@@ -7,7 +7,7 @@ The `cluster.mesh` option links the Traefix instances of a [cluster](./cluster.m
 
 !!! warning "Work in progress"
 
-    In this version, the mesh forwards the HTTP requests and the TCP connections. The UDP routers are announced and not forwarded yet.
+    In this version, the mesh forwards the HTTP requests, the TCP connections and the UDP sessions. The instances don't compare their configurations yet.
 
 ## Configuration Examples
 
@@ -149,7 +149,7 @@ http:
         export: false
 ```
 
-The TCP and UDP routers have the same options. The instances create a router for the TCP routers, see [TCP Connections Through the Mesh](#tcp-connections-through-the-mesh). The UDP routers are announced, and the instances create no router for them yet.
+The TCP and UDP routers have the same options. See [TCP Connections Through the Mesh](#tcp-connections-through-the-mesh) and [UDP Sessions Through the Mesh](#udp-sessions-through-the-mesh).
 
 ## Requests Through the Mesh
 
@@ -216,6 +216,18 @@ A connection for a TCP router that the instance learned from the mesh goes to an
 - **A connection that no instance can take is closed.** TCP has no other way to say so.
 - **A connection outlives the changes of the routing.** A connection keeps going when the routing configuration changes on either instance. It ends when the link is lost, after `linkTimeout` at most.
 
+## UDP Sessions Through the Mesh
+
+A UDP session for a router that the instance learned from the mesh goes to an instance that owns the router, in a flow of the link to it. A session is the packets of one address of a client, until the `udp.timeout` of the entry point passes without a packet.
+
+- **An entry point has one UDP router.** The instance only creates the router on the UDP entry points that have no router of their own. When several announced routers use the same entry point, the first one by name gets it, and the API reports the others as skipped.
+- **A packet travels in a QUIC datagram when it fits.** Like UDP, a datagram is not sent again when it is lost, and the packets may arrive out of order. A packet larger than a datagram, around 1200 bytes, travels in the stream of the flow, which delivers it whole but may delay the packets that follow. Over a link over TCP, all the packets travel in the stream.
+- **The server sees the instance that owns the router, as without the mesh.** The service of the router sends the packets to the server from a socket of its own.
+- **The instance that received the session ends it.** A session ends after the `udp.timeout` of the entry point without a packet. The instance that owns the router ends a session itself only when the link is lost.
+- **The priorities choose the instance, as for HTTP.** The rules of [Where a Request Is Served](#where-a-request-is-served) apply to each session. A UDP service has no health check: an instance reports its router as down when the service has no server.
+- **A session that no instance can take is dropped.** Its packets get no answer.
+- **A session that starts while the instance that owns the router dies may wait.** Over QUIC, nothing tells that the other instance died: the session goes to the next candidate after `linkTimeout` at most, when the link is considered lost.
+
 ## API
 
 With the [API](./api-dashboard.md) enabled, `GET /api/mesh` returns the state of the mesh on the instance:
@@ -236,8 +248,8 @@ The rules of the announced routers appear in this answer. Protect the API as you
 | <a id="opt-traefik-mesh-peers" href="#opt-traefik-mesh-peers" title="#opt-traefik-mesh-peers">`traefik_mesh_peers`</a> | `state` | Number of instances that this instance opens a link to, with the link `up` or `down`. An address that no instance answers at counts as `down`. |
 | <a id="opt-traefik-mesh-link-up" href="#opt-traefik-mesh-link-up" title="#opt-traefik-mesh-link-up">`traefik_mesh_link_up`</a> | `peer`, `transport` | `1` for the transport, `quic` or `tcp`, that the link to the instance is up with, `0` otherwise. |
 | <a id="opt-traefik-mesh-link-rtt-seconds" href="#opt-traefik-mesh-link-rtt-seconds" title="#opt-traefik-mesh-link-rtt-seconds">`traefik_mesh_link_rtt_seconds`</a> | `peer` | Time the other instance took to answer the last ping, `0` while the link is down. |
-| <a id="opt-traefik-mesh-requests-total" href="#opt-traefik-mesh-requests-total" title="#opt-traefik-mesh-requests-total">`traefik_mesh_requests_total`</a> | `peer`, `kind`, `result` | Requests that the instance sent to another instance. The `kind` is `http`, `upgrade`, or `tcp` for a connection of a TCP router. The `result` is `forwarded`, `error` when the request could not be delivered, or `unavailable`, with an empty `peer`, when no instance could take it. |
-| <a id="opt-traefik-mesh-received-total" href="#opt-traefik-mesh-received-total" title="#opt-traefik-mesh-received-total">`traefik_mesh_received_total`</a> | `peer`, `kind`, `result` | Requests and connections that the instance received from another instance: `served`, or `unknown` when it no longer has the router. |
+| <a id="opt-traefik-mesh-requests-total" href="#opt-traefik-mesh-requests-total" title="#opt-traefik-mesh-requests-total">`traefik_mesh_requests_total`</a> | `peer`, `kind`, `result` | Requests that the instance sent to another instance. The `kind` is `http`, `upgrade`, `tcp` for a connection of a TCP router, or `udp` for a session of a UDP router. The `result` is `forwarded`, `error` when the request could not be delivered, or `unavailable`, with an empty `peer`, when no instance could take it. |
+| <a id="opt-traefik-mesh-received-total" href="#opt-traefik-mesh-received-total" title="#opt-traefik-mesh-received-total">`traefik_mesh_received_total`</a> | `peer`, `kind`, `result` | Requests, connections and sessions that the instance received from another instance: `served`, or `unknown` when it no longer has the router. |
 
 The `peer` label is the `nodeID` of the other instance. An address of the list or of the DNS that no instance answered at yet has no `nodeID`: it only counts in `traefik_mesh_peers`. Datadog, StatsD and InfluxDB use the same names with dots, for example `traefik.mesh.link.up`.
 

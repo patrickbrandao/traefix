@@ -103,7 +103,7 @@ func (m *Mesh) dispatchTCP(conn tcp.WriteCloser, target *forwardTarget, local tc
 			continue
 		}
 
-		stream, release, err := m.openStream(session, http.Header{headerForward: {info.encode()}})
+		stream, release, err := openTunnel(m, session.OpenStream, http.Header{headerForward: {info.encode()}})
 		if err != nil {
 			m.failed(target.key(), next.nodeID)
 			m.countRequest(next.nodeID, forwardTCP, resultError)
@@ -134,26 +134,28 @@ func (m *Mesh) refuseTCP(conn tcp.WriteCloser, cause string) {
 	_ = conn.Close()
 }
 
-// openStream opens a stream that lives for as long as the mesh runs, or until it is released.
-// A connection outlives the routing configuration that accepted it, as it does with the services of Traefik:
-// its stream is not bound to the context the routing was built with.
-func (m *Mesh) openStream(s *session, header http.Header) (Stream, func(), error) {
+// openTunnel opens a stream or a flow that lives for as long as the mesh runs, or until it is released.
+// A connection or a UDP session outlives the routing configuration that accepted it, as it does with the services
+// of Traefik: its tunnel is not bound to the context the routing was built with.
+func openTunnel[T io.Closer](m *Mesh, open func(ctx context.Context, header http.Header) (T, error), header http.Header) (T, func(), error) {
+	var zero T
+
 	m.mu.Lock()
 	parent := m.runCtx
 	m.mu.Unlock()
 
 	if parent == nil {
-		return nil, nil, context.Canceled
+		return zero, nil, context.Canceled
 	}
 
 	ctx, cancel := context.WithCancel(parent)
 
-	// The context of a stream bounds its life: the time to open it is bounded apart.
+	// The context of a tunnel bounds its life: the time to open it is bounded apart.
 	opening := time.AfterFunc(m.linkTimeout, cancel)
 
-	stream, err := s.OpenStream(ctx, header)
+	tunnel, err := open(ctx, header)
 	if err == nil && !opening.Stop() {
-		_ = stream.Close()
+		_ = tunnel.Close()
 		err = context.DeadlineExceeded
 	}
 
@@ -161,10 +163,10 @@ func (m *Mesh) openStream(s *session, header http.Header) (Stream, func(), error
 		opening.Stop()
 		cancel()
 
-		return nil, nil, err
+		return zero, nil, err
 	}
 
-	return stream, cancel, nil
+	return tunnel, cancel, nil
 }
 
 // carry copies the bytes between the connection of a client and a stream to the instance that serves it,

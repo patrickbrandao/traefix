@@ -35,7 +35,7 @@ type seen struct {
 func (n *testNode) owns(handler http.Handler, priority int) {
 	n.t.Helper()
 
-	n.mesh.SwitchHandlers(map[string]http.Handler{"app@docker": handler}, nil, nil)
+	n.mesh.SwitchHandlers(Handlers{HTTP: map[string]http.Handler{"app@docker": handler}}, nil)
 	n.mesh.Transform(n.t.Context(), dynamic.Configurations{
 		"docker": {HTTP: &dynamic.HTTPConfiguration{Routers: map[string]*dynamic.Router{
 			"app": {Rule: "Host(`app.example.com`)", EntryPoints: []string{"web"}, Service: "app", Mesh: &dynamic.RouterMesh{Priority: priority}},
