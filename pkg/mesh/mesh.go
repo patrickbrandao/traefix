@@ -109,6 +109,10 @@ type Mesh struct {
 	entryPointSummaries map[string]EntryPointSummary
 	// mismatches are the differences of configuration with the other instances, by identifier.
 	mismatches map[string][]string
+
+	// quicSeen is when each instance last sent a request over QUIC: on a satellite, that it reaches the satellite back.
+	quicSeen     map[string]time.Time
+	reverseGrace time.Duration
 	// routing serves these routers by name, for what the other instances forward.
 	routing atomic.Pointer[routing]
 	// tables are the routes as the requests need them.
@@ -248,6 +252,8 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 		localTCP:           map[string]*dynamic.TCPRouter{},
 		localUDP:           map[string]*dynamic.UDPRouter{},
 		mismatches:         map[string][]string{},
+		quicSeen:           map[string]time.Time{},
+		reverseGrace:       defaultReverseGrace,
 		quarantines:        map[string]*quarantine{},
 		healthInterval:     defaultHealthInterval,
 	}
@@ -284,7 +290,7 @@ func (m *Mesh) Run(ctx context.Context) {
 
 	var wg sync.WaitGroup
 
-	wg.Go(func() { m.listener.serve(ctx, m) })
+	wg.Go(func() { m.listener.serve(ctx, m, m.acceptReverse) })
 	wg.Go(func() { m.discover(ctx) })
 	wg.Go(func() { m.publishLoop(ctx) })
 	wg.Go(func() { m.healthLoop(ctx) })

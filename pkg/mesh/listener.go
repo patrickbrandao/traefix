@@ -38,6 +38,9 @@ type listener struct {
 
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}
+
+	// reverse takes the links over TCP that satellites open for this instance to send requests through.
+	reverse func(tlsConn *tls.Conn, notify *notifyConn, peer string)
 }
 
 // newListener binds the address. With one transport only, the other one is not listened on.
@@ -79,7 +82,8 @@ func newListener(address, transport string, identity *Identity, linkTimeout time
 
 // serve hands the requests of the other instances to the handler until the context is done.
 // The handler finds the instance that sent a request with peerFrom.
-func (l *listener) serve(ctx context.Context, handler http.Handler) {
+func (l *listener) serve(ctx context.Context, handler http.Handler, reverse func(tlsConn *tls.Conn, notify *notifyConn, peer string)) {
+	l.reverse = reverse
 	handler = l.authenticated(handler)
 
 	var wg sync.WaitGroup
@@ -130,7 +134,8 @@ func (l *listener) serve(ctx context.Context, handler http.Handler) {
 func (l *listener) serveTCP(ctx context.Context, conn net.Conn, h2 *http2.Server, handler http.Handler) {
 	logger := log.Ctx(ctx)
 
-	tlsConn := tls.Server(conn, l.identity.ServerTLS(alpnMesh))
+	notify := &notifyConn{Conn: conn, closed: make(chan struct{})}
+	tlsConn := tls.Server(notify, l.identity.ServerTLS(alpnMesh, alpnReverse))
 
 	handshakeCtx, cancel := context.WithTimeout(ctx, l.linkTimeout)
 	err := tlsConn.HandshakeContext(handshakeCtx)
@@ -144,7 +149,9 @@ func (l *listener) serveTCP(ctx context.Context, conn net.Conn, h2 *http2.Server
 		return
 	}
 
-	if tlsConn.ConnectionState().NegotiatedProtocol != alpnMesh {
+	state := tlsConn.ConnectionState()
+
+	if state.NegotiatedProtocol != alpnMesh && (state.NegotiatedProtocol != alpnReverse || l.reverse == nil) {
 		_ = tlsConn.Close()
 		return
 	}
@@ -153,6 +160,29 @@ func (l *listener) serveTCP(ctx context.Context, conn net.Conn, h2 *http2.Server
 		_ = tlsConn.Close()
 		return
 	}
+
+	// A satellite that opens a link for this instance to send requests through: the instance is the client of HTTP/2.
+	if state.NegotiatedProtocol == alpnReverse {
+		peer, err := l.identity.PeerNode(state)
+		if err != nil {
+			l.untrack(tlsConn)
+			_ = tlsConn.Close()
+
+			return
+		}
+
+		context.AfterFunc(ctx, func() { _ = tlsConn.Close() })
+
+		go func() {
+			<-notify.closed
+			l.untrack(tlsConn)
+		}()
+
+		l.reverse(tlsConn, notify, peer)
+
+		return
+	}
+
 	defer l.untrack(tlsConn)
 
 	h2.ServeConn(tlsConn, &http2.ServeConnOpts{Context: ctx, Handler: handler})

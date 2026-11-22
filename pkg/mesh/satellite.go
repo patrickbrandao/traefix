@@ -46,8 +46,13 @@ func (m *Mesh) refuseSatelliteLocked(entry *peerEntry, address string) {
 // its NAT maps to it, for the packets that come back from the port of the mesh of this instance.
 // The instance dials it back there, from that port, and that link is the one the requests for its routers take.
 func (m *Mesh) learnSatellite(nodeID, address string) {
-	if nodeID == m.member.NodeID() || !nodeIDRegexp.MatchString(nodeID) || address == "" {
+	if nodeID == m.member.NodeID() || !nodeIDRegexp.MatchString(nodeID) {
 		return
+	}
+
+	var addresses []string
+	if address != "" {
+		addresses = []string{address}
 	}
 
 	m.mu.Lock()
@@ -69,7 +74,7 @@ func (m *Mesh) learnSatellite(nodeID, address string) {
 	if !known {
 		entry = &peerEntry{
 			nodeID:    nodeID,
-			addresses: []string{address},
+			addresses: addresses,
 			sources:   map[string]struct{}{sourceSatellite: {}},
 			learnedAt: m.now(),
 			satellite: true,
@@ -87,7 +92,9 @@ func (m *Mesh) learnSatellite(nodeID, address string) {
 		return
 	}
 
-	m.observedLocked(entry, address)
+	if address != "" {
+		m.observedLocked(entry, address)
+	}
 }
 
 // observeSatellite follows the address the link of a satellite comes from. A NAT that maps the satellite to another
@@ -154,6 +161,10 @@ func (m *Mesh) forgetSatellite(entry *peerEntry) {
 
 	if entry.cancel != nil {
 		entry.cancel()
+	}
+
+	if s := entry.link.takeOffered(); s != nil {
+		s.Close()
 	}
 
 	m.logger.Info().Str("peer", entry.nodeID).Msg("A satellite of the mesh no longer links to this instance: it is not reached back any more")

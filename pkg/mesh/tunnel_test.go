@@ -57,7 +57,7 @@ func serveTest(t *testing.T, identity *Identity, transport string, handler http.
 
 	go func() {
 		defer close(done)
-		l.serve(ctx, handler)
+		l.serve(ctx, handler, nil)
 	}()
 
 	t.Cleanup(func() {

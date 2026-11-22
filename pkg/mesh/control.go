@@ -45,6 +45,10 @@ type peersAnswer struct {
 func (m *Mesh) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	m.observeSatellite(req)
 
+	if m.conf.Satellite && req.ProtoMajor == 3 {
+		m.markQUIC(peerFrom(req.Context()))
+	}
+
 	// A request that another instance forwards carries the header, whatever its host.
 	if req.Header.Get(headerForward) != "" {
 		m.serveForwarded(rw, req)
@@ -100,9 +104,15 @@ func (m *Mesh) serveHello(rw http.ResponseWriter, req *http.Request) {
 		m.greeted(theirs, req.RemoteAddr)
 		m.compareConfiguration(theirs)
 
-		// A satellite is reached back over QUIC, through the mapping its NAT opened for its link.
-		if roleOf(theirs) == RoleSatellite && !m.conf.Satellite && req.ProtoMajor == 3 {
-			m.learnSatellite(theirs.NodeID, req.RemoteAddr)
+		// A satellite is reached back over QUIC, through the mapping its NAT opened for its link,
+		// or through a link over TCP it opens when its link comes over TCP.
+		if roleOf(theirs) == RoleSatellite && !m.conf.Satellite {
+			observed := ""
+			if req.ProtoMajor == 3 {
+				observed = req.RemoteAddr
+			}
+
+			m.learnSatellite(theirs.NodeID, observed)
 		}
 
 		// The instance that opened the link is linked back, at the addresses it says it is reached at,

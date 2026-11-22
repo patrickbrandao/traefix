@@ -33,8 +33,10 @@ type testNode struct {
 	// What the instance gets each time it starts.
 	registry    metrics.Registry
 	entryPoints map[string]EntryPointSummary
-	lookupSRV   func(ctx context.Context, name string) ([]*net.SRV, error)
-	lookupTXT   func(ctx context.Context, name string) ([]string, error)
+	// configure changes the mesh of the instance before it runs.
+	configure func(m *Mesh)
+	lookupSRV func(ctx context.Context, name string) ([]*net.SRV, error)
+	lookupTXT func(ctx context.Context, name string) ([]string, error)
 
 	mu     sync.Mutex
 	offset time.Duration
@@ -120,6 +122,11 @@ func (n *testNode) start() {
 	n.mesh.publishDelay = 10 * time.Millisecond
 	n.mesh.SetEntryPoints([]string{"traefik", "web", "websecure"}, []string{"dns"}, []string{"web", "websecure"})
 	n.mesh.SetEntryPointSummaries(n.entryPoints)
+	n.mesh.reverseGrace = 200 * time.Millisecond
+
+	if n.configure != nil {
+		n.configure(n.mesh)
+	}
 
 	// The routing configuration of the instance, as far as the mesh is concerned.
 	n.configurations = make(chan dynamic.Message, 100)

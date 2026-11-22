@@ -277,7 +277,11 @@ os seus routers, não importa nenhum, não usa Valkey e não pede certificado à
   gravada no `peersFile`). Acompanha o endereço visto em toda requisição do satélite: quando o NAT remapeia, o QUIC migra
   a ligação de saída e o central fecha a de volta e religa no endereço novo. Esquece o satélite quando a ligação dele fica
   `linkTimeout` sem sinal. Código em `pkg/mesh/satellite.go`; NAT simulado em `pkg/mesh/nat_test.go` e em
-  `scripts/traefix/e2e-mesh/udp_nat.py` (cenário `satellite` do `e2e-mesh.sh`). **Falta a reserva por TCP** (etapa 4).
+  `scripts/traefix/e2e-mesh/udp_nat.py` (cenário `satellite` do `e2e-mesh.sh`).
+- **Reserva por TCP** (etapa 4): quando o central não volta por QUIC em 3 s, ou a ligação do satélite é por TCP, o
+  satélite abre uma segunda conexão TCP à porta da malha com o ALPN `traefix-mesh-reverse/1` e serve HTTP/2 nela; o
+  central é o cliente dessa conexão (transporte `tcp-reverse`) e a prefere só na falta de uma volta por QUIC. Código em
+  `pkg/mesh/reverse.go`; cenário `satellite-tcp` do `e2e-mesh.sh`. **Faltam os certificados para o satélite** (etapa 5).
 
 ## Infopage
 

@@ -9,7 +9,7 @@
 #   TRAEFIK=./traefik scripts/traefix/e2e-mesh.sh  # uses a binary already built
 #   LOG_LEVEL=DEBUG scripts/traefix/e2e-mesh.sh
 #
-# Scenarios: formation token http priority tcp udp fallback config satellite
+# Scenarios: formation token http priority tcp udp fallback config satellite satellite-tcp
 
 set -u
 
@@ -417,6 +417,16 @@ udp_client() {
   python3 "$HELPERS/udp_client.py" "$@"
 }
 
+# tcp_imported_are <instance> <count>: the instance imported that many TCP routers.
+tcp_imported_are() {
+  [ "$(mesh "$1" "sum(1 for r in a['imported'] if r['kind'] == 'tcp' and r['status'] == 'imported')")" = "$2" ]
+}
+
+# tcp_answers <port> <server>: a connection to the port reaches the server.
+tcp_answers() {
+  [ "$(tcp_client "$1" | cut -d'|' -f2 | awk '{print $1}')" = "$2" ]
+}
+
 udp_server_is() {
   [ "$(udp_client "$1" 100 | cut -d'|' -f2 | awk '{print $1}')" = "$2" ]
 }
@@ -556,8 +566,9 @@ scenario_tcp() {
   MK_PEERS='["127.0.0.1:7441"]' mk 2
   start 1
   start 2
-  eventually "srv2 imports the TCP routers of srv1" 20 \
-    grep -q 4 <(mesh 2 "sum(1 for r in a['imported'] if r['kind'] == 'tcp' and r['status'] == 'imported')")
+  eventually "srv2 imports the TCP routers of srv1" 30 tcp_imported_are 2 4
+  # A loaded machine takes a while to answer the first connection.
+  eventually "the TCP router of srv1 answers through srv2" 30 tcp_answers 17002 plain1
 
   local answer local_address
   answer=$(tcp_client 17002)
@@ -636,6 +647,29 @@ downtime() {
     sleep 0.1
   done
   echo "$failed"
+}
+
+scenario_satellite-tcp() {
+  echo "Scenario satellite-tcp: a satellite that only gets out over TCP opens the link back itself"
+  reset
+  server http 3
+  server udp 3
+  dyn 3 http=0 udp=0
+  MK_PEERS="[]" mk 1
+  MK_PEERS='["127.0.0.1:7441"]' MK_SATELLITE=1 MK_TRANSPORT=tcp mk 3
+  start 1
+  start 3
+
+  eventually "the router of the satellite is served by srv1" 20 via_is 1 backend3
+  equal "srv1 uses the link the satellite opened over TCP" tcp-reverse \
+    "$(mesh 1 "' '.join(l.get('transport', '') for l in a['links'] if l.get('nodeID') == 'srv3' and l['up'])")"
+  eventually "the UDP router of the satellite is served by srv1, in the stream of the flow" 10 udp_server_is 15301 dns3
+  equal "packets of 100 and 4000 bytes through srv1" "100B inteiro, 4000B inteiro" \
+    "$(udp_client 15301 100 4000 | cut -d'|' -f3 | sed 's/^ //')"
+
+  stop 3
+  eventually "the satellite stops: srv1 forgets it" 20 forgot 1 srv3
+  eventually "the router of the satellite leaves srv1" 10 status_is 1 404
 }
 
 scenario_satellite() {
@@ -724,7 +758,7 @@ fi
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/server.key" -out "$WORK/server.crt" -days 2 \
   -subj "/CN=pass.localhost" -addext "subjectAltName=DNS:pass.localhost" 2> /dev/null || exit 2
 
-[ $# -eq 0 ] && set -- formation token http priority tcp udp fallback config satellite
+[ $# -eq 0 ] && set -- formation token http priority tcp udp fallback config satellite satellite-tcp
 
 echo "Links of the mesh: $TRANSPORT"
 

@@ -267,6 +267,13 @@ func (m *Mesh) connected(entry *peerEntry, address string, theirs hello) error {
 		return fmt.Errorf("the instance %q answers where the satellite %q came from", theirs.NodeID, entry.nodeID)
 	}
 
+	// A satellite is reached at the address its own link comes from, or through the link it opens: what it answers
+	// tells nothing more.
+	if entry.satellite {
+		entry.lastContact = now
+		return nil
+	}
+
 	switch {
 	case entry.nodeID == theirs.NodeID:
 

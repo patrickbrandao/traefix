@@ -7,7 +7,7 @@ A satellite is a Traefix instance on a host that accepts no connection from outs
 
 !!! warning "Work in progress"
 
-    In this version, the other instances reach a satellite back over QUIC only: a satellite on a network that blocks UDP is not reached yet. A satellite doesn't get the certificates of its routers yet.
+    In this version, a satellite doesn't get the certificates of its routers yet.
 
 ## Configuration Examples
 
@@ -70,7 +70,9 @@ A satellite links to an instance, and the instance dials it back at the address 
 - **The other instances need their mesh port reachable in UDP, from the same public address that they send from.** A load balancer that changes the source port of the replies, in front of an instance, keeps the link back from reaching the satellite.
 - **The instance follows the NAT.** When the NAT maps the satellite to another port, the link of the satellite moves with it, and the instance dials the satellite back at the new address. A few requests can fail while the link back opens again.
 - **A satellite that stops linking is forgotten.** The instance stops dialing the satellite back after `cluster.mesh.linkTimeout` without a sign of the link of the satellite, and its routers leave the instance.
-- **The link back is over QUIC.** A link of the satellite over TCP doesn't lead to a link back.
+- **Without QUIC, the satellite opens the link back itself, over TCP.** When the instance doesn't reach the satellite back over QUIC within 3 seconds of its link, or when the link of the satellite is over TCP, the satellite opens a second connection to the mesh port of the instance, in TCP, and the instance sends its requests through it. The instance switches to a link back over QUIC as soon as it has one, and the satellite stops opening the connection over TCP while it is reached over QUIC.
+- **Over TCP, UDP travels in a stream.** The packets of the UDP routers of the satellite arrive whole and in order, and a lost packet delays the ones after it.
+- **With `transport: quic`, the satellite never opens the connection over TCP.** An instance that doesn't reach it back over QUIC doesn't serve its routers, and the satellite logs a warning.
 
-In the [API](./cluster-mesh.md#api) of an instance, the link to a satellite has the address the satellite came from, and `satellite` among its sources.
+In the [API](./cluster-mesh.md#api) of an instance, the link to a satellite has the address the satellite came from, `satellite` among its sources, and the transport `quic`, or `tcp-reverse` for the connection over TCP that the satellite opened. The `traefik_mesh_link_up` metric has the same transport.
 

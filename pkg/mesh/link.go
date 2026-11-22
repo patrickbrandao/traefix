@@ -59,6 +59,8 @@ type link struct {
 	session *session
 	// role is the one the other instance told when the session opened.
 	role string
+	// offered is a session that a satellite opened over TCP, for the link back to it.
+	offered *session
 }
 
 func newLink(m *Mesh, entry *peerEntry) *link {
@@ -133,7 +135,11 @@ func (l *link) run(ctx context.Context) {
 
 			if !l.mesh.conf.Satellite {
 				l.followRoutes(followCtx, s.peer)
+				return
 			}
+
+			// A satellite keeps a link over TCP open for the instance, when the instance does not reach it over QUIC.
+			l.reverseLoop(followCtx, address, s.peer)
 		}()
 
 		err = l.watch(ctx, address)
@@ -178,6 +184,10 @@ func (l *link) followRoutes(ctx context.Context, nodeID string) {
 
 // connect opens a session at the first address of the instance that answers, and introduces this instance.
 func (l *link) connect(ctx context.Context) (*session, string, error) {
+	if l.entry.satellite {
+		return l.connectSatellite(ctx)
+	}
+
 	addresses := l.mesh.addressesOf(l.entry)
 	if len(addresses) == 0 {
 		return nil, "", errors.New("no address is known for the instance")
@@ -196,10 +206,7 @@ func (l *link) connect(ctx context.Context) (*session, string, error) {
 		}
 
 		if err == nil {
-			l.mu.Lock()
-			l.role = roleOf(theirs)
-			l.mu.Unlock()
-
+			l.setRole(theirs)
 			l.mesh.learnPeers(theirs.Peers)
 			l.mesh.compareConfiguration(theirs)
 
@@ -218,11 +225,6 @@ func (l *link) connect(ctx context.Context) (*session, string, error) {
 
 // dial opens a session at an address with the transport the configuration asks for.
 func (l *link) dial(ctx context.Context, address string) (*session, hello, error) {
-	// A satellite is only reached back over QUIC: nothing reaches it over TCP.
-	if l.entry.satellite {
-		return l.open(ctx, address, TransportQUIC, l.mesh.linkTimeout)
-	}
-
 	switch l.mesh.conf.Transport {
 	case cluster.MeshTransportQUIC:
 		return l.open(ctx, address, TransportQUIC, l.mesh.linkTimeout)
@@ -344,6 +346,14 @@ func (l *link) watch(ctx context.Context, address string) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// setRole records the role the other instance told, for the status of the link it opens.
+func (l *link) setRole(theirs hello) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.role = roleOf(theirs)
 }
 
 func (l *link) current() *session {
