@@ -271,8 +271,13 @@ os seus routers, não importa nenhum, não usa Valkey e não pede certificado à
   `docs/content/reference/install-configuration/cluster-satellite.md`.
 - **Socket único** (etapa 2): toda instância escuta e disca por QUIC pelo mesmo `quic.Transport`
   (`pkg/mesh/listener.go`, `dialQUICFrom` em `transport.go`), então as ligações saem da porta da malha. É a condição
-  para um central voltar ao satélite pelo mapeamento do NAT. **Os centrais ainda não alcançam o satélite de volta**
-  (etapa 3).
+  para um central voltar ao satélite pelo mapeamento do NAT.
+- **Volta por QUIC** (etapa 3): o central que recebe a apresentação de um satélite por QUIC disca de volta para o
+  endereço de onde a ligação veio, pela porta da malha (fonte `satellite` no registro de pares; nunca passada adiante nem
+  gravada no `peersFile`). Acompanha o endereço visto em toda requisição do satélite: quando o NAT remapeia, o QUIC migra
+  a ligação de saída e o central fecha a de volta e religa no endereço novo. Esquece o satélite quando a ligação dele fica
+  `linkTimeout` sem sinal. Código em `pkg/mesh/satellite.go`; NAT simulado em `pkg/mesh/nat_test.go` e em
+  `scripts/traefix/e2e-mesh/udp_nat.py` (cenário `satellite` do `e2e-mesh.sh`). **Falta a reserva por TCP** (etapa 4).
 
 ## Infopage
 

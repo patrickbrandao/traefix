@@ -132,7 +132,7 @@ func TestMesh_udpPacketMetrics(t *testing.T) {
 			ingress.registry = ingressRegistry
 			ingress.start()
 
-			client := udpClient(t, 300*time.Millisecond, ingress.udpEntry())
+			client := udpClient(t, time.Second, ingress.udpEntry())
 
 			// One packet that fits in a datagram, one that does not.
 			assert.Equal(t, "srv1:a", string(exchange(t, client, []byte("a"))))

@@ -237,7 +237,7 @@ func TestMesh_sharedRoute(t *testing.T) {
 	// The first instance gets a priority: the second one sends its requests there.
 	first.owns(named("srv1"), 10)
 
-	require.Eventually(t, func() bool { return ask(t, fromSecond, "198.51.100.7:1000") == "srv1" }, 10*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return answers(fromSecond) == "srv1" }, 10*time.Second, 10*time.Millisecond)
 	assert.Equal(t, "srv1", ask(t, fromFirst, "198.51.100.7:1000"))
 
 	// A request that came through the mesh is served where it arrives: it never goes back.
@@ -246,7 +246,7 @@ func TestMesh_sharedRoute(t *testing.T) {
 	// The first instance goes away: the second one serves its requests itself again.
 	first.stop()
 
-	require.Eventually(t, func() bool { return ask(t, fromSecond, "198.51.100.7:1000") == "srv2" }, 10*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return answers(fromSecond) == "srv2" }, 10*time.Second, 10*time.Millisecond)
 }
 
 func TestMesh_sharedRoute_anotherRule(t *testing.T) {

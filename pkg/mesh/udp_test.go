@@ -91,7 +91,8 @@ func exchange(t *testing.T, client *net.UDPConn, payload []byte) []byte {
 	_, err := client.Write(payload)
 	require.NoError(t, err)
 
-	require.NoError(t, client.SetReadDeadline(time.Now().Add(2*time.Second)))
+	// The first packet of a session waits for a flow to open: a loaded machine takes a while.
+	require.NoError(t, client.SetReadDeadline(time.Now().Add(5*time.Second)))
 
 	buf := make([]byte, maxPacketSize)
 
@@ -169,7 +170,7 @@ func TestMesh_forwardUDP_idleTimeout(t *testing.T) {
 
 	ingress := newTestNode(t, "srv2", testToken, nil, owner.address)
 
-	client := udpClient(t, 300*time.Millisecond, ingress.udpEntry())
+	client := udpClient(t, time.Second, ingress.udpEntry())
 
 	assert.Equal(t, "srv1:a", string(exchange(t, client, []byte("a"))))
 

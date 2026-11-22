@@ -7,7 +7,7 @@ A satellite is a Traefix instance on a host that accepts no connection from outs
 
 !!! warning "Work in progress"
 
-    In this version, a satellite links to the other instances and introduces itself as a satellite. The other instances don't reach it back yet, so they don't serve its routers.
+    In this version, the other instances reach a satellite back over QUIC only: a satellite on a network that blocks UDP is not reached yet. A satellite doesn't get the certificates of its routers yet.
 
 ## Configuration Examples
 
@@ -54,10 +54,23 @@ Traefix doesn't start a satellite:
 ## How a Satellite Behaves
 
 - **A satellite links to every instance it learns about.** It learns them from its list of peers, its DNS names and its file of peers, and from the instances it links to. An instance that joins the mesh after the satellite is learned within 30 seconds.
-- **The other instances don't dial a satellite.** They don't tell each other about it, and an address of a satellite in a list of peers is dropped with a warning.
+- **The other instances only reach a satellite back.** They don't dial it at an address of their own, don't tell each other about it, and drop an address of a satellite in a list of peers with a warning. See [How the Other Instances Reach a Satellite](#how-the-other-instances-reach-a-satellite).
 - **A satellite doesn't link to another satellite.**
 - **A satellite announces its routers, and imports none.** The routers of the other instances don't become routers of the satellite.
 - **A satellite doesn't ask a CA for a certificate.** Its ACME certificate resolvers don't start, and Traefix logs a warning. The routers of the satellite still name the resolvers, which are the ones with the same names on the other instances.
 - **A satellite is a full member of the cluster.** It holds the token of the cluster. Anyone who takes over the host of a satellite can join the mesh and announce any router: to remove a satellite, [change the token](./cluster-mesh.md#change-the-token).
 
 In the [API](./cluster-mesh.md#api), `GET /api/mesh` returns `role`: `satellite` or `member`. Each link and each inbound instance has the role that the other instance told.
+
+## How the Other Instances Reach a Satellite
+
+A satellite links to an instance, and the instance dials it back at the address that link comes from, from its own mesh port. The NAT in front of the satellite already maps that address to the satellite, for the packets that come from that port, so the packets of the link back reach the satellite. The instance then uses the link back as a link of the [mesh](./cluster-mesh.md): it follows the routers of the satellite and sends it the requests, connections and UDP sessions for them.
+
+- **The satellite needs no open port.** It only sends UDP to the mesh port of the other instances. That works behind a home router, behind carrier-grade NAT, and behind a NAT that maps each destination apart.
+- **The other instances need their mesh port reachable in UDP, from the same public address that they send from.** A load balancer that changes the source port of the replies, in front of an instance, keeps the link back from reaching the satellite.
+- **The instance follows the NAT.** When the NAT maps the satellite to another port, the link of the satellite moves with it, and the instance dials the satellite back at the new address. A few requests can fail while the link back opens again.
+- **A satellite that stops linking is forgotten.** The instance stops dialing the satellite back after `cluster.mesh.linkTimeout` without a sign of the link of the satellite, and its routers leave the instance.
+- **The link back is over QUIC.** A link of the satellite over TCP doesn't lead to a link back.
+
+In the [API](./cluster-mesh.md#api) of an instance, the link to a satellite has the address the satellite came from, and `satellite` among its sources.
+

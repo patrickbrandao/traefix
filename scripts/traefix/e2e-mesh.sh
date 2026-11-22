@@ -9,7 +9,7 @@
 #   TRAEFIK=./traefik scripts/traefix/e2e-mesh.sh  # uses a binary already built
 #   LOG_LEVEL=DEBUG scripts/traefix/e2e-mesh.sh
 #
-# Scenarios: formation token http priority tcp udp fallback config
+# Scenarios: formation token http priority tcp udp fallback config satellite
 
 set -u
 
@@ -85,6 +85,7 @@ MK_TRANSPORT=$TRANSPORT
 MK_PEERS="[]"
 MK_PEERS_FILE=0
 MK_EXTRA_MIDDLEWARE=0
+MK_SATELLITE=0
 
 # mk <instance>: writes the install configuration of an instance.
 mk() {
@@ -134,6 +135,7 @@ EOF
     linkTimeout: 3s
     peers: $MK_PEERS
 EOF
+    [ "$MK_SATELLITE" = 1 ] && echo "    satellite: true"
     [ "$MK_PEERS_FILE" = 1 ] && echo "    peersFile: $WORK/n$n/peers.json"
   } > "$WORK/n$n/traefik.yml"
 }
@@ -316,17 +318,34 @@ stop_all() {
   if [ -f "$WORK/servers.pid" ]; then
     while read -r pid; do end "$pid"; done < "$WORK/servers.pid"
   fi
-  rm -rf "$WORK/servers.pid" "$WORK"/server-*.pid "$WORK"/n[0-9]
+  rm -f "$WORK/servers.pid" "$WORK"/server-*.pid
+}
+
+# keep_logs: moves the instances of the scenario that ran last aside, with their logs.
+keep_logs() {
+  [ -n "${SCENARIO:-}" ] || return 0
+  for log in "$WORK"/n[0-9]/out.log; do
+    if [ -f "$log" ] && grep -q "^panic:" "$log"; then
+      ko "no instance crashed in the scenario $SCENARIO (a panic is in $SCENARIO/$(basename "$(dirname "$log")")/out.log)"
+    fi
+  done
+  mkdir -p "$WORK/$SCENARIO"
+  for dir in "$WORK"/n[0-9]; do
+    [ -d "$dir" ] && mv "$dir" "$WORK/$SCENARIO/"
+  done
+  return 0
 }
 
 reset() {
   stop_all
+  keep_logs
   MK_TOKEN=$TOKEN_A
   MK_ADDITIONAL=""
   MK_TRANSPORT=$TRANSPORT
   MK_PEERS="[]"
   MK_PEERS_FILE=0
   MK_EXTRA_MIDDLEWARE=0
+  MK_SATELLITE=0
 }
 
 # mesh <instance> <python expression on the answer of /api/mesh, as a>: prints the value.
@@ -516,7 +535,8 @@ scenario_priority() {
 
   stop_server http 2
   eventually "the server of srv2 stops: the health check sends the requests through srv2 to srv1" 10 via_is 2 backend1
-  equal "the server of srv2 stops: the requests through srv1 stay on srv1" backend1 "$(via 1)"
+  # srv2 knows at once; srv1 knows when srv2 announces it, a moment later.
+  eventually "the server of srv2 stops: the requests through srv1 stay on srv1" 10 via_is 1 backend1
   check "srv1 sees the router of srv2 down" grep -q True <(mesh 1 "any(r.get('down') for r in a['imported'])")
 
   server http 2
@@ -597,6 +617,62 @@ scenario_fallback() {
   eventually "the requests through srv2 reach srv1" 20 via_is 2 backend1
 }
 
+# link_address <instance> <nodeID>: prints the address of the link up from the instance to the other one.
+link_address() {
+  mesh "$1" "' '.join(l.get('address', '') for l in a['links'] if l.get('nodeID') == '$2' and l['up'])"
+}
+
+# forgot <instance> <nodeID>: the instance has no link to the other one, up or down.
+forgot() {
+  [ "$(mesh "$1" "sum(1 for l in a['links'] if l.get('nodeID') == '$2')")" = 0 ]
+}
+
+# downtime <instance> <backend> <seconds>: requests the router every 100 ms for that long, and prints how many failed.
+downtime() {
+  local n=$1 backend=$2 failed=0 deadline
+  deadline=$(($(date +%s) + $3))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    [ "$(via "$n")" = "$backend" ] || failed=$((failed + 1))
+    sleep 0.1
+  done
+  echo "$failed"
+}
+
+scenario_satellite() {
+  echo "Scenario satellite: an instance behind a NAT serves its router through the link it opens"
+  if [ "$TRANSPORT" = tcp ]; then
+    echo "  skipped: a satellite is reached back over QUIC"
+    return
+  fi
+  reset
+  server http 3
+  dyn 3 http=0
+  MK_PEERS="[]" mk 1
+  python3 "$HELPERS/udp_nat.py" 17499 127.0.0.1:7441 "$WORK/nat.mappings" > /dev/null 2>&1 &
+  echo $! >> "$WORK/servers.pid"
+  echo $! > "$WORK/server-nat-1.pid"
+  MK_PEERS='["127.0.0.1:17499"]' MK_SATELLITE=1 MK_TRANSPORT=quic mk 3
+  start 1
+  start 3
+
+  eventually "the router of the satellite is served by srv1" 20 via_is 1 backend3
+  equal "entry point middleware on srv1, router middleware on the satellite" "backend3 srv1 srv3" "$(via 1 backend entry own)"
+  equal "srv1 reaches the satellite back at the address of the NAT" "$(head -1 "$WORK/nat.mappings")" "$(link_address 1 srv3)"
+  equal "srv1 sees srv3 as a satellite" satellite "$(mesh 1 "' '.join(l.get('role', '') for l in a['links'] if l.get('nodeID') == 'srv3')")"
+
+  local before failed
+  before=$(link_address 1 srv3)
+  kill -USR1 "$(cat "$WORK/server-nat-1.pid")"
+  failed=$(downtime 1 backend3 8)
+  eventually "the NAT maps the satellite to another port: srv1 follows" 10 test "$(link_address 1 srv3)" != "$before"
+  check "requests through srv1 while the NAT remaps: $failed of about 80 failed" test "$failed" -lt 40
+  eventually "the router of the satellite is served again after the remapping" 10 via_is 1 backend3
+
+  stop 3
+  eventually "the satellite stops: srv1 forgets it" 20 forgot 1 srv3
+  eventually "the router of the satellite leaves srv1" 10 status_is 1 404
+}
+
 scenario_config() {
   echo "Scenario config: the instances compare their entry points, and count their routers"
   reset
@@ -626,6 +702,7 @@ scenario_config() {
 
 cleanup() {
   stop_all 2> /dev/null
+  keep_logs
   if [ "${KEEP:-0}" = 1 ] || [ "$FAILURES" -gt 0 ]; then
     echo "Logs kept in $WORK"
   else
@@ -647,7 +724,7 @@ fi
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/server.key" -out "$WORK/server.crt" -days 2 \
   -subj "/CN=pass.localhost" -addext "subjectAltName=DNS:pass.localhost" 2> /dev/null || exit 2
 
-[ $# -eq 0 ] && set -- formation token http priority tcp udp fallback config
+[ $# -eq 0 ] && set -- formation token http priority tcp udp fallback config satellite
 
 echo "Links of the mesh: $TRANSPORT"
 
@@ -657,7 +734,13 @@ for name in "$@"; do
     exit 2
   fi
   "scenario_$name"
+  SCENARIO=$name
 done
+
+# The last scenario is checked for crashes before the count.
+stop_all
+keep_logs
+SCENARIO=""
 
 echo
 echo "$((CHECKS - FAILURES)) of $CHECKS checks passed"

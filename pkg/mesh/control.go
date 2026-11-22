@@ -43,6 +43,8 @@ type peersAnswer struct {
 
 // ServeHTTP answers the requests the other instances send through their links.
 func (m *Mesh) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	m.observeSatellite(req)
+
 	// A request that another instance forwards carries the header, whatever its host.
 	if req.Header.Get(headerForward) != "" {
 		m.serveForwarded(rw, req)
@@ -97,6 +99,11 @@ func (m *Mesh) serveHello(rw http.ResponseWriter, req *http.Request) {
 	if theirs.NodeID != m.member.NodeID() && (!m.conf.Satellite || roleOf(theirs) != RoleSatellite) {
 		m.greeted(theirs, req.RemoteAddr)
 		m.compareConfiguration(theirs)
+
+		// A satellite is reached back over QUIC, through the mapping its NAT opened for its link.
+		if roleOf(theirs) == RoleSatellite && !m.conf.Satellite && req.ProtoMajor == 3 {
+			m.learnSatellite(theirs.NodeID, req.RemoteAddr)
+		}
 
 		// The instance that opened the link is linked back, at the addresses it says it is reached at,
 		// and so are the instances it is in contact with.

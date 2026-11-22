@@ -27,6 +27,8 @@ const (
 	sourceExchange = "exchange"
 	// sourceFile is the file of the instances learned before the last stop.
 	sourceFile = "file"
+	// sourceSatellite is a satellite that linked to this instance, reached back at the address its link came from.
+	sourceSatellite = "satellite"
 )
 
 const (
@@ -80,6 +82,10 @@ type peerEntry struct {
 
 	link   *link
 	cancel context.CancelFunc
+
+	// satellite is set for an instance reached back through the link it opened. It is never told to the others
+	// nor written to the file, and is only dialed over QUIC, from the port of the mesh.
+	satellite bool
 }
 
 type peersFile struct {
@@ -137,6 +143,11 @@ func (m *Mesh) learnAt(source, nodeID string, addresses []string, learnedAt, las
 		m.byNode[nodeID] = entry
 		m.dirty = true
 
+		return
+	}
+
+	// A satellite is reached at the address its link comes from, whatever is told about it.
+	if entry.satellite {
 		return
 	}
 
@@ -245,10 +256,15 @@ func (m *Mesh) connected(entry *peerEntry, address string, theirs hello) error {
 		return errors.New("this instance answers at the address")
 	}
 
-	if roleOf(theirs) == RoleSatellite {
+	switch {
+	case roleOf(theirs) == RoleSatellite && !entry.satellite:
 		m.refuseSatelliteLocked(entry, address)
 
 		return errSatellitePeer
+
+	case entry.satellite && (roleOf(theirs) != RoleSatellite || theirs.NodeID != entry.nodeID):
+		// The address a satellite came from now leads to another instance: the satellite comes back by itself.
+		return fmt.Errorf("the instance %q answers where the satellite %q came from", theirs.NodeID, entry.nodeID)
 	}
 
 	switch {
@@ -317,6 +333,11 @@ func (m *Mesh) knownPeers() []peerInfo {
 
 	var peers []peerInfo
 	for entry := range m.entries {
+		// A satellite is only reached through the link it opens: its address is worth nothing to the others.
+		if entry.satellite {
+			continue
+		}
+
 		if entry.nodeID != "" && now.Sub(entry.lastContact) <= 3*m.linkTimeout {
 			peers = append(peers, peerInfo{NodeID: entry.nodeID, Addresses: slices.Clone(entry.addresses)})
 		}
@@ -529,8 +550,8 @@ func (m *Mesh) savePeers(force bool) {
 
 	file := peersFile{Version: peersFileVersion, Peers: []peerInfo{}}
 	for entry := range m.entries {
-		// An instance that never answered has nothing worth dialing at the next startup.
-		if entry.nodeID == "" || entry.lastContact.IsZero() {
+		// An instance that never answered has nothing worth dialing at the next startup, and a satellite comes back by itself.
+		if entry.nodeID == "" || entry.lastContact.IsZero() || entry.satellite {
 			continue
 		}
 

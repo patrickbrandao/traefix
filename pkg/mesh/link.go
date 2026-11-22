@@ -102,6 +102,12 @@ func (l *link) run(ctx context.Context) {
 		case err != nil:
 			l.setDown(ctx, err)
 
+			// A satellite is reached back for as long as it links to this instance, and not after.
+			if l.entry.satellite && !l.mesh.satelliteAlive(l.entry.nodeID) {
+				l.mesh.forgetSatellite(l.entry)
+				return
+			}
+
 			select {
 			case <-time.After(wait):
 				wait = min(wait*2, l.mesh.redialLongest)
@@ -212,6 +218,11 @@ func (l *link) connect(ctx context.Context) (*session, string, error) {
 
 // dial opens a session at an address with the transport the configuration asks for.
 func (l *link) dial(ctx context.Context, address string) (*session, hello, error) {
+	// A satellite is only reached back over QUIC: nothing reaches it over TCP.
+	if l.entry.satellite {
+		return l.open(ctx, address, TransportQUIC, l.mesh.linkTimeout)
+	}
+
 	switch l.mesh.conf.Transport {
 	case cluster.MeshTransportQUIC:
 		return l.open(ctx, address, TransportQUIC, l.mesh.linkTimeout)
