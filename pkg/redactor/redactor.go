@@ -22,11 +22,7 @@ const (
 // Anonymize redacts the configuration fields that do not have an export=true struct tag.
 // It returns the resulting marshaled configuration.
 func Anonymize(baseConfig any) (string, error) {
-	return anonymize(baseConfig, false)
-}
-
-func anonymize(baseConfig any, indent bool) (string, error) {
-	conf, err := do(baseConfig, tagExport, true, indent)
+	conf, err := do(baseConfig, tagExport, true)
 	if err != nil {
 		return "", err
 	}
@@ -36,16 +32,12 @@ func anonymize(baseConfig any, indent bool) (string, error) {
 // RemoveCredentials redacts the configuration fields that have a loggable=false struct tag.
 // It returns the resulting marshaled configuration.
 func RemoveCredentials(baseConfig any) (string, error) {
-	return removeCredentials(baseConfig, false)
-}
-
-func removeCredentials(baseConfig any, indent bool) (string, error) {
-	return do(baseConfig, tagLoggable, false, indent)
+	return do(baseConfig, tagLoggable, false)
 }
 
 // do marshals the given configuration, while redacting some of the fields
 // respectively to the given tag.
-func do(baseConfig any, tag string, redactByDefault, indent bool) (string, error) {
+func do(baseConfig any, tag string, redactByDefault bool) (string, error) {
 	anomConfig, err := copystructure.Copy(baseConfig)
 	if err != nil {
 		return "", err
@@ -58,7 +50,7 @@ func do(baseConfig any, tag string, redactByDefault, indent bool) (string, error
 		return "", err
 	}
 
-	configJSON, err := marshal(anomConfig, indent)
+	configJSON, err := json.Marshal(anomConfig)
 	if err != nil {
 		return "", err
 	}
@@ -211,11 +203,4 @@ func isExported(f reflect.StructField) bool {
 		return false
 	}
 	return true
-}
-
-func marshal(anomConfig any, indent bool) ([]byte, error) {
-	if indent {
-		return json.MarshalIndent(anomConfig, "", "  ")
-	}
-	return json.Marshal(anomConfig)
 }

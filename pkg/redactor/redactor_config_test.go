@@ -1,6 +1,8 @@
 package redactor
 
 import (
+	"bytes"
+	"encoding/json"
 	"flag"
 	"os"
 	"strings"
@@ -36,9 +38,7 @@ import (
 
 var updateExpected = flag.Bool("update_expected", false, "Update expected files in fixtures")
 
-var fullDynConf *dynamic.Configuration
-
-func init() {
+func fullDynamicConfiguration() *dynamic.Configuration {
 	config := &dynamic.Configuration{}
 	config.HTTP = &dynamic.HTTPConfiguration{
 		Routers: map[string]*dynamic.Router{
@@ -473,37 +473,41 @@ func init() {
 		},
 	}
 
-	fullDynConf = config
+	return config
 }
 
 func TestAnonymize_dynamicConfiguration(t *testing.T) {
-	config := fullDynConf
+	config := fullDynamicConfiguration()
 
 	expectedConfiguration, err := os.ReadFile("./testdata/anonymized-dynamic-config.json")
 	require.NoError(t, err)
 
-	cleanJSON, err := anonymize(config, true)
+	cleanJSON, err := Anonymize(config)
 	require.NoError(t, err)
 
 	if *updateExpected {
-		require.NoError(t, os.WriteFile("testdata/anonymized-dynamic-config.json", []byte(cleanJSON), 0o666))
+		var indented bytes.Buffer
+		require.NoError(t, json.Indent(&indented, []byte(cleanJSON), "", "  "))
+		require.NoError(t, os.WriteFile("testdata/anonymized-dynamic-config.json", indented.Bytes(), 0o666))
 	}
 
 	expected := strings.TrimSuffix(string(expectedConfiguration), "\n")
 	assert.JSONEq(t, expected, cleanJSON)
 }
 
-func TestSecure_dynamicConfiguration(t *testing.T) {
-	config := fullDynConf
+func TestRemoveCredentials_dynamicConfiguration(t *testing.T) {
+	config := fullDynamicConfiguration()
 
 	expectedConfiguration, err := os.ReadFile("./testdata/secured-dynamic-config.json")
 	require.NoError(t, err)
 
-	cleanJSON, err := removeCredentials(config, true)
+	cleanJSON, err := RemoveCredentials(config)
 	require.NoError(t, err)
 
 	if *updateExpected {
-		require.NoError(t, os.WriteFile("testdata/secured-dynamic-config.json", []byte(cleanJSON), 0o666))
+		var indented bytes.Buffer
+		require.NoError(t, json.Indent(&indented, []byte(cleanJSON), "", "  "))
+		require.NoError(t, os.WriteFile("testdata/secured-dynamic-config.json", indented.Bytes(), 0o666))
 	}
 
 	expected := strings.TrimSuffix(string(expectedConfiguration), "\n")
@@ -1005,17 +1009,19 @@ func fullStaticConfiguration() *static.Configuration {
 	return config
 }
 
-func TestDo_staticConfiguration(t *testing.T) {
+func TestAnonymize_staticConfiguration(t *testing.T) {
 	config := fullStaticConfiguration()
 
 	expectedConfiguration, err := os.ReadFile("./testdata/anonymized-static-config.json")
 	require.NoError(t, err)
 
-	cleanJSON, err := anonymize(config, true)
+	cleanJSON, err := Anonymize(config)
 	require.NoError(t, err)
 
 	if *updateExpected {
-		require.NoError(t, os.WriteFile("testdata/anonymized-static-config.json", []byte(cleanJSON), 0o666))
+		var indented bytes.Buffer
+		require.NoError(t, json.Indent(&indented, []byte(cleanJSON), "", "  "))
+		require.NoError(t, os.WriteFile("testdata/anonymized-static-config.json", indented.Bytes(), 0o666))
 	}
 
 	expected := strings.TrimSuffix(string(expectedConfiguration), "\n")
@@ -1028,11 +1034,13 @@ func TestRemoveCredentials_staticConfiguration(t *testing.T) {
 	expectedConfiguration, err := os.ReadFile("./testdata/secured-static-config.json")
 	require.NoError(t, err)
 
-	cleanJSON, err := removeCredentials(config, true)
+	cleanJSON, err := RemoveCredentials(config)
 	require.NoError(t, err)
 
 	if *updateExpected {
-		require.NoError(t, os.WriteFile("testdata/secured-static-config.json", []byte(cleanJSON), 0o666))
+		var indented bytes.Buffer
+		require.NoError(t, json.Indent(&indented, []byte(cleanJSON), "", "  "))
+		require.NoError(t, os.WriteFile("testdata/secured-static-config.json", indented.Bytes(), 0o666))
 	}
 
 	expected := strings.TrimSuffix(string(expectedConfiguration), "\n")
