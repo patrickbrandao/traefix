@@ -5,10 +5,6 @@ description: "Run a Traefix instance behind NAT as a satellite of the cluster me
 
 A satellite is a Traefix instance on a host that accepts no connection from outside, such as a host behind a home router, behind carrier-grade NAT, or behind a firewall that only lets connections out. The satellite dials the other instances of the [mesh](./cluster-mesh.md), and announces its routers to them. The option is specific to Traefix, the fork of Traefik Proxy.
 
-!!! warning "Work in progress"
-
-    In this version, a satellite doesn't get the certificates of its routers yet.
-
 ## Configuration Examples
 
 ```yaml tab="File (YAML)"
@@ -57,7 +53,7 @@ Traefix doesn't start a satellite:
 - **The other instances only reach a satellite back.** They don't dial it at an address of their own, don't tell each other about it, and drop an address of a satellite in a list of peers with a warning. See [How the Other Instances Reach a Satellite](#how-the-other-instances-reach-a-satellite).
 - **A satellite doesn't link to another satellite.**
 - **A satellite announces its routers, and imports none.** The routers of the other instances don't become routers of the satellite.
-- **A satellite doesn't ask a CA for a certificate.** Its ACME certificate resolvers don't start, and Traefix logs a warning. The routers of the satellite still name the resolvers, which are the ones with the same names on the other instances.
+- **A satellite doesn't ask a CA for a certificate.** Its ACME certificate resolvers don't start, and Traefix logs a warning. The routers of the satellite still name the resolvers, which are the ones with the same names on the other instances. See [Certificates of a Satellite](#certificates-of-a-satellite).
 - **A satellite is a full member of the cluster.** It holds the token of the cluster. Anyone who takes over the host of a satellite can join the mesh and announce any router: to remove a satellite, [change the token](./cluster-mesh.md#change-the-token).
 
 In the [API](./cluster-mesh.md#api), `GET /api/mesh` returns `role`: `satellite` or `member`. Each link and each inbound instance has the role that the other instance told.
@@ -75,4 +71,16 @@ A satellite links to an instance, and the instance dials it back at the address 
 - **With `transport: quic`, the satellite never opens the connection over TCP.** An instance that doesn't reach it back over QUIC doesn't serve its routers, and the satellite logs a warning.
 
 In the [API](./cluster-mesh.md#api) of an instance, the link to a satellite has the address the satellite came from, `satellite` among its sources, and the transport `quic`, or `tcp-reverse` for the connection over TCP that the satellite opened. The `traefik_mesh_link_up` metric has the same transport.
+
+## Certificates of a Satellite
+
+The TLS connection of a visitor ends at the instance it reaches, so that instance holds the certificate of a router of the satellite.
+
+- **The other instances ask the CA for the certificates of the routers of the satellite.** A router that names a certificate resolver gets its certificate from the resolver with the same name on each instance that serves it, as the routers of the instance do. Declare the resolver on those instances. With the [`certStore`](./tls/certificate-resolvers/acme-certstore.md) in a Redis server, one instance asks, and the others get the certificate from the server.
+- **The satellite serves the certificates on its own entry points.** It gets them from the instances it links to, for the clients that reach it directly, such as the ones on its local network. It only gets the certificates of the domains of its routers that name a resolver.
+- **A new certificate reaches the satellite within seconds.** The satellite asks one second after its link opens or its routers change, then twice as late each time, up to every 30 seconds. A renewal reaches it within 30 seconds.
+- **The satellite keeps the certificates in memory.** It serves them while no other instance is reachable, until they expire. After a restart, it serves the default certificate until an instance answers.
+- **Declare the resolvers on the satellite too.** A resolver of the satellite doesn't start, and its name keeps Traefix from logging that a router uses a nonexistent resolver.
+
+In the [API](./cluster-mesh.md#api) of a satellite, `certificates` lists the certificates it serves, with their resolver, domains and expiry.
 

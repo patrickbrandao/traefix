@@ -123,6 +123,7 @@ func (n *testNode) start() {
 	n.mesh.SetEntryPoints([]string{"traefik", "web", "websecure"}, []string{"dns"}, []string{"web", "websecure"})
 	n.mesh.SetEntryPointSummaries(n.entryPoints)
 	n.mesh.reverseGrace = 200 * time.Millisecond
+	n.mesh.certificatesInterval = 100 * time.Millisecond
 
 	if n.configure != nil {
 		n.configure(n.mesh)

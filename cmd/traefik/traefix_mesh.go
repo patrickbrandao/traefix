@@ -1,13 +1,17 @@
 package main
 
 import (
+	"crypto/x509"
+	"encoding/pem"
 	"slices"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/traefik/traefik/v3/pkg/api"
 	"github.com/traefik/traefik/v3/pkg/config/static"
 	"github.com/traefik/traefik/v3/pkg/fingerprint"
 	"github.com/traefik/traefik/v3/pkg/mesh"
+	"github.com/traefik/traefik/v3/pkg/provider/acme"
 	"github.com/traefik/traefik/v3/pkg/provider/aggregator"
 	"github.com/traefik/traefik/v3/pkg/safe"
 	"github.com/traefik/traefik/v3/pkg/server"
@@ -16,7 +20,7 @@ import (
 
 // wireMesh connects the mesh to the routing, and runs it (Traefix):
 // the mesh reads the routers of the local providers, gives the routers of the other instances, and serves their services.
-func wireMesh(node *mesh.Mesh, conf *static.Configuration, providerAggregator *aggregator.ProviderAggregator, managerFactory *service.ManagerFactory, routerFactory *server.RouterFactory, watcher *server.ConfigurationWatcher, routinesPool *safe.Pool) error {
+func wireMesh(node *mesh.Mesh, conf *static.Configuration, providerAggregator *aggregator.ProviderAggregator, managerFactory *service.ManagerFactory, routerFactory *server.RouterFactory, watcher *server.ConfigurationWatcher, routinesPool *safe.Pool, acmeProviders []*acme.Provider) error {
 	if node == nil {
 		return nil
 	}
@@ -48,6 +52,7 @@ func wireMesh(node *mesh.Mesh, conf *static.Configuration, providerAggregator *a
 	// The fingerprints of the requests the other instances forward are recorded even without an entry point that measures them here.
 	fingerprint.EnableForwarded()
 	watcher.AddTransformer(node.Transform)
+	node.SetCertificateSource(acmeCertificates(acmeProviders))
 	api.AddTraefixRoute("/api/mesh", node.APIHandler())
 
 	routinesPool.GoCtx(node.Run)
@@ -109,4 +114,57 @@ func satelliteResolvers(conf *static.Configuration) (*static.Configuration, []st
 	withoutACME.CertificatesResolvers = resolvers
 
 	return &withoutACME, names
+}
+
+// acmeCertificates gives the mesh the certificates of the ACME resolvers of this instance, for the satellites that serve
+// the domains of the routers they announce.
+func acmeCertificates(providers []*acme.Provider) mesh.CertificateSource {
+	byName := make(map[string]*acme.Provider, len(providers))
+	for _, provider := range providers {
+		byName[provider.ResolverName] = provider
+	}
+
+	return func(resolver string) ([]mesh.Certificate, error) {
+		provider, ok := byName[resolver]
+		if !ok || provider.Store == nil {
+			return nil, nil
+		}
+
+		stored, err := provider.Store.GetCertificates(resolver)
+		if err != nil {
+			return nil, err
+		}
+
+		certificates := make([]mesh.Certificate, 0, len(stored))
+
+		for _, certificate := range stored {
+			if certificate == nil || len(certificate.Certificate.Certificate) == 0 || len(certificate.Key) == 0 {
+				continue
+			}
+
+			certificates = append(certificates, mesh.Certificate{
+				Domains:     certificate.Domain.ToStrArray(),
+				Certificate: string(certificate.Certificate.Certificate),
+				Key:         string(certificate.Key),
+				NotAfter:    notAfter(certificate.Certificate.Certificate),
+			})
+		}
+
+		return certificates, nil
+	}
+}
+
+// notAfter returns the end of the validity of the first certificate of a PEM chain, or the zero time.
+func notAfter(chain []byte) time.Time {
+	block, _ := pem.Decode(chain)
+	if block == nil {
+		return time.Time{}
+	}
+
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return time.Time{}
+	}
+
+	return certificate.NotAfter
 }

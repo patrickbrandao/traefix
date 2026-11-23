@@ -20,6 +20,8 @@ type apiStatus struct {
 	Exported []Route `json:"exported"`
 	// Imported are the routes the other instances announce, and what this instance made of them.
 	Imported []ImportedRoute `json:"imported"`
+	// Certificates are the ones a satellite serves, from the instances it links to.
+	Certificates []apiCertificate `json:"certificates,omitempty"`
 }
 
 type apiLink struct {
@@ -38,6 +40,12 @@ type apiLink struct {
 	Routes int `json:"routes"`
 	// ConfigMismatch are the entry points that the instance has with the same name and another configuration.
 	ConfigMismatch []string `json:"configMismatch,omitempty"`
+}
+
+type apiCertificate struct {
+	Resolver string    `json:"resolver"`
+	Domains  []string  `json:"domains"`
+	NotAfter time.Time `json:"notAfter"`
 }
 
 type apiInbound struct {
@@ -66,6 +74,17 @@ func (m *Mesh) APIHandler() http.Handler {
 		m.mu.Lock()
 		answer.Exported = slices.Clone(m.exported)
 		answer.Imported = slices.Clone(m.importReport)
+
+		if m.conf.Satellite {
+			answer.Certificates = []apiCertificate{}
+			for _, certificate := range m.certificatesInUseLocked() {
+				answer.Certificates = append(answer.Certificates, apiCertificate{
+					Resolver: certificate.Resolver,
+					Domains:  certificate.Domains,
+					NotAfter: certificate.NotAfter,
+				})
+			}
+		}
 
 		routes := map[string]int{}
 		for nodeID, table := range m.imported {

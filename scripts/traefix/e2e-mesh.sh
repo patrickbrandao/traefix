@@ -9,7 +9,9 @@
 #   TRAEFIK=./traefik scripts/traefix/e2e-mesh.sh  # uses a binary already built
 #   LOG_LEVEL=DEBUG scripts/traefix/e2e-mesh.sh
 #
-# Scenarios: formation token http priority tcp udp fallback config satellite satellite-tcp
+# Scenarios: formation token http priority tcp udp fallback config satellite satellite-tcp satellite-certs
+#
+# The scenario satellite-certs needs Pebble as the CA: go install github.com/letsencrypt/pebble/v2/cmd/pebble@latest
 
 set -u
 
@@ -17,6 +19,9 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 HELPERS="$ROOT/scripts/traefix/e2e-mesh"
 WORK=${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/traefix-e2e-mesh.XXXXXX")}
 TRANSPORT=${TRANSPORT:-auto}
+
+PEBBLE=${PEBBLE:-$(command -v pebble || echo "$(go env GOPATH 2> /dev/null)/bin/pebble")}
+PEBBLE_PORT=14000
 
 TOKEN_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 TOKEN_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
@@ -86,6 +91,9 @@ MK_PEERS="[]"
 MK_PEERS_FILE=0
 MK_EXTRA_MIDDLEWARE=0
 MK_SATELLITE=0
+MK_RESOLVER=0
+# The CA may resolve a name under .localhost to ::1: the entry point of its validations listens on every address then.
+MK_WEB_HOST=127.0.0.1
 
 # mk <instance>: writes the install configuration of an instance.
 mk() {
@@ -96,7 +104,7 @@ mk() {
     cat << EOF
 entryPoints:
   web:
-    address: "127.0.0.1:1808$n"
+    address: "${MK_WEB_HOST}:1808$n"
     http:
       middlewares:
         - entry@file
@@ -137,6 +145,20 @@ EOF
 EOF
     [ "$MK_SATELLITE" = 1 ] && echo "    satellite: true"
     [ "$MK_PEERS_FILE" = 1 ] && echo "    peersFile: $WORK/n$n/peers.json"
+    if [ "$MK_RESOLVER" = 1 ]; then
+      cat << EOF
+certificatesResolvers:
+  le:
+    acme:
+      email: ops@example.com
+      caServer: https://127.0.0.1:$PEBBLE_PORT/dir
+      caCertificates:
+        - $WORK/pebble.crt
+      storage: $WORK/n$n/acme.json
+      httpChallenge:
+        entryPoint: web
+EOF
+    fi
   } > "$WORK/n$n/traefik.yml"
 }
 
@@ -346,6 +368,8 @@ reset() {
   MK_PEERS_FILE=0
   MK_EXTRA_MIDDLEWARE=0
   MK_SATELLITE=0
+  MK_RESOLVER=0
+  MK_WEB_HOST=127.0.0.1
 }
 
 # mesh <instance> <python expression on the answer of /api/mesh, as a>: prints the value.
@@ -672,6 +696,86 @@ scenario_satellite-tcp() {
   eventually "the router of the satellite leaves srv1" 10 status_is 1 404
 }
 
+# issuer_of <port> <server name>: prints the issuer and the serial of the certificate served at the port for the name.
+issuer_of() {
+  openssl s_client -connect "127.0.0.1:$1" -servername "$2" < /dev/null 2> /dev/null |
+    openssl x509 -noout -issuer -serial 2> /dev/null | tr '\n' ' '
+}
+
+# pebble_issued <port> <server name>: the certificate served at the port for the name comes from Pebble.
+pebble_issued() {
+  issuer_of "$1" "$2" | grep -q Pebble
+}
+
+scenario_satellite-certs() {
+  echo "Scenario satellite-certs: the central asks the CA for the certificate of a router of the satellite, and the satellite serves it"
+  if [ ! -x "$PEBBLE" ]; then
+    echo "  skipped: Pebble is not installed"
+    return
+  fi
+  reset
+
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/pebble.key" -out "$WORK/pebble.crt" -days 2 \
+    -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2> /dev/null
+  cat > "$WORK/pebble.json" << EOF
+{
+  "pebble": {
+    "listenAddress": "127.0.0.1:$PEBBLE_PORT",
+    "managementListenAddress": "127.0.0.1:15000",
+    "certificate": "$WORK/pebble.crt",
+    "privateKey": "$WORK/pebble.key",
+    "httpPort": 18081,
+    "tlsPort": 18998,
+    "ocspResponderURL": "",
+    "externalAccountBindingRequired": false
+  }
+}
+EOF
+  PEBBLE_VA_NOSLEEP=1 PEBBLE_WFE_NONCEREJECT=0 "$PEBBLE" -config "$WORK/pebble.json" > "$WORK/pebble.log" 2>&1 &
+  echo $! >> "$WORK/servers.pid"
+  wait_until 10 curl -sk "https://127.0.0.1:$PEBBLE_PORT/dir"
+
+  server http 3
+  dyn 1
+  dyn 3
+  # The router of the satellite names the resolver of the central, on an entry point both have.
+  cat >> "$WORK/n3/dynamic.yml" << EOF
+  routers:
+    nas:
+      rule: "Host(\`nas.localhost\`)"
+      entryPoints: [tls]
+      service: nas
+      tls:
+        certResolver: le
+  services:
+    nas:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:19003"
+EOF
+  MK_PEERS="[]" MK_RESOLVER=1 MK_WEB_HOST="" mk 1
+  MK_PEERS='["127.0.0.1:7441"]' MK_SATELLITE=1 MK_RESOLVER=1 mk 3
+  start 1
+  start 3
+
+  eventually "the central gets the certificate of the router of the satellite from the CA" 60 pebble_issued 17101 nas.localhost
+  eventually "the satellite serves that certificate on its own entry point" 60 pebble_issued 17103 nas.localhost
+  equal "the same certificate on both" "$(issuer_of 17101 nas.localhost)" "$(issuer_of 17103 nas.localhost)"
+  check "the satellite did not ask the CA itself" test ! -f "$WORK/n3/acme.json"
+  equal "the API of the satellite lists the certificate" "nas.localhost" \
+    "$(mesh 3 "' '.join(d for c in a.get('certificates', []) for d in c['domains'])")"
+  check "no error about the resolver on the satellite" no_resolver_error 3
+
+  stop 1
+  sleep 2
+  check "the central stops: the satellite still serves the certificate" pebble_issued 17103 nas.localhost
+}
+
+# no_resolver_error <instance>: the log of the instance has no router with an unknown certificate resolver.
+no_resolver_error() {
+  ! grep -q "nonexistent certificate resolver" "$WORK/n$1/out.log"
+}
+
 scenario_satellite() {
   echo "Scenario satellite: an instance behind a NAT serves its router through the link it opens"
   if [ "$TRANSPORT" = tcp ]; then
@@ -758,7 +862,7 @@ fi
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/server.key" -out "$WORK/server.crt" -days 2 \
   -subj "/CN=pass.localhost" -addext "subjectAltName=DNS:pass.localhost" 2> /dev/null || exit 2
 
-[ $# -eq 0 ] && set -- formation token http priority tcp udp fallback config satellite satellite-tcp
+[ $# -eq 0 ] && set -- formation token http priority tcp udp fallback config satellite satellite-tcp satellite-certs
 
 echo "Links of the mesh: $TRANSPORT"
 

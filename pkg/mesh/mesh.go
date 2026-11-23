@@ -113,6 +113,12 @@ type Mesh struct {
 	// quicSeen is when each instance last sent a request over QUIC: on a satellite, that it reaches the satellite back.
 	quicSeen     map[string]time.Time
 	reverseGrace time.Duration
+
+	// certificateSource gives the certificates of the resolvers of this instance, for the satellites.
+	certificateSource CertificateSource
+	// received are the certificates the instances gave this satellite, by identifier.
+	received             map[string][]Certificate
+	certificatesInterval time.Duration
 	// routing serves these routers by name, for what the other instances forward.
 	routing atomic.Pointer[routing]
 	// tables are the routes as the requests need them.
@@ -217,45 +223,47 @@ func New(conf *cluster.Configuration, member *cluster.Cluster) (*Mesh, error) {
 	}
 
 	m := &Mesh{
-		conf:               conf.Mesh,
-		member:             member,
-		identity:           identity,
-		advertise:          advertise,
-		version:            version.Version,
-		logger:             logger,
-		linkTimeout:        linkTimeout,
-		quicDialTimeout:    min(defaultQUICDialTimeout, linkTimeout),
-		quicRetryInterval:  defaultQUICRetryInterval,
-		redialFirst:        defaultRedialFirst,
-		redialLongest:      defaultRedialLongest,
-		discoverInterval:   defaultDiscoverInterval,
-		dnsInterval:        defaultDNSInterval,
-		exchangeInterval:   defaultExchangeInterval,
-		now:                time.Now,
-		listener:           l,
-		inbound:            map[string]InboundStatus{},
-		entries:            map[*peerEntry]struct{}{},
-		byNode:             map[string]*peerEntry{},
-		byAddress:          map[string]*peerEntry{},
-		selfAddresses:      map[string]struct{}{},
-		satelliteAddresses: map[string]struct{}{},
-		refused:            map[string]struct{}{},
-		routesPollTimeout:  routesPollTimeout,
-		publishDelay:       publishDelay,
-		exported:           []Route{},
-		exportChanged:      make(chan struct{}),
-		localRouters:       map[string]struct{}{},
-		imported:           map[string]*importedTable{},
-		warned:             map[string]struct{}{},
-		publishCh:          make(chan struct{}, 1),
-		localHTTP:          map[string]*dynamic.Router{},
-		localTCP:           map[string]*dynamic.TCPRouter{},
-		localUDP:           map[string]*dynamic.UDPRouter{},
-		mismatches:         map[string][]string{},
-		quicSeen:           map[string]time.Time{},
-		reverseGrace:       defaultReverseGrace,
-		quarantines:        map[string]*quarantine{},
-		healthInterval:     defaultHealthInterval,
+		conf:                 conf.Mesh,
+		member:               member,
+		identity:             identity,
+		advertise:            advertise,
+		version:              version.Version,
+		logger:               logger,
+		linkTimeout:          linkTimeout,
+		quicDialTimeout:      min(defaultQUICDialTimeout, linkTimeout),
+		quicRetryInterval:    defaultQUICRetryInterval,
+		redialFirst:          defaultRedialFirst,
+		redialLongest:        defaultRedialLongest,
+		discoverInterval:     defaultDiscoverInterval,
+		dnsInterval:          defaultDNSInterval,
+		exchangeInterval:     defaultExchangeInterval,
+		now:                  time.Now,
+		listener:             l,
+		inbound:              map[string]InboundStatus{},
+		entries:              map[*peerEntry]struct{}{},
+		byNode:               map[string]*peerEntry{},
+		byAddress:            map[string]*peerEntry{},
+		selfAddresses:        map[string]struct{}{},
+		satelliteAddresses:   map[string]struct{}{},
+		refused:              map[string]struct{}{},
+		routesPollTimeout:    routesPollTimeout,
+		publishDelay:         publishDelay,
+		exported:             []Route{},
+		exportChanged:        make(chan struct{}),
+		localRouters:         map[string]struct{}{},
+		imported:             map[string]*importedTable{},
+		warned:               map[string]struct{}{},
+		publishCh:            make(chan struct{}, 1),
+		localHTTP:            map[string]*dynamic.Router{},
+		localTCP:             map[string]*dynamic.TCPRouter{},
+		localUDP:             map[string]*dynamic.UDPRouter{},
+		mismatches:           map[string][]string{},
+		quicSeen:             map[string]time.Time{},
+		reverseGrace:         defaultReverseGrace,
+		received:             map[string][]Certificate{},
+		certificatesInterval: defaultCertificatesInterval,
+		quarantines:          map[string]*quarantine{},
+		healthInterval:       defaultHealthInterval,
 	}
 
 	m.tables.Store(newForwardTables())

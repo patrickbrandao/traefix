@@ -345,6 +345,11 @@ func (m *Mesh) buildConfiguration() (*dynamic.Configuration, []ImportedRoute) {
 	// or when the servers of one of them go down: the requests read them each time.
 	m.tables.Store(tables)
 
+	// A satellite serves the certificates of its routers that the instances it links to asked a CA for.
+	if m.conf.Satellite {
+		conf.TLS = &dynamic.TLSConfiguration{Certificates: m.tlsCertificates()}
+	}
+
 	return conf, report
 }
 

@@ -139,7 +139,12 @@ func (l *link) run(ctx context.Context) {
 			}
 
 			// A satellite keeps a link over TCP open for the instance, when the instance does not reach it over QUIC.
+			// It also asks the instance for the certificates of the routers it announces.
+			var wg sync.WaitGroup
+			wg.Go(func() { l.certificatesLoop(followCtx, s.peer) })
+
 			l.reverseLoop(followCtx, address, s.peer)
+			wg.Wait()
 		}()
 
 		err = l.watch(ctx, address)

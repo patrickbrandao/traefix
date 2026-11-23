@@ -281,7 +281,14 @@ os seus routers, não importa nenhum, não usa Valkey e não pede certificado à
 - **Reserva por TCP** (etapa 4): quando o central não volta por QUIC em 3 s, ou a ligação do satélite é por TCP, o
   satélite abre uma segunda conexão TCP à porta da malha com o ALPN `traefix-mesh-reverse/1` e serve HTTP/2 nela; o
   central é o cliente dessa conexão (transporte `tcp-reverse`) e a prefere só na falta de uma volta por QUIC. Código em
-  `pkg/mesh/reverse.go`; cenário `satellite-tcp` do `e2e-mesh.sh`. **Faltam os certificados para o satélite** (etapa 5).
+  `pkg/mesh/reverse.go`; cenário `satellite-tcp` do `e2e-mesh.sh`.
+- **Certificados** (etapa 5): o central pede à CA os certificados dos routers do satélite, como os dos seus routers
+  importados; o satélite consulta `/v1/certificates` pela ligação de saída (1 s, dobrando até 30 s, e de novo quando os
+  seus routers mudam; `ETag` para não reenviar) e recebe só os domínios dos routers que anuncia com `certResolver`. Ele os
+  serve nos seus entrypoints como `tls.certificates` do provider `mesh` e os guarda em memória até vencerem. Fonte no
+  central em `cmd/traefik/traefix_mesh.go` (`acmeCertificates`, pelo `Store` de cada resolver ACME); código em
+  `pkg/mesh/certificates.go`; cenário `satellite-certs` do `e2e-mesh.sh`, com o Pebble. **Falta o desafio HTTP-01 pela
+  malha** (etapa 6).
 
 ## Infopage
 
