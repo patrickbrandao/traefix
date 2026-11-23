@@ -74,6 +74,23 @@ func (m *Mesh) countReceived(peer, kind, result string) {
 	}
 }
 
+func (m *Mesh) setSatellites(up, down int) {
+	registry := m.registry()
+	if registry == nil {
+		return
+	}
+
+	registry.MeshSatellitesGauge().With("state", "up").Set(float64(up))
+	registry.MeshSatellitesGauge().With("state", "down").Set(float64(down))
+}
+
+// setDelivered follows how many certificates this instance gave a satellite in its last answer.
+func (m *Mesh) setDelivered(peer string, certificates int) {
+	if registry := m.registry(); registry != nil {
+		registry.MeshCertificatesDeliveredGauge().With("peer", peer).Set(float64(certificates))
+	}
+}
+
 func (m *Mesh) setConfigMismatch(peer string, differences int) {
 	if registry := m.registry(); registry != nil {
 		registry.MeshConfigMismatchGauge().With("peer", peer).Set(float64(differences))

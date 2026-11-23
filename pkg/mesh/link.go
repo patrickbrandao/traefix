@@ -405,7 +405,7 @@ func (l *link) setUp(s *session, address string) {
 
 	l.logger.Info().Str("peer", s.peer).Str("address", address).Str("transport", s.transport).Msg("Linked to an instance of the mesh")
 
-	l.mesh.linkChanged(previous, current)
+	l.mesh.linkChanged(previous, current, l.entry.satellite)
 }
 
 func (l *link) setRTT(nodeID string, rtt time.Duration) {
@@ -440,6 +440,9 @@ func (l *link) setDown(ctx context.Context, cause error) {
 	switch {
 	case previous.Up:
 		logger.Warn().Err(cause).Msg("Lost the link to an instance of the mesh")
+	case cause == errAwaitingReverse: //nolint:errorlint // Only the bare error tells that no QUIC attempt failed.
+		// A satellite that links over TCP is reached back over the connection it opens next: nothing failed.
+		logger.Debug().Err(cause).Msg("Waiting for a satellite of the mesh to open a link back over TCP")
 	case previous.Error != current.Error:
 		// The attempts repeat for as long as the other instance is away: only a new reason is worth a line.
 		logger.Warn().Err(cause).Msg("Unable to link to an instance of the mesh")
@@ -447,5 +450,5 @@ func (l *link) setDown(ctx context.Context, cause error) {
 		logger.Debug().Err(cause).Msg("Unable to link to an instance of the mesh")
 	}
 
-	l.mesh.linkChanged(previous, current)
+	l.mesh.linkChanged(previous, current, l.entry.satellite)
 }

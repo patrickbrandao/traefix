@@ -399,11 +399,11 @@ func (m *Mesh) seen(nodeID string) {
 }
 
 // linkChanged follows a link in the metrics.
-func (m *Mesh) linkChanged(previous, current LinkStatus) {
+func (m *Mesh) linkChanged(previous, current LinkStatus, satellite bool) {
 	// A link has no name in the metrics before the instance behind its address is known:
 	// until then it only counts among the links that are down.
 	if current.NodeID != "" {
-		for _, transport := range []string{TransportQUIC, TransportTCP} {
+		for _, transport := range linkTransports(satellite) {
 			m.setLinkUp(current.NodeID, transport, current.Up && current.Transport == transport)
 		}
 
@@ -412,7 +412,7 @@ func (m *Mesh) linkChanged(previous, current LinkStatus) {
 
 	// Another instance answers at the address by now.
 	if previous.NodeID != "" && previous.NodeID != current.NodeID {
-		for _, transport := range []string{TransportQUIC, TransportTCP} {
+		for _, transport := range linkTransports(satellite) {
 			m.setLinkUp(previous.NodeID, transport, false)
 		}
 
@@ -422,21 +422,41 @@ func (m *Mesh) linkChanged(previous, current LinkStatus) {
 	m.countPeers()
 }
 
-// countPeers follows the count of links in the metrics.
+// linkTransports returns the transports a link can be up with: only the link back to a satellite goes over a
+// connection the other end opened.
+func linkTransports(satellite bool) []string {
+	if satellite {
+		return []string{TransportQUIC, TransportTCP, TransportTCPReverse}
+	}
+
+	return []string{TransportQUIC, TransportTCP}
+}
+
+// countPeers follows the count of links in the metrics. The links back to the satellites count apart: a central can
+// have hundreds of them, and they are not instances it looks for.
 func (m *Mesh) countPeers() {
-	up, down := 0, 0
+	var peers, satellites [2]int
 
 	m.mu.Lock()
 	for entry := range m.entries {
+		counts := &peers
+		if entry.satellite {
+			counts = &satellites
+		}
+
 		if entry.link.snapshot().Up {
-			up++
+			counts[0]++
 		} else {
-			down++
+			counts[1]++
 		}
 	}
 	m.mu.Unlock()
 
-	m.setPeers(up, down)
+	m.setPeers(peers[0], peers[1])
+
+	if !m.conf.Satellite {
+		m.setSatellites(satellites[0], satellites[1])
+	}
 }
 
 // advertisedAddresses returns the addresses to tell the other instances, and whether they had to be guessed.

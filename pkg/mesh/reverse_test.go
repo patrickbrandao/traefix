@@ -1,12 +1,16 @@
 package mesh
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/traefik/traefik/v3/pkg/cluster"
+	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 )
 
 func satelliteOver(transport string) func(conf *cluster.Configuration) {
@@ -114,4 +118,69 @@ func TestMesh_reverse_refusesUnknownInstances(t *testing.T) {
 
 	_, known := central.linkTo("srv2")
 	assert.False(t, known)
+}
+
+func TestMesh_satellite_metricsAndAPI(t *testing.T) {
+	registry := newRecordingRegistry()
+
+	store := &fakeCertificates{certificates: map[string][]Certificate{}}
+	store.set("le", testCertificate("nas", time.Now().Add(30*24*time.Hour), "nas.example.com"))
+
+	central := newIdleTestNode(t, "srv1", testToken, nil)
+	central.registry = registry
+	central.start()
+	central.mesh.SetCertificateSource(store.source)
+
+	overTCP := newTestNode(t, "casa1", testToken, satelliteOver(cluster.MeshTransportTCP), central.address)
+	overTCP.mesh.Transform(t.Context(), dynamic.Configurations{
+		"docker": {HTTP: &dynamic.HTTPConfiguration{Routers: map[string]*dynamic.Router{
+			"nas": {Rule: "Host(`nas.example.com`)", EntryPoints: []string{"websecure"}, Service: "nas", TLS: &dynamic.RouterTLSConfig{CertResolver: "le"}},
+		}}},
+	})
+
+	overQUIC := newTestNode(t, "casa2", testToken, asSatellite, central.address)
+
+	gauge := func(g *recordingGauge, labels string) float64 {
+		v, _ := g.get(labels)
+		return v
+	}
+
+	// The links back to the satellites count apart from the instances the central looks for.
+	require.Eventually(t, func() bool {
+		return gauge(registry.satellites, "state=up;") == 2 &&
+			gauge(registry.linkUp, "peer=casa1=transport=tcp-reverse;") == 1 &&
+			gauge(registry.linkUp, "peer=casa2=transport=quic;") == 1 &&
+			gauge(registry.delivered, "peer=casa1;") == 1
+	}, 10*time.Second, 10*time.Millisecond)
+
+	assert.InDelta(t, 0, gauge(registry.peers, "state=up;"), 0)
+	assert.InDelta(t, 0, gauge(registry.delivered, "peer=casa2;"), 0)
+
+	// The API tells where the link of each satellite comes from, and how the central reaches it back.
+	recorder := httptest.NewRecorder()
+	central.mesh.APIHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/mesh", nil))
+
+	var status apiStatus
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&status))
+
+	links := map[string]apiLink{}
+	for _, link := range status.Links {
+		links[link.NodeID] = link
+	}
+
+	assert.Equal(t, RoleSatellite, links["casa1"].Role)
+	assert.Equal(t, TransportTCPReverse, links["casa1"].Transport)
+	assert.Empty(t, links["casa1"].Observed)
+	assert.Equal(t, RoleSatellite, links["casa2"].Role)
+	assert.Equal(t, TransportQUIC, links["casa2"].Transport)
+	assert.Equal(t, overQUIC.address, links["casa2"].Observed)
+
+	// A satellite that goes away leaves nothing up behind it.
+	overTCP.stop()
+
+	require.Eventually(t, func() bool {
+		return gauge(registry.satellites, "state=up;") == 1 &&
+			gauge(registry.linkUp, "peer=casa1=transport=tcp-reverse;") == 0 &&
+			gauge(registry.delivered, "peer=casa1;") == 0
+	}, 15*time.Second, 10*time.Millisecond)
 }

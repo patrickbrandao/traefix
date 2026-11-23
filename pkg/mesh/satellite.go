@@ -169,5 +169,11 @@ func (m *Mesh) forgetSatellite(entry *peerEntry) {
 
 	m.logger.Info().Str("peer", entry.nodeID).Msg("A satellite of the mesh no longer links to this instance: it is not reached back any more")
 
+	for _, transport := range linkTransports(true) {
+		m.setLinkUp(entry.nodeID, transport, false)
+	}
+
+	m.setLinkRTT(entry.nodeID, 0)
+	m.setDelivered(entry.nodeID, 0)
 	m.countPeers()
 }

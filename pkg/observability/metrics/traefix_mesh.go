@@ -11,36 +11,42 @@ import (
 )
 
 const (
-	meshPeersName    = MetricNamePrefix + "mesh_peers"
-	meshLinkUpName   = MetricNamePrefix + "mesh_link_up"
-	meshLinkRTTName  = MetricNamePrefix + "mesh_link_rtt_seconds"
-	meshRequestsName = MetricNamePrefix + "mesh_requests_total"
-	meshReceivedName = MetricNamePrefix + "mesh_received_total"
-	meshRoutesName   = MetricNamePrefix + "mesh_routes"
-	meshExportedName = MetricNamePrefix + "mesh_exported_routes"
-	meshPacketsName  = MetricNamePrefix + "mesh_udp_packets_total"
-	meshMismatchName = MetricNamePrefix + "mesh_config_mismatch"
+	meshPeersName      = MetricNamePrefix + "mesh_peers"
+	meshLinkUpName     = MetricNamePrefix + "mesh_link_up"
+	meshLinkRTTName    = MetricNamePrefix + "mesh_link_rtt_seconds"
+	meshRequestsName   = MetricNamePrefix + "mesh_requests_total"
+	meshReceivedName   = MetricNamePrefix + "mesh_received_total"
+	meshRoutesName     = MetricNamePrefix + "mesh_routes"
+	meshExportedName   = MetricNamePrefix + "mesh_exported_routes"
+	meshPacketsName    = MetricNamePrefix + "mesh_udp_packets_total"
+	meshMismatchName   = MetricNamePrefix + "mesh_config_mismatch"
+	meshSatellitesName = MetricNamePrefix + "mesh_satellites"
+	meshDeliveredName  = MetricNamePrefix + "mesh_certificates_delivered"
 
 	// The StatsD and Datadog clients add the "traefik." prefix themselves.
-	statsdMeshPeersName    = "mesh.peers"
-	statsdMeshLinkUpName   = "mesh.link.up"
-	statsdMeshLinkRTTName  = "mesh.link.rtt"
-	statsdMeshRequestsName = "mesh.requests.total"
-	statsdMeshReceivedName = "mesh.received.total"
-	statsdMeshRoutesName   = "mesh.routes"
-	statsdMeshExportedName = "mesh.exported.routes"
-	statsdMeshPacketsName  = "mesh.udp.packets.total"
-	statsdMeshMismatchName = "mesh.config.mismatch"
+	statsdMeshPeersName      = "mesh.peers"
+	statsdMeshLinkUpName     = "mesh.link.up"
+	statsdMeshLinkRTTName    = "mesh.link.rtt"
+	statsdMeshRequestsName   = "mesh.requests.total"
+	statsdMeshReceivedName   = "mesh.received.total"
+	statsdMeshRoutesName     = "mesh.routes"
+	statsdMeshExportedName   = "mesh.exported.routes"
+	statsdMeshPacketsName    = "mesh.udp.packets.total"
+	statsdMeshMismatchName   = "mesh.config.mismatch"
+	statsdMeshSatellitesName = "mesh.satellites"
+	statsdMeshDeliveredName  = "mesh.certificates.delivered"
 
-	meshPeersHelp    = "How many instances of the mesh this instance opens a link to, partitioned by the state of the link."
-	meshLinkUpHelp   = "Whether the link this instance opens to another instance of the mesh is up, partitioned by peer and transport."
-	meshLinkRTTHelp  = "How long the other instance took to answer the last ping on a link of the mesh, partitioned by peer."
-	meshRequestsHelp = "How many requests the instance forwarded to another instance of the mesh, partitioned by peer, kind and result."
-	meshReceivedHelp = "How many requests the instance received from another instance of the mesh, partitioned by peer, kind and result."
-	meshRoutesHelp   = "How many routers another instance of the mesh announces to this one, partitioned by peer and kind."
-	meshExportedHelp = "How many routers this instance announces to the other instances of the mesh, partitioned by kind."
-	meshPacketsHelp  = "How many UDP packets the instance carried on the links of the mesh, partitioned by peer, path and direction."
-	meshMismatchHelp = "How many entry points another instance of the mesh has with the same name and another configuration, partitioned by peer."
+	meshPeersHelp      = "How many instances of the mesh this instance opens a link to, partitioned by the state of the link."
+	meshLinkUpHelp     = "Whether the link this instance opens to another instance of the mesh is up, partitioned by peer and transport."
+	meshLinkRTTHelp    = "How long the other instance took to answer the last ping on a link of the mesh, partitioned by peer."
+	meshRequestsHelp   = "How many requests the instance forwarded to another instance of the mesh, partitioned by peer, kind and result."
+	meshReceivedHelp   = "How many requests the instance received from another instance of the mesh, partitioned by peer, kind and result."
+	meshRoutesHelp     = "How many routers another instance of the mesh announces to this one, partitioned by peer and kind."
+	meshExportedHelp   = "How many routers this instance announces to the other instances of the mesh, partitioned by kind."
+	meshPacketsHelp    = "How many UDP packets the instance carried on the links of the mesh, partitioned by peer, path and direction."
+	meshMismatchHelp   = "How many entry points another instance of the mesh has with the same name and another configuration, partitioned by peer."
+	meshSatellitesHelp = "How many satellites of the mesh this instance reaches back, partitioned by the state of the link back."
+	meshDeliveredHelp  = "How many certificates this instance gave a satellite of the mesh in its last answer, partitioned by peer."
 
 	labelPeer = "peer"
 	labelKind = "kind"
@@ -68,6 +74,14 @@ type meshRegistry interface {
 	MeshConfigMismatchGauge() metrics.Gauge
 }
 
+// meshSatelliteRegistry is the part of Registry holding the metrics of the satellites of the Traefix mesh.
+type meshSatelliteRegistry interface {
+	// MeshSatellitesGauge is the count of satellites this instance reaches back, by state.
+	MeshSatellitesGauge() metrics.Gauge
+	// MeshCertificatesDeliveredGauge is the count of certificates given to a satellite, by peer.
+	MeshCertificatesDeliveredGauge() metrics.Gauge
+}
+
 type meshMetrics struct {
 	peers    metrics.Gauge
 	linkUp   metrics.Gauge
@@ -78,6 +92,9 @@ type meshMetrics struct {
 	exported metrics.Gauge
 	packets  metrics.Counter
 	mismatch metrics.Gauge
+
+	satellites metrics.Gauge
+	delivered  metrics.Gauge
 }
 
 func (r *standardRegistry) MeshRoutesGauge() metrics.Gauge {
@@ -94,6 +111,14 @@ func (r *standardRegistry) MeshUDPPacketsCounter() metrics.Counter {
 
 func (r *standardRegistry) MeshConfigMismatchGauge() metrics.Gauge {
 	return r.traefix.mesh.mismatch
+}
+
+func (r *standardRegistry) MeshSatellitesGauge() metrics.Gauge {
+	return r.traefix.mesh.satellites
+}
+
+func (r *standardRegistry) MeshCertificatesDeliveredGauge() metrics.Gauge {
+	return r.traefix.mesh.delivered
 }
 
 func (r *standardRegistry) MeshRequestsCounter() metrics.Counter {
@@ -117,7 +142,7 @@ func (r *standardRegistry) MeshLinkRTTGauge() metrics.Gauge {
 }
 
 func newMultiMeshMetrics(registries []Registry) meshMetrics {
-	var peers, linkUp, linkRTT, routes, exported, mismatch []metrics.Gauge
+	var peers, linkUp, linkRTT, routes, exported, mismatch, satellites, delivered []metrics.Gauge
 	var requests, received, packets []metrics.Counter
 
 	for _, r := range registries {
@@ -129,6 +154,12 @@ func newMultiMeshMetrics(registries []Registry) meshMetrics {
 		}
 		if g := r.MeshConfigMismatchGauge(); g != nil {
 			mismatch = append(mismatch, g)
+		}
+		if g := r.MeshSatellitesGauge(); g != nil {
+			satellites = append(satellites, g)
+		}
+		if g := r.MeshCertificatesDeliveredGauge(); g != nil {
+			delivered = append(delivered, g)
 		}
 		if c := r.MeshUDPPacketsCounter(); c != nil {
 			packets = append(packets, c)
@@ -160,6 +191,9 @@ func newMultiMeshMetrics(registries []Registry) meshMetrics {
 		exported: multi.NewGauge(exported...),
 		packets:  multi.NewCounter(packets...),
 		mismatch: multi.NewGauge(mismatch...),
+
+		satellites: multi.NewGauge(satellites...),
+		delivered:  multi.NewGauge(delivered...),
 	}
 }
 
@@ -174,13 +208,19 @@ func newPrometheusMeshMetrics() (meshMetrics, []vector) {
 	exported := newGaugeFrom(stdprometheus.GaugeOpts{Name: meshExportedName, Help: meshExportedHelp}, []string{labelKind})
 	packets := newCounterFrom(stdprometheus.CounterOpts{Name: meshPacketsName, Help: meshPacketsHelp}, []string{labelPeer, "path", "direction"})
 	mismatch := newGaugeFrom(stdprometheus.GaugeOpts{Name: meshMismatchName, Help: meshMismatchHelp}, []string{labelPeer})
+	satellites := newGaugeFrom(stdprometheus.GaugeOpts{Name: meshSatellitesName, Help: meshSatellitesHelp}, []string{"state"})
+	delivered := newGaugeFrom(stdprometheus.GaugeOpts{Name: meshDeliveredName, Help: meshDeliveredHelp}, []string{labelPeer})
 
 	m := meshMetrics{
 		peers: peers, linkUp: linkUp, linkRTT: linkRTT, requests: requests, received: received,
 		routes: routes, exported: exported, packets: packets, mismatch: mismatch,
+		satellites: satellites, delivered: delivered,
 	}
 
-	return m, []vector{peers.gv, linkUp.gv, linkRTT.gv, requests.cv, received.cv, routes.gv, exported.gv, packets.cv, mismatch.gv}
+	return m, []vector{
+		peers.gv, linkUp.gv, linkRTT.gv, requests.cv, received.cv, routes.gv, exported.gv, packets.cv, mismatch.gv,
+		satellites.gv, delivered.gv,
+	}
 }
 
 func newDatadogMeshMetrics(client *dogstatsd.Dogstatsd) meshMetrics {
@@ -195,6 +235,9 @@ func newDatadogMeshMetrics(client *dogstatsd.Dogstatsd) meshMetrics {
 		exported: client.NewGauge(statsdMeshExportedName),
 		packets:  client.NewCounter(statsdMeshPacketsName, 1.0),
 		mismatch: client.NewGauge(statsdMeshMismatchName),
+
+		satellites: client.NewGauge(statsdMeshSatellitesName),
+		delivered:  client.NewGauge(statsdMeshDeliveredName),
 	}
 }
 
@@ -210,6 +253,9 @@ func newStatsdMeshMetrics(client *statsd.Statsd) meshMetrics {
 		exported: client.NewGauge(statsdMeshExportedName),
 		packets:  client.NewCounter(statsdMeshPacketsName, 1.0),
 		mismatch: client.NewGauge(statsdMeshMismatchName),
+
+		satellites: client.NewGauge(statsdMeshSatellitesName),
+		delivered:  client.NewGauge(statsdMeshDeliveredName),
 	}
 }
 
@@ -225,6 +271,9 @@ func newInfluxDB2MeshMetrics(store *influx.Influx) meshMetrics {
 		exported: store.NewGauge(influxDBFingerprintPrefix + statsdMeshExportedName),
 		packets:  store.NewCounter(influxDBFingerprintPrefix + statsdMeshPacketsName),
 		mismatch: store.NewGauge(influxDBFingerprintPrefix + statsdMeshMismatchName),
+
+		satellites: store.NewGauge(influxDBFingerprintPrefix + statsdMeshSatellitesName),
+		delivered:  store.NewGauge(influxDBFingerprintPrefix + statsdMeshDeliveredName),
 	}
 }
 
@@ -240,5 +289,8 @@ func newOTLPMeshMetrics(meter metric.Meter) meshMetrics {
 		exported: newOTLPGaugeFrom(meter, meshExportedName, meshExportedHelp, "1"),
 		packets:  newOTLPCounterFrom(meter, meshPacketsName, meshPacketsHelp),
 		mismatch: newOTLPGaugeFrom(meter, meshMismatchName, meshMismatchHelp, "1"),
+
+		satellites: newOTLPGaugeFrom(meter, meshSatellitesName, meshSatellitesHelp, "1"),
+		delivered:  newOTLPGaugeFrom(meter, meshDeliveredName, meshDeliveredHelp, "1"),
 	}
 }

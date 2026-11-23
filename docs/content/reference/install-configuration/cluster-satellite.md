@@ -70,7 +70,7 @@ A satellite links to an instance, and the instance dials it back at the address 
 - **Over TCP, UDP travels in a stream.** The packets of the UDP routers of the satellite arrive whole and in order, and a lost packet delays the ones after it.
 - **With `transport: quic`, the satellite never opens the connection over TCP.** An instance that doesn't reach it back over QUIC doesn't serve its routers, and the satellite logs a warning.
 
-In the [API](./cluster-mesh.md#api) of an instance, the link to a satellite has the address the satellite came from, `satellite` among its sources, and the transport `quic`, or `tcp-reverse` for the connection over TCP that the satellite opened. The `traefik_mesh_link_up` metric has the same transport.
+In the [API](./cluster-mesh.md#api) of an instance, the link to a satellite has `satellite` among its sources, `observed` with the address the link of the satellite comes from, and the transport `quic`, or `tcp-reverse` for the connection over TCP that the satellite opened. A satellite that links over TCP has no `observed` address. The `traefik_mesh_link_up` metric has the same transport.
 
 ## Certificates of a Satellite
 
@@ -83,4 +83,26 @@ The TLS connection of a visitor ends at the instance it reaches, so that instanc
 - **Declare the resolvers on the satellite too.** A resolver of the satellite doesn't start, and its name keeps Traefix from logging that a router uses a nonexistent resolver.
 
 In the [API](./cluster-mesh.md#api) of a satellite, `certificates` lists the certificates it serves, with their resolver, domains and expiry.
+
+## Monitoring
+
+The [metrics of the mesh](./cluster-mesh.md#metrics) cover the satellites:
+
+- On the other instances, `traefik_mesh_satellites` counts the satellites they reach back, and `traefik_mesh_peers` leaves them out.
+- On the other instances, `traefik_mesh_certificates_delivered` is the number of certificates that each satellite got in its last answer.
+- On a satellite, `traefik_mesh_peers` counts the instances it links to.
+
+The other instances log the arrival of a satellite and the address it comes from, each new address the NAT maps it to, and the satellite that stops linking. A satellite logs, once for each instance, that the instance doesn't reach it back over QUIC and that it opens the connection over TCP.
+
+## Sizing
+
+Each satellite keeps two QUIC connections with each instance it links to: its own link, and the link back. The pings of both cost the instance a little CPU, and the connections cost it memory. Measured on one Linux host, with the default `cluster.mesh.linkTimeout` of 10 seconds and no traffic:
+
+| Satellites linked to one instance | CPU of the instance | Memory of the instance |
+|:----------------------------------|:--------------------|:-----------------------|
+| 0 | none | 26 to 107 MiB |
+| 200 | 5% of a CPU | 75 to 100 MiB more |
+| 1000 | 24% of a CPU | 315 MiB more |
+
+A shorter `linkTimeout` pings more often and costs more CPU. A download from a satellite through an instance reached about 400 MB/s over the link back over QUIC, and about 600 MB/s over the connection over TCP, on the same host.
 

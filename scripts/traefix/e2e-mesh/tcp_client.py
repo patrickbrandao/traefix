@@ -1,13 +1,14 @@
 """A TCP client for the mesh tests.
 
-usage: tcp_client.py <port> [--tls <server name> [--ca <file>]] [--hold <seconds>]
+usage: tcp_client.py [<host>:]<port> [--tls <server name> [--ca <file>]] [--hold <seconds>]
   prints: <local address> | <greeting of the server> [| <issuer of the certificate>]
   --tls   speaks TLS with the server name; with --ca the certificate must be signed by it, otherwise it is not verified
   --hold  keeps the connection, sends a line every 200 ms, and prints how many came back and how the connection ended
 """
 import socket, ssl, sys, time
 
-port = int(sys.argv[1])
+host, _, port = sys.argv[1].rpartition(":")
+host, port = host or "127.0.0.1", int(port)
 
 def readline(conn):
     line = b""
@@ -19,7 +20,7 @@ def readline(conn):
     return line.decode().strip()
 
 try:
-    conn = socket.create_connection(("127.0.0.1", port), timeout=5)
+    conn = socket.create_connection((host, port), timeout=5)
     local = "%s:%d" % conn.getsockname()
     issuer = None
     if "--tls" in sys.argv:

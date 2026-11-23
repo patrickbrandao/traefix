@@ -258,9 +258,9 @@ servidor que o tem, sem rede overlay. Implementado até agora:
 
 ## Satélite atrás de NAT
 
-Especificação: `tmp/report-cluster-satellite.md` (terceira entrega, sete etapas). Um satélite é um Traefix sem conexão de
+Especificação: `tmp/report-cluster-satellite.md` (terceira entrega, sete etapas, todas feitas). Um satélite é um Traefix sem conexão de
 entrada (NAT doméstico, CGNAT): disca para os centrais e recebe o tráfego pelo que abriu. Usa o token do cluster, anuncia
-os seus routers, não importa nenhum, não usa Valkey e não pede certificado à CA. Implementado até agora:
+os seus routers, não importa nenhum, não usa Valkey e não pede certificado à CA.
 
 - **Configuração e papel** (etapa 1): `cluster.mesh.satellite` (exige `peers` ou `dns`, recusa `advertise` e
   `cluster.redis`); `role` (`member` ou `satellite`) na apresentação e em `/api/mesh`; os centrais não discam para um
@@ -293,7 +293,13 @@ os seus routers, não importa nenhum, não usa Valkey e não pede certificado à
   responde) e usa a primeira resposta; os limites do desafio pelo Valkey valem, mas uma instância que não responde não
   vira "token desconhecido" nem pausa as consultas. Resultado `mesh` em `traefik_acme_cluster_challenge_lookups_total`.
   Código em `pkg/mesh/challenge.go` e `askMesh` em `pkg/provider/acme/challenge_http_cluster.go`; ligação em
-  `wireMesh`; cenário `challenge` do `e2e-mesh.sh`. **Falta o acabamento** (etapa 7).
+  `wireMesh`; cenário `challenge` do `e2e-mesh.sh`.
+- **Acabamento** (etapa 7): métricas `traefik_mesh_satellites` (os satélites saem de `traefik_mesh_peers`) e
+  `traefik_mesh_certificates_delivered`, `tcp-reverse` em `traefik_mesh_link_up`, `observed` nas ligações para satélites em
+  `/api/mesh`. `scripts/traefix/e2e-satellite.sh` confere com NAT de verdade (namespaces de rede e `iptables` no Linux; fora
+  dele, roda num container privilegiado do Docker) os cenários `cone symmetric remap udp-blocked priority certs swarm`
+  (58 verificações): `MASQUERADE`, `--random-fully`, `conntrack` apagado, UDP bloqueado, prioridades, certificados com o
+  Pebble e 200 satélites num processo (`TestSwarm` em `pkg/mesh/swarm_test.go`, só com `TRAEFIX_MESH_SWARM`).
 
 ## Infopage
 

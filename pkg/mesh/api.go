@@ -25,10 +25,13 @@ type apiStatus struct {
 }
 
 type apiLink struct {
-	NodeID      string     `json:"nodeID,omitempty"`
-	Role        string     `json:"role,omitempty"`
-	Address     string     `json:"address,omitempty"`
-	Addresses   []string   `json:"addresses"`
+	NodeID    string   `json:"nodeID,omitempty"`
+	Role      string   `json:"role,omitempty"`
+	Address   string   `json:"address,omitempty"`
+	Addresses []string `json:"addresses"`
+	// Observed is, for a satellite, the address its link to this instance comes from, which the link back goes to.
+	// It is empty while the satellite links over TCP: the link back then goes over a connection it opens.
+	Observed    string     `json:"observed,omitempty"`
 	Sources     []string   `json:"sources"`
 	Up          bool       `json:"up"`
 	Transport   string     `json:"transport,omitempty"`
@@ -114,6 +117,10 @@ func (m *Mesh) APIHandler() http.Handler {
 				RTTSeconds: link.RTT.Seconds(),
 				Error:      link.Error,
 				Routes:     routes[link.NodeID],
+			}
+
+			if slices.Contains(link.Sources, sourceSatellite) && len(link.Addresses) > 0 {
+				entry.Observed = link.Addresses[0]
 			}
 
 			if link.NodeID != "" {

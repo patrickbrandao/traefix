@@ -1,13 +1,14 @@
 """A UDP client for the mesh tests.
 
-usage: udp_client.py <port> [size ...]     sends one packet of each size, prints the server and whether it came back whole
+usage: udp_client.py [<host>:]<port> [size ...]     sends one packet of each size, prints the server and whether it came back whole
        udp_client.py <port> --count <n>    sends n packets of 100 bytes, one every 20 ms, prints the servers that answered
 """
 import collections, os, socket, sys
 
-port = int(sys.argv[1])
+host, _, port = sys.argv[1].rpartition(":")
+host, port = host or "127.0.0.1", int(port)
 conn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-conn.connect(("127.0.0.1", port))
+conn.connect((host, port))
 conn.settimeout(2)
 local = "%s:%d" % conn.getsockname()
 

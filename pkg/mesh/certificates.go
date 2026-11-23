@@ -87,6 +87,8 @@ func (m *Mesh) serveCertificates(rw http.ResponseWriter, req *http.Request) {
 
 	slices.SortFunc(answer.Certificates, func(a, b Certificate) int { return strings.Compare(certificateKey(a), certificateKey(b)) })
 
+	m.setDelivered(peer, len(answer.Certificates))
+
 	body, err := json.Marshal(answer)
 	if err != nil {
 		http.Error(rw, "unable to encode the certificates", http.StatusInternalServerError)

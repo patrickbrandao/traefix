@@ -56,6 +56,7 @@ var otlpSecondsUnit = "s"
 type traefixRegistry interface {
 	clusterRegistry
 	meshRegistry
+	meshSatelliteRegistry
 
 	// FingerprintExportRecordsCounter counts the records queued for export, by entrypoint and type.
 	FingerprintExportRecordsCounter() metrics.Counter

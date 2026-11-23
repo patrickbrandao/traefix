@@ -429,6 +429,9 @@ type recordingRegistry struct {
 	exported *recordingGauge
 	mismatch *recordingGauge
 	packets  *recordingCounter
+
+	satellites *recordingGauge
+	delivered  *recordingGauge
 }
 
 func newRecordingRegistry() *recordingRegistry {
@@ -441,6 +444,9 @@ func newRecordingRegistry() *recordingRegistry {
 		exported: newRecordingGauge(),
 		mismatch: newRecordingGauge(),
 		packets:  &recordingCounter{recordingGauge: newRecordingGauge()},
+
+		satellites: newRecordingGauge(),
+		delivered:  newRecordingGauge(),
 	}
 }
 
@@ -451,6 +457,10 @@ func (r *recordingRegistry) MeshRoutesGauge() gokitmetrics.Gauge         { retur
 func (r *recordingRegistry) MeshExportedRoutesGauge() gokitmetrics.Gauge { return r.exported }
 func (r *recordingRegistry) MeshConfigMismatchGauge() gokitmetrics.Gauge { return r.mismatch }
 func (r *recordingRegistry) MeshUDPPacketsCounter() gokitmetrics.Counter { return r.packets }
+func (r *recordingRegistry) MeshSatellitesGauge() gokitmetrics.Gauge     { return r.satellites }
+func (r *recordingRegistry) MeshCertificatesDeliveredGauge() gokitmetrics.Gauge {
+	return r.delivered
+}
 
 func TestMesh_metrics(t *testing.T) {
 	registry := newRecordingRegistry()
