@@ -287,8 +287,13 @@ os seus routers, não importa nenhum, não usa Valkey e não pede certificado à
   seus routers mudam; `ETag` para não reenviar) e recebe só os domínios dos routers que anuncia com `certResolver`. Ele os
   serve nos seus entrypoints como `tls.certificates` do provider `mesh` e os guarda em memória até vencerem. Fonte no
   central em `cmd/traefik/traefix_mesh.go` (`acmeCertificates`, pelo `Store` de cada resolver ACME); código em
-  `pkg/mesh/certificates.go`; cenário `satellite-certs` do `e2e-mesh.sh`, com o Pebble. **Falta o desafio HTTP-01 pela
-  malha** (etapa 6).
+  `pkg/mesh/certificates.go`; cenário `satellite-certs` do `e2e-mesh.sh`, com o Pebble.
+- **Desafio HTTP-01 pela malha** (etapa 6): num cluster sem Valkey, a instância que recebe a validação de um desafio que
+  não apresentou pergunta a todas as instâncias com que tem ligação (`/v1/challenge`, só o desafio local de quem
+  responde) e usa a primeira resposta; os limites do desafio pelo Valkey valem, mas uma instância que não responde não
+  vira "token desconhecido" nem pausa as consultas. Resultado `mesh` em `traefik_acme_cluster_challenge_lookups_total`.
+  Código em `pkg/mesh/challenge.go` e `askMesh` em `pkg/provider/acme/challenge_http_cluster.go`; ligação em
+  `wireMesh`; cenário `challenge` do `e2e-mesh.sh`. **Falta o acabamento** (etapa 7).
 
 ## Infopage
 

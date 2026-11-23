@@ -16,6 +16,7 @@ const (
 
 	lookupLocal   = "local"
 	lookupRedis   = "redis"
+	lookupMesh    = "mesh"
 	lookupMiss    = "miss"
 	lookupInvalid = "invalid"
 	lookupError   = "error"

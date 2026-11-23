@@ -20,7 +20,7 @@ import (
 
 // wireMesh connects the mesh to the routing, and runs it (Traefix):
 // the mesh reads the routers of the local providers, gives the routers of the other instances, and serves their services.
-func wireMesh(node *mesh.Mesh, conf *static.Configuration, providerAggregator *aggregator.ProviderAggregator, managerFactory *service.ManagerFactory, routerFactory *server.RouterFactory, watcher *server.ConfigurationWatcher, routinesPool *safe.Pool, acmeProviders []*acme.Provider) error {
+func wireMesh(node *mesh.Mesh, conf *static.Configuration, providerAggregator *aggregator.ProviderAggregator, managerFactory *service.ManagerFactory, routerFactory *server.RouterFactory, watcher *server.ConfigurationWatcher, routinesPool *safe.Pool, acmeProviders []*acme.Provider, httpChallenge acme.HTTPChallengeSolver) error {
 	if node == nil {
 		return nil
 	}
@@ -53,6 +53,12 @@ func wireMesh(node *mesh.Mesh, conf *static.Configuration, providerAggregator *a
 	fingerprint.EnableForwarded()
 	watcher.AddTransformer(node.Transform)
 	node.SetCertificateSource(acmeCertificates(acmeProviders))
+
+	// The CA reaches any instance behind a name: without a Redis server, the instances ask each other for the challenges.
+	if solver, ok := httpChallenge.(*acme.ClusterChallengeHTTP); ok {
+		node.SetChallengeAnswer(solver.LocalAnswer)
+		solver.SetMeshLookup(node.LookupChallenge)
+	}
 	api.AddTraefixRoute("/api/mesh", node.APIHandler())
 
 	routinesPool.GoCtx(node.Run)

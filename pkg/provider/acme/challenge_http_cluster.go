@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-acme/lego/v5/challenge"
@@ -57,18 +58,26 @@ type HTTPChallengeSolver interface {
 
 // NewHTTPChallengeSolver returns the HTTP-01 challenge of the instance, shared with the cluster when the instance is in one.
 func NewHTTPChallengeSolver(member *cluster.Cluster) HTTPChallengeSolver {
-	if member == nil || !member.HasServer() {
+	if member == nil {
 		return NewChallengeHTTP()
 	}
 
 	return NewClusterChallengeHTTP(member)
 }
 
-// ClusterChallengeHTTP shares the HTTP-01 challenges through the Redis server of the cluster:
-// the CA reaches any instance behind the name, not only the one that requests the certificate.
+// ChallengeLookup asks the other instances of the mesh for the answer of a challenge one of them presented.
+// It returns nothing, and no error, when they all answered that they do not know it.
+type ChallengeLookup func(ctx context.Context, token, domain string) ([]byte, error)
+
+// ClusterChallengeHTTP shares the HTTP-01 challenges with the cluster: the CA reaches any instance behind the name,
+// not only the one that requests the certificate. The answers are shared through the Redis server of the cluster,
+// or, without one, looked up from the other instances of the mesh.
 type ClusterChallengeHTTP struct {
 	local  *ChallengeHTTP
 	member *cluster.Cluster
+
+	// meshLookup asks the other instances of the mesh, for a cluster without a Redis server.
+	meshLookup atomic.Pointer[ChallengeLookup]
 
 	lookups chan struct{}
 	now     func() time.Time
@@ -89,10 +98,26 @@ func NewClusterChallengeHTTP(member *cluster.Cluster) *ClusterChallengeHTTP {
 	}
 }
 
+// SetMeshLookup makes a cluster without a Redis server ask the other instances of the mesh for the challenges
+// they presented.
+func (c *ClusterChallengeHTTP) SetMeshLookup(lookup ChallengeLookup) {
+	c.meshLookup.Store(&lookup)
+}
+
+// LocalAnswer returns the answer of a challenge this instance presented, for the other instances of the mesh.
+func (c *ClusterChallengeHTTP) LocalAnswer(ctx context.Context, token, domain string) []byte {
+	return c.local.getTokenValue(ctx, token, domain)
+}
+
 // Present keeps the answer of a challenge in this instance and in the server of the cluster.
 func (c *ClusterChallengeHTTP) Present(ctx context.Context, domain, token, keyAuth string) error {
 	if err := c.local.Present(ctx, domain, token, keyAuth); err != nil {
 		return err
+	}
+
+	// Without a server, the other instances ask this one.
+	if !c.member.HasServer() {
+		return nil
 	}
 
 	logger := log.Ctx(ctx).With().Str(logs.ProviderName, "acme").Str("domain", domain).Logger()
@@ -123,6 +148,10 @@ func (c *ClusterChallengeHTTP) Present(ctx context.Context, domain, token, keyAu
 func (c *ClusterChallengeHTTP) CleanUp(ctx context.Context, domain, token, keyAuth string) error {
 	if err := c.local.CleanUp(ctx, domain, token, keyAuth); err != nil {
 		return err
+	}
+
+	if !c.member.HasServer() {
+		return nil
 	}
 
 	key, ok := c.key(token, domain)
@@ -217,6 +246,10 @@ func (c *ClusterChallengeHTTP) lookup(ctx context.Context, token, domain string)
 		return nil, lookupError
 	}
 
+	if !c.member.HasServer() {
+		return c.askMesh(lookupCtx, key, token, domain)
+	}
+
 	value, err := c.member.Client().Get(lookupCtx, key).Bytes()
 
 	switch {
@@ -238,6 +271,32 @@ func (c *ClusterChallengeHTTP) lookup(ctx context.Context, token, domain string)
 	log.Ctx(ctx).Debug().Msgf("Answering the ACME challenge for %s presented by another instance", domain)
 
 	return value, lookupRedis
+}
+
+// askMesh asks the other instances of the mesh for the answer of a challenge.
+// An instance that does not answer is not a reason to stop asking the others, nor to remember the token as unknown:
+// the CA validates from several places at once, and a miss remembered too early fails the validation.
+func (c *ClusterChallengeHTTP) askMesh(ctx context.Context, key, token, domain string) ([]byte, string) {
+	lookup := c.meshLookup.Load()
+	if lookup == nil {
+		return nil, lookupMiss
+	}
+
+	value, err := (*lookup)(ctx, token, strings.ToLower(strings.Trim(domain, "[]")))
+
+	switch {
+	case len(value) > 0:
+		log.Ctx(ctx).Debug().Msgf("Answering the ACME challenge for %s presented by another instance of the mesh", domain)
+		return value, lookupMesh
+
+	case err != nil:
+		log.Ctx(ctx).Debug().Err(err).Msgf("Unable to ask every instance of the mesh for the ACME challenge for %s", domain)
+		return nil, lookupError
+
+	default:
+		c.missed(key)
+		return nil, lookupMiss
+	}
 }
 
 // skip tells whether the server is not asked: it just failed, or it just said that it does not know this challenge.

@@ -116,6 +116,8 @@ type Mesh struct {
 
 	// certificateSource gives the certificates of the resolvers of this instance, for the satellites.
 	certificateSource CertificateSource
+	// challengeAnswer gives the answers of the HTTP-01 challenges this instance presents, for the other instances.
+	challengeAnswer ChallengeAnswer
 	// received are the certificates the instances gave this satellite, by identifier.
 	received             map[string][]Certificate
 	certificatesInterval time.Duration

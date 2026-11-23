@@ -71,6 +71,9 @@ func (m *Mesh) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	case req.Method == http.MethodGet && req.URL.Path == pathRoutes:
 		m.serveRoutes(rw, req)
 
+	case req.Method == http.MethodGet && req.URL.Path == pathChallenge:
+		m.serveChallenge(rw, req)
+
 	case req.Method == http.MethodGet && req.URL.Path == pathCertificates:
 		m.serveCertificates(rw, req)
 

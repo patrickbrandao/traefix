@@ -9,9 +9,9 @@
 #   TRAEFIK=./traefik scripts/traefix/e2e-mesh.sh  # uses a binary already built
 #   LOG_LEVEL=DEBUG scripts/traefix/e2e-mesh.sh
 #
-# Scenarios: formation token http priority tcp udp fallback config satellite satellite-tcp satellite-certs
+# Scenarios: formation token http priority tcp udp fallback config satellite satellite-tcp satellite-certs challenge
 #
-# The scenario satellite-certs needs Pebble as the CA: go install github.com/letsencrypt/pebble/v2/cmd/pebble@latest
+# The scenarios satellite-certs and challenge need Pebble as the CA: go install github.com/letsencrypt/pebble/v2/cmd/pebble@latest
 
 set -u
 
@@ -707,14 +707,8 @@ pebble_issued() {
   issuer_of "$1" "$2" | grep -q Pebble
 }
 
-scenario_satellite-certs() {
-  echo "Scenario satellite-certs: the central asks the CA for the certificate of a router of the satellite, and the satellite serves it"
-  if [ ! -x "$PEBBLE" ]; then
-    echo "  skipped: Pebble is not installed"
-    return
-  fi
-  reset
-
+# start_pebble <port of the HTTP-01 validations>: starts Pebble, which validates the challenges at that port.
+start_pebble() {
   openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/pebble.key" -out "$WORK/pebble.crt" -days 2 \
     -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2> /dev/null
   cat > "$WORK/pebble.json" << EOF
@@ -724,16 +718,78 @@ scenario_satellite-certs() {
     "managementListenAddress": "127.0.0.1:15000",
     "certificate": "$WORK/pebble.crt",
     "privateKey": "$WORK/pebble.key",
-    "httpPort": 18081,
+    "httpPort": $1,
     "tlsPort": 18998,
     "ocspResponderURL": "",
     "externalAccountBindingRequired": false
   }
 }
 EOF
-  PEBBLE_VA_NOSLEEP=1 PEBBLE_WFE_NONCEREJECT=0 "$PEBBLE" -config "$WORK/pebble.json" > "$WORK/pebble.log" 2>&1 &
+  PEBBLE_VA_NOSLEEP=1 PEBBLE_WFE_NONCEREJECT=0 PEBBLE_AUTHZREUSE=0 "$PEBBLE" -config "$WORK/pebble.json" > "$WORK/pebble.log" 2>&1 &
   echo $! >> "$WORK/servers.pid"
   wait_until 10 curl -sk "https://127.0.0.1:$PEBBLE_PORT/dir"
+}
+
+scenario_challenge() {
+  echo "Scenario challenge: without a Redis server, the instance the CA reaches asks the others for the HTTP-01 challenge"
+  if [ ! -x "$PEBBLE" ]; then
+    echo "  skipped: Pebble is not installed"
+    return
+  fi
+  reset
+
+  # The CA validates at the web entry point of srv2, and srv1 asks for the certificate.
+  start_pebble 18082
+
+  server http 1
+  dyn 1
+  dyn 2
+  MK_PEERS="[]" MK_RESOLVER=1 MK_WEB_HOST="" mk 1
+  MK_PEERS='["127.0.0.1:7441"]' MK_RESOLVER=1 MK_WEB_HOST="" mk 2
+  start 1
+  start 2
+  wait_until 20 links_are 2 1
+
+  # The router comes once both instances are up: a validation that finds srv2 down makes the CA client wait.
+  cp "$WORK/n1/dynamic.yml" "$WORK/n1/dynamic.yml.next"
+  cat >> "$WORK/n1/dynamic.yml.next" << EOF
+  routers:
+    chal:
+      rule: "Host(\`chal.localhost\`)"
+      entryPoints: [tls]
+      service: chal
+      tls:
+        certResolver: le
+      mesh:
+        export: false
+  services:
+    chal:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:19001"
+EOF
+  mv "$WORK/n1/dynamic.yml.next" "$WORK/n1/dynamic.yml"
+
+  eventually "srv1 gets its certificate, though the CA validated at srv2" 60 pebble_issued 17101 chal.localhost
+  eventually "metric: srv2 answered the challenge with the answer of srv1, from the mesh" 10 \
+    test -n "$(metric 2 traefik_acme_cluster_challenge_lookups_total result=mesh)"
+  check "srv2 did not ask for the certificate itself" no_certificate_for 2 chal.localhost
+}
+
+# no_certificate_for <instance> <domain>: the ACME storage of the instance has no certificate for the domain.
+no_certificate_for() {
+  ! grep -q "$2" "$WORK/n$1/acme.json" 2> /dev/null
+}
+
+scenario_satellite-certs() {
+  echo "Scenario satellite-certs: the central asks the CA for the certificate of a router of the satellite, and the satellite serves it"
+  if [ ! -x "$PEBBLE" ]; then
+    echo "  skipped: Pebble is not installed"
+    return
+  fi
+  reset
+
+  start_pebble 18081
 
   server http 3
   dyn 1
@@ -862,7 +918,7 @@ fi
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/server.key" -out "$WORK/server.crt" -days 2 \
   -subj "/CN=pass.localhost" -addext "subjectAltName=DNS:pass.localhost" 2> /dev/null || exit 2
 
-[ $# -eq 0 ] && set -- formation token http priority tcp udp fallback config satellite satellite-tcp satellite-certs
+[ $# -eq 0 ] && set -- formation token http priority tcp udp fallback config satellite satellite-tcp satellite-certs challenge
 
 echo "Links of the mesh: $TRANSPORT"
 
