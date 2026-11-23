@@ -4,6 +4,7 @@
 #   scripts/traefix/docker-build.sh            # tag = git describe, push
 #   TAG=v3.8.0-tx1 scripts/traefix/docker-build.sh
 #   PUSH=0 PLATFORMS=linux/arm64 scripts/traefix/docker-build.sh   # só build local (--load)
+#   GOFLAGS=-p=2 scripts/traefix/docker-build.sh                   # menos compilações em paralelo (pouca memória no Docker)
 #
 # Requer `docker login` na conta tmsoftbrasil.
 set -euo pipefail
@@ -36,6 +37,7 @@ docker buildx build \
   -f Dockerfile.traefix \
   --platform "$PLATFORMS" \
   --build-arg VERSION="$TAG" \
+  --build-arg GOFLAGS="${GOFLAGS:-}" \
   --build-arg REVISION="$(git rev-parse HEAD)" \
   --build-arg CREATED="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
   "${TAGS[@]}" \
