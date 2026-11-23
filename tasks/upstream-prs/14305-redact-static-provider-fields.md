@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +585/-4 em 6 arquivos |
 | Labels | status/0-needs-triage, area/provider/docker, kind/bug/fix, size/M, area/provider/docker/swarm, area/provider/http, area/provider/k8s/knative |
-| Status | importado com ajustes |
+| Status | absorvido pelo oficial |
 
 ## O que faz
 
@@ -58,3 +58,11 @@ Base é v3.7, precisa de port. Remover export:"true" dos headers do HTTP muda o 
 - `go run ./internal/` não altera a documentação (as tags não afetam a referência).
 
 **Testes:** `go build ./pkg/...` ok; `go test ./pkg/redactor/ ./pkg/provider/http/ ./pkg/provider/kubernetes/knative/ ./pkg/provider/docker/` ok; `golangci-lint` nesses pacotes com 0 issues.
+
+## Merge no upstream (2026-11-23)
+
+Mergeado no oficial (`1a2803a35`, branch v3.7). A sincronização está em
+`tasks/upstream/0007-redact-static-plugin-provider-and-provider-fields.md`: as tags importadas e os arquivos de
+`testdata/` são iguais aos do oficial. Marque como absorvida quando a 0007 for concluída.
+
+Concluído em 2026-11-23 pela task correspondente de `tasks/upstream/` (aplicada no master).

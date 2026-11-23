@@ -14,7 +14,7 @@
 | Branch-alvo | `v2.11` |
 | Tamanho | +535/-34 em 3 arquivos |
 | Labels | status/0-needs-triage, kind/bug/fix, area/logs, size/M |
-| Status | importado com ajustes |
+| Status | absorvido pelo oficial |
 
 ## O que faz
 
@@ -55,3 +55,12 @@ Base é v2.11, então precisa de port para v3.8. A verificação de redactor.go 
 - O #14305 reaproveita esse teste e esse arquivo em vez de criar os seus.
 
 **Testes:** `go build ./pkg/...` ok; `go test ./pkg/redactor/` ok; `golangci-lint run ./pkg/redactor/...` com 0 issues.
+
+## Merge no upstream (2026-11-23)
+
+Mergeado no oficial (`26878fab5`, branch v2.11; entrou no v3 pelo merge `ece978d30`). A sincronização está em
+`tasks/upstream/0007-redact-static-plugin-provider-and-provider-fields.md`: a correção funcional importada é igual à
+do oficial, e falta adotar a versão final de `redactor.go` e `redactor_config_test.go`. Marque como absorvida
+quando a 0007 for concluída.
+
+Concluído em 2026-11-23 pela task correspondente de `tasks/upstream/` (aplicada no master).

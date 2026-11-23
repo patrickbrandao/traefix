@@ -14,7 +14,7 @@
 | Branch-alvo | `v3.7` |
 | Tamanho | +48/-2 em 3 arquivos |
 | Labels | status/2-needs-review, kind/bug/fix, size/S, area/middleware, area/provider/k8s/ingress-nginx |
-| Status | pendente |
+| Status | absorvido pelo oficial |
 
 ## O que faz
 
@@ -38,3 +38,11 @@ Escopo restrito a snippets do ingress-nginx, útil sobretudo para migração. St
 4. Se o PR mexer em código gerado, rode `make generate` ou `make generate-crd`.
 5. Rode `make test-unit` e `make lint`. Se for preciso, valide no servidor de testes com `scripts/traefix/deploy-dev.sh`.
 6. Quando o PR for mergeado no upstream, marque a task como absorvida, para evitar conflito no próximo sync.
+
+## Merge no upstream (2026-11-23)
+
+Mergeado no oficial (`4ee187fb4`, branch v3.7). Esta task não foi importada; a sincronização está em
+`tasks/upstream/0011-support-location-modifier-ingress-nginx-server-snippet.md`, que a substitui. Marque como
+absorvida quando a 0011 for concluída.
+
+Concluído em 2026-11-23 pela task correspondente de `tasks/upstream/` (aplicada no master).
